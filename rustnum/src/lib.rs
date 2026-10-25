@@ -38,9 +38,9 @@ mod reduce;
 mod slicing;
 mod ufunc;
 
+pub mod fft;
 pub mod io;
 pub mod linalg;
-pub mod fft;
 pub mod poly;
 pub mod random;
 
@@ -48,6 +48,12 @@ pub use array::Array;
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
 pub use creation::*;
 pub use element::{Element, Float, Num};
+pub use extra::api::{
+    Bins, ConvolveMode, Spacing, average, average_axis, bincount, convolve, corrcoef, correlate,
+    cov, cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges,
+    interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
+    setdiff1d, setxor1d, trapezoid, union1d,
+};
 pub use manip::*;
 pub use ops::*;
 pub use slicing::{NEW_AXIS, SliceArg};

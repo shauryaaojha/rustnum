@@ -1,16 +1,7 @@
-//! PENDING: public `np::poly` wrappers over `Array<T>`. Not compiled yet.
+//! Public `np::poly` wrappers over `Array<T>`.
 //!
-//! To enable once the core `Array<T>` lands (docs/API.md section 2 and 3):
-//!   1. `git mv api.rs.pending api.rs`
-//!   2. in `poly/mod.rs` add `mod api;` and
-//!      `pub use api::{polyval, polyfit, polyadd, polysub, polymul, polydiv, polyder, polyint, roots};`
-//!      and drop the `#[allow(dead_code)]` on `mod kernels`.
-//!   3. fix the `use crate::...` line below if the core crate re-exports differ.
-//!   4. `cargo test -p rustnum --doc` (every example below is a doctest).
-//!
-//! Only these core items from docs/API.md are used: `Array::{from_vec, shape, ndim, iter, map}`,
-//! `IntoArray`, `Float` (`to_f64` / `from_f64` via `Element`). Coefficients are always highest
-//! power first and 1-d. Arithmetic is done in `f64` internally (also for `f32` arrays).
+//! Coefficients are always highest power first and 1-d. Arithmetic is done in `f64`
+//! internally (also for `f32` arrays).
 //!
 //! v0.1 limitation: rustnum has no complex dtype, so `roots` returns `(re, im)`.
 

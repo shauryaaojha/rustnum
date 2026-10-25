@@ -1,16 +1,14 @@
 //! Kernels for NumPy's statistics, signal, set and tensor-contraction functions.
 //!
-//! Everything here is pure slice code: `&[T]` plus a shape, no `Array`. The public
-//! `Array`-level wrappers live in `api.rs.pending` and are wired up at merge time, so until
-//! then nothing outside the tests calls these functions (hence `allow(dead_code)`).
+//! The kernels are pure slice code: `&[T]` plus a shape, no `Array`. The public
+//! `Array`-level wrappers live in `api.rs` and are re-exported from the crate root.
 //!
 //! Conventions shared by all kernels:
 //! * multi-dimensional buffers are C-ordered (row-major) and contiguous;
 //! * misuse panics with NumPy's wording where NumPy has one;
 //! * NaN sorts last (NumPy's sort order).
 
-#![allow(dead_code)]
-
+pub(crate) mod api;
 mod einsum_kernels;
 mod set_kernels;
 mod signal_kernels;

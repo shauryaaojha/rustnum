@@ -415,16 +415,19 @@ pub(crate) fn shift_nd<T: Copy>(data: &[T], shape: &[usize], inverse: bool) -> V
 }
 
 /// 1-D `np.fft.fftshift`.
+#[cfg(test)]
 pub(crate) fn fftshift<T: Copy>(x: &[T]) -> Vec<T> {
     shift_nd(x, &[x.len()], false)
 }
 
 /// 1-D `np.fft.ifftshift`.
+#[cfg(test)]
 pub(crate) fn ifftshift<T: Copy>(x: &[T]) -> Vec<T> {
     shift_nd(x, &[x.len()], true)
 }
 
 /// Crop or zero-pad a complex signal to length `n`, as NumPy does for the `n` argument.
+#[cfg(test)]
 pub(crate) fn resize<F: Real>(re: &[F], im: &[F], n: usize) -> (Vec<F>, Vec<F>) {
     let mut r = re.to_vec();
     let mut i = im.to_vec();
