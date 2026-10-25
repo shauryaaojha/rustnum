@@ -2,7 +2,8 @@
 //!
 //! An `.npz` file is a ZIP archive whose members are named `<key>.npy` and hold one `.npy`
 //! blob each. This module works on raw bytes: it moves `(key, npy_bytes)` pairs in and out of
-//! archives. Encoding arrays to `.npy` bytes is the job of [`crate::io`].
+//! archives. Encoding arrays to `.npy` bytes is the job of `crate::io`; the array-level functions live in
+//! `api` and are re-exported as `np::io::{savez, savez_compressed, load_npz, NpzFile}`.
 //!
 //! Layers, bottom to top:
 //! - `crc32`: CRC-32 (IEEE).
@@ -10,8 +11,7 @@
 //! - `zip`: archive reader and writer (zip64, data descriptors, stored and deflate members).
 //! - this module: key handling, whole-file helpers and the lazy [`NpzArchive`].
 
-#![allow(dead_code)]
-
+pub(crate) mod api;
 mod crc32;
 mod deflate;
 mod inflate;
@@ -169,6 +169,7 @@ pub fn read_npz_file(path: impl AsRef<Path>) -> Result<Vec<(String, Vec<u8>)>, N
 }
 
 enum Source {
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     Memory(Vec<u8>),
     File(Mutex<File>),
 }
@@ -191,6 +192,7 @@ impl fmt::Debug for NpzArchive {
 }
 
 impl NpzArchive {
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     /// Open an archive held in memory. Needs a central directory.
     pub fn from_bytes(bytes: Vec<u8>) -> Result<NpzArchive, NpzError> {
         let entries = zip::read_index(&bytes[..])?;
@@ -219,11 +221,13 @@ impl NpzArchive {
     }
 
     /// Number of members.
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// True if the archive has no members.
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -238,6 +242,7 @@ impl NpzArchive {
     }
 
     /// True if a member with this key exists.
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     pub fn contains(&self, key: &str) -> bool {
         self.find(key).is_some()
     }
@@ -254,6 +259,7 @@ impl NpzArchive {
     }
 
     /// Decompress every member, in archive order.
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     pub fn read_all(&self) -> Result<Vec<(String, Vec<u8>)>, NpzError> {
         self.keys()
             .into_iter()

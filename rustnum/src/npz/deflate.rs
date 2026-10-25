@@ -28,8 +28,12 @@ pub enum Mode {
     /// Only stored (uncompressed) blocks.
     Stored,
     /// Only fixed-Huffman blocks.
+    #[allow(dead_code)]
+    // byte-level API exercised by the unit tests; not used by the array layer
     Fixed,
     /// Only dynamic-Huffman blocks.
+    #[allow(dead_code)]
+    // byte-level API exercised by the unit tests; not used by the array layer
     Dynamic,
     /// Per block, the smallest of the three.
     Auto,
