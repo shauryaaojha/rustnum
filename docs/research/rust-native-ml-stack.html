@@ -1,0 +1,472 @@
+<title>Rust-Native ML Stack</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a single reading column; the stack is drawn as a vertical pile of layers (top = what users touch, bottom = silicon). */
+:root {
+  --bg: #f3f5f4;
+  --paper: #ffffff;
+  --ink: #17201e;
+  --muted: #56635f;
+  --rule: #d5dcd9;
+  --accent: #1f7a6c;      /* verdigris: what rust turns into on copper */
+  --accent-soft: #dcefeb;
+  --oxide: #a3461f;       /* raw rust, used only for the "not Rust" boundary */
+  --ready: #2f7d3b; --ready-bg: #e1f1e3;
+  --partial: #8a6400; --partial-bg: #f7ecd0;
+  --early: #a3461f; --early-bg: #f6e1d8;
+  --missing: #6b4a8a; --missing-bg: #ebe2f3;
+  --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #101615; --paper: #172120; --ink: #e4ecea; --muted: #9aaba6; --rule: #2a3735;
+    --accent: #5cc4b2; --accent-soft: #19322e; --oxide: #e0835b;
+    --ready: #7fd08a; --ready-bg: #183222; --partial: #e2bb55; --partial-bg: #33290f;
+    --early: #ef9a76; --early-bg: #3a2219; --missing: #c3a2e3; --missing-bg: #2b2238;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #101615; --paper: #172120; --ink: #e4ecea; --muted: #9aaba6; --rule: #2a3735;
+  --accent: #5cc4b2; --accent-soft: #19322e; --oxide: #e0835b;
+  --ready: #7fd08a; --ready-bg: #183222; --partial: #e2bb55; --partial-bg: #33290f;
+  --early: #ef9a76; --early-bg: #3a2219; --missing: #c3a2e3; --missing-bg: #2b2238;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 980px; margin: 0 auto; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2.2rem, 5vw, 3.4rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: clamp(1.5rem, 3vw, 2rem); font-weight: 700; letter-spacing: -0.01em; }
+h3 { font-size: 1.12rem; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+.eyebrow { font-family: var(--mono); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 18px; }
+.lede { font-size: 1.12rem; color: var(--ink); max-width: 64ch; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 20px; color: var(--muted); font-size: 0.9rem; }
+.decision { background: var(--paper); border: 1px solid var(--accent); border-radius: 10px; padding: 16px 18px; display: grid; gap: 6px; }
+.decision b { color: var(--accent); }
+
+/* verdict */
+.verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.vcard { background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.vcard h3 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vcard ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+
+/* status chips */
+.chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 0.76rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.ready { color: var(--ready); background: var(--ready-bg); }
+.partial { color: var(--partial); background: var(--partial-bg); }
+.early { color: var(--early); background: var(--early-bg); }
+.missing { color: var(--missing); background: var(--missing-bg); }
+.notrust { color: var(--oxide); background: transparent; border: 1px dashed var(--oxide); }
+.legend { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 0.88rem; color: var(--muted); }
+.tag { font-family: var(--mono); font-size: 0.74rem; padding: 1px 6px; border: 1px solid var(--rule); border-radius: 4px; color: var(--muted); white-space: nowrap; }
+.tag.own { border-color: var(--accent); color: var(--accent); }
+.btn { font: 600 0.82rem var(--mono); color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+
+/* stack */
+.stack { display: grid; gap: 6px; }
+.layer { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; display: grid; grid-template-columns: 64px 1fr; min-width: 0; }
+.layer .lid { font-family: var(--mono); font-weight: 600; font-size: 0.85rem; color: var(--accent); border-right: 1px solid var(--rule); display: grid; place-items: center; background: var(--accent-soft); border-radius: 8px 0 0 8px; }
+.layer.boundary { border-color: var(--oxide); border-style: dashed; }
+.layer.boundary .lid { color: var(--oxide); background: transparent; border-right-style: dashed; border-right-color: var(--oxide); }
+.layer details { min-width: 0; }
+.layer summary { list-style: none; cursor: pointer; padding: 12px 16px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; }
+.layer summary::-webkit-details-marker { display: none; }
+.layer summary .name { font-family: var(--display); font-weight: 700; font-size: 1.05rem; }
+.layer summary .crates { color: var(--muted); font-size: 0.9rem; }
+.layer summary .crates code { color: var(--ink); }
+.layer summary .hint { font-family: var(--mono); font-size: 0.74rem; color: var(--accent); justify-self: end; }
+.layer summary .hint::after { content: " ▾"; }
+.layer details[open] summary .hint::after { content: " ▴"; }
+.layer .body { display: grid; gap: 10px; border-top: 1px solid var(--rule); margin: 0 16px; padding: 12px 0 16px; }
+.layer .body ul { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.stack-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 0.74rem; color: var(--muted); padding: 0 4px; }
+
+/* tables */
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--paper); }
+table { border-collapse: collapse; width: 100%; min-width: 680px; font-size: 0.92rem; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td.num { font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 0.85rem; white-space: nowrap; }
+.win { color: var(--ready); font-weight: 600; }
+.lose { color: var(--early); font-weight: 600; }
+.small { font-size: 0.86rem; color: var(--muted); }
+
+/* two-column compare */
+.split { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.panel { background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; display: grid; gap: 10px; align-content: start; min-width: 0; }
+.panel ul { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+
+/* roadmap */
+.phases { display: grid; gap: 10px; }
+.phase { display: grid; grid-template-columns: 120px 1fr; gap: 16px; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; min-width: 0; }
+.phase .when { font-family: var(--mono); font-size: 0.8rem; color: var(--accent); font-weight: 600; display: grid; gap: 4px; align-content: start; }
+.phase .when span { color: var(--muted); font-weight: 400; }
+.phase .what { display: grid; gap: 6px; min-width: 0; }
+.phase .exit { font-size: 0.88rem; color: var(--muted); }
+@media (max-width: 560px) {
+  .phase { grid-template-columns: 1fr; gap: 6px; }
+  .layer { grid-template-columns: 44px 1fr; }
+  .chip, .tag { font-size: 0.8rem; }
+}
+.arch { overflow-x: auto; background: var(--paper); border: 1px solid var(--rule); border-radius: 10px; padding: 18px; }
+.arch pre { margin: 0; font-family: var(--mono); font-size: 0.8rem; line-height: 1.5; color: var(--ink); }
+.arch .us { color: var(--accent); font-weight: 600; }
+.arch .reuse { color: var(--muted); }
+
+.sources ol { margin: 0; padding-left: 22px; display: grid; gap: 6px; font-size: 0.9rem; }
+.sources li { overflow-wrap: anywhere; }
+footer { color: var(--muted); font-size: 0.85rem; border-top: 1px solid var(--rule); padding-top: 16px; }
+@media (prefers-reduced-motion: no-preference) {
+  .layer { transition: border-color .15s ease; }
+  .layer:hover { border-color: var(--accent); }
+}
+</style>
+
+<main>
+  <header style="display:grid;gap:14px">
+    <div class="eyebrow">ML in Rust · research · verified 26 October 2026 · revision 2</div>
+    <h1>Rust-Native ML Stack</h1>
+    <p class="lede">Can every layer of machine learning, from GPU kernels to a deployed model, be written in Rust with no C or C++ of our own? This page maps each layer, what exists today, how mature it is, the measured evidence, and what our project should build next. Our first library, <b>rustnum</b>, is a NumPy port in pure Rust (v0.1: 1398 tests, 93/93 NumPy parity cases).</p>
+    <div class="meta"><span>25 searches</span><span>Read in full: Are We Learning Yet, NVIDIA's CUDA Rust post, Burn 0.20 release notes, crates.io registry data</span><span>Revision 2 applies two external reviews</span></div>
+    <div class="decision">
+      <p><b>Decision.</b> Build the full stack's missing top (task API, classical ML on CPU and GPU, deployment, Python bindings) and make rustnum fast, on top of Burn/CubeCL and Polars for tensors, GPU kernels and data. All phases stay in scope; they run in parallel with our agent fleet, ordered only by dependency.</p>
+    </div>
+    <p class="small"><b>What "pure Rust" means here:</b> every line of code we write or depend on is Rust. Vendor GPU drivers and the compiler backend (LLVM) sit below that line and are listed separately in L0.</p>
+  </header>
+
+  <section aria-labelledby="verdict">
+    <div class="eyebrow">Short answer</div>
+    <h2 id="verdict">Yes for one machine, not yet at cluster scale</h2>
+    <div class="verdict">
+      <div class="vcard">
+        <h3><span class="chip ready">Ready</span> Rust can own this today</h3>
+        <ul>
+          <li>Inference on CPU, GPU, edge and in the browser</li>
+          <li>Data: dataframes, Arrow, query engines, columnar formats</li>
+          <li>Tokenizers, model formats, vector search</li>
+        </ul>
+      </div>
+      <div class="vcard">
+        <h3><span class="chip partial">Partial</span> Usable, with gaps</h3>
+        <ul>
+          <li>Single-machine training of small and mid-size deep models (Burn)</li>
+          <li>GPU kernel languages: CubeCL's matmul was within 2% of LibTorch's cuBLAS-backed matmul in Burn's own benchmark; no independent cross-GPU test found</li>
+          <li>Classical ML toolkits, gradient boosting, AutoML</li>
+          <li>Statistics, time series, Bayesian modelling</li>
+        </ul>
+      </div>
+      <div class="vcard">
+        <h3><span class="chip early">Early</span> Not ready yet</h3>
+        <ul>
+          <li>Training across many nodes (NCCL has no Rust replacement)</li>
+          <li>Fine-tuning and LoRA, reinforcement learning</li>
+          <li>Autodiff in the compiler (<code>std::autodiff</code> is nightly only)</li>
+          <li>Plotting with seaborn-level statistics</li>
+        </ul>
+      </div>
+    </div>
+    <p>This matches the community map at <a href="https://www.arewelearningyet.com/">Are We Learning Yet</a>, which calls Rust "a credible choice for inference and for training on a single machine," but not for "research or training at scale." Every "Early" item above is a place we can build.</p>
+  </section>
+
+  <section aria-labelledby="stack">
+    <div class="eyebrow">The stack, top to bottom</div>
+    <h2 id="stack">Ten layers and where Rust stands on each</h2>
+    <div class="legend">
+      <span class="chip ready">Ready</span><span class="chip partial">Partial</span><span class="chip early">Early</span><span class="chip missing">Gap</span><span class="chip notrust">Not Rust</span>
+      <span class="tag">self-reported</span><span>= figure from the project itself</span>
+      <button class="btn" id="toggle-all" type="button">Expand all layers</button>
+    </div>
+    <div class="stack-axis"><span>closer to the user</span><span>closer to silicon ↓</span></div>
+    <p class="small">The order is a loose metaphor: deployment and LLM tooling sit side by side rather than strictly on top of each other.</p>
+    <div class="stack">
+
+      <div class="layer"><div class="lid">L9</div><details>
+        <summary><span class="name">Task API and AutoML</span><span class="chip missing">Gap</span>
+          <span class="crates"><code>linfa</code>, <code>smartcore</code> 0.6.16, <code>automl</code> (smartcore-based), <code>hyperopt-rs</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>Rust has algorithms and some model comparison: the <a href="https://docs.rs/crate/automl/latest">automl</a> crate compares smartcore classifiers with cross-validation, and <a href="https://docs.rs/crate/hyperopt-rs/0.1.1">hyperopt-rs</a> is an Optuna-shaped tuner.</li>
+          <li>What does not exist is a widely adopted workflow that spans preprocessing, model search, tuning, classical models and deep models behind one call, with a deployable output.</li>
+          <li><a href="https://docs.rs/crate/perpetual/latest">PerpetualBooster</a> (pure Rust) replaces tuning with one "budget" knob: same MSE as Optuna + LightGBM on California Housing at 42–59x less wall time <span class="tag">self-reported</span></li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L8</div><details>
+        <summary><span class="name">Deploy and serve</span><span class="chip ready">Ready</span>
+          <span class="crates"><code>tract</code>, <code>candle</code>, <code>mistral.rs</code>, <code>axum</code>, WASM + WebGPU, <code>no_std</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li><b>tract</b> (Sonos): pure-Rust ONNX/NNEF inference with no C++ dependencies, runs in WASM; <a href="https://fosdem.org/schedule/event/YJJQTD-tract-and-torch-to-nnef">FOSDEM 2026</a> says it is deployed "on millions of devices" <span class="tag">self-reported</span></li>
+          <li><b>Kyutai Moshi</b> moved from PyTorch to a Rust/candle inference stack; the talk claims 500,000 sessions on L4 GPU clusters <span class="tag">self-reported</span></li>
+          <li><b>mistral.rs</b>: LLM serving with GGML, GPTQ, FP8 and in-situ quantization; claims to beat llama.cpp on Gemma 4 prefill <span class="tag">self-reported</span>. Its older public table is mixed (faster on RTX 6000 and A10, slower on A100 and CPU).</li>
+          <li>WebGPU ships in Chrome and Edge (since 113), Firefox on Windows (since 141) and Apple-silicon Macs (147), and Safari 26. Storage buffers per binding are often capped at 128–256 MB.</li>
+          <li>The Rust advantage: one codebase and one model file for training and serving, compiled per target (native, WASM, <code>no_std</code>), with no Python runtime to ship. Python can reach production through libtorch or ONNX Runtime, but only after an export step and a second runtime.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L7</div><details>
+        <summary><span class="name">LLMs, retrieval, agents</span><span class="chip ready">Ready</span>
+          <span class="crates"><code>tokenizers</code>, <code>safetensors</code>, <code>tiktoken-rs</code>, Qdrant, tantivy, LanceDB, Meilisearch, <code>rmcp</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>"Every <code>AutoTokenizer</code> call in Python runs Rust" (Are We Learning Yet). <a href="https://huggingface.co/docs/tokenizers">Hugging Face</a> reports under 20 s to tokenize 1 GB on a server CPU <span class="tag">self-reported</span></li>
+          <li>Vector search and full-text search are Rust-first. MCP has a Tier 1 Rust SDK.</li>
+          <li>Fine-tuning, LoRA and post-training are early.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L6</div><details>
+        <summary><span class="name">Deep-learning training</span><span class="chip partial">Partial</span>
+          <span class="crates"><code>burn</code> 0.22.1 (Oct 2026), <code>burn-collective</code>, <code>rwrd</code> (RL on burn)</span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>Burn trains on CUDA, ROCm, Metal, Vulkan, WebGPU, CPU, WASM and <code>no_std</code> from one model definition. Distributed data parallel arrived in <a href="https://burn.dev/blog/release-0.19.0/">0.19</a> with its own gradient-sync crate.</li>
+          <li>Burn 0.21 claims up to 8x lower framework overhead, mostly visible on small models <span class="tag">self-reported</span>. 0.22 picks the device at run time and was a breaking migration (MSRV 1.95), per a <a href="https://blog.redlinesoft.net/posts/burn-rust-deep-learning-framework/">2026 review</a>.</li>
+          <li>Training across many nodes is missing: for NVIDIA clusters "NCCL. No real alternative" (<a href="https://blog.prompt20.com/posts/nccl-guide/">2026 collectives guide</a>).</li>
+          <li>Reinforcement learning: <a href="https://docs.rs/crate/rwrd/0.4.0">rwrd</a> 0.4 (Mar 2026) follows Stable-Baselines3 on burn.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L5</div><details>
+        <summary><span class="name">Classical ML and statistics</span><span class="chip partial">Partial</span>
+          <span class="crates"><code>linfa</code> 0.8.1, <code>smartcore</code> 0.6.16, <code>perpetual</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>Clustering, dimensionality reduction, nearest neighbours and optimization are complete; toolkits, boosting, statistics, Bayesian and time series are partial (Are We Learning Yet).</li>
+          <li>smartcore is active: 0.6.16 released 12 Oct 2026 (crates.io). linfa 0.8.1 builds on <code>ndarray</code>.</li>
+          <li>None of them run classical models on a GPU. XGBoost and LightGBM do, in C++.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L4</div><details>
+        <summary><span class="name">Data and loading</span><span class="chip ready">Ready</span>
+          <span class="crates"><code>polars</code>, <code>arrow-rs</code>, <code>datafusion</code>, <code>lance</code>, <code>parquet</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>Dataframes, query engines and columnar formats are complete. Arrow 23 (Jan 2026) adds experimental zero-copy sharing between processes.</li>
+          <li>Lance is a Rust columnar format for ML with fast random access, vector indexes and versioning.</li>
+          <li>Gap: a training data loader (shuffle, shard, prefetch to GPU, augment) like PyTorch's <code>DataLoader</code> is only partial.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L3</div><details>
+        <summary><span class="name">Tensors, autodiff, graph compilers</span><span class="chip partial">Partial</span>
+          <span class="crates"><code>burn</code> + CubeCL fusion, <code>candle</code>, <code>luminal</code>, <code>std::autodiff</code> (nightly)</span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>Burn: tensors with autodiff and kernel fusion across backends.</li>
+          <li>candle: inference-first. About 80% Rust; its CUDA and Metal kernels are not Rust, and FlashAttention v2 needs CUTLASS.</li>
+          <li>luminal: search-based compiler (equality saturation + cost model) that aims to discover kernels like FlashAttention automatically; CUDA and Metal in production.</li>
+          <li><code>std::autodiff</code>: forward and reverse mode in rustc via Enzyme, nightly only, needs <code>lto = "fat"</code>.</li>
+          <li>Excluded by our rule: <code>tch</code> (libtorch bindings) and <code>ort</code> (ONNX Runtime bindings) are C++ underneath.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L2</div><details>
+        <summary><span class="name">CPU numerics</span><span class="chip ready">Ready</span>
+          <span class="crates"><code>rustnum</code> (ours), <code>ndarray</code>, <code>nalgebra</code>, <code>faer</code>, <code>matrixmultiply</code>, <code>gemmkit</code>, <code>wide</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li><a href="https://docs.rs/crate/faer-lu/0.9.1">faer's benchmark</a>: parallel faer multiplies 768×768 f64 in about 2.9 ms against Eigen 3.2 ms and OpenBLAS 3.6 ms; single-threaded it trails <span class="tag">self-reported</span></li>
+          <li>gemmkit dispatches AVX-512 (VNNI int8, BF16), NEON and wasm simd128 at run time.</li>
+          <li>rustnum today: wins on sums, behind on BLAS/LAPACK-class kernels (see the evidence table). faer shows these gaps are about our implementation, not about Rust.</li>
+        </ul></div></details></div>
+
+      <div class="layer"><div class="lid">L1</div><details>
+        <summary><span class="name">GPU kernel languages</span><span class="chip partial">Partial</span>
+          <span class="crates">CubeCL / CubeK, NVIDIA <code>cutile-rs</code> and <code>cuda-oxide</code>, <code>rust-gpu</code>, <code>rust-cuda</code>, <code>wgpu</code></span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li><b>CubeCL</b> (burn): write a kernel once in Rust, run it on CUDA, ROCm, Metal, Vulkan, WebGPU and CPU. <a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> matmul 4096²: 639 µs vs LibTorch 627 µs (2% slower) <span class="tag">self-reported</span></li>
+          <li><b>NVIDIA CUDA Rust</b> (<a href="https://developer.nvidia.com/blog/introducing-cuda-rust-two-tracks-for-writing-gpu-kernels/">Sept 2026</a>): <code>cutile-rs</code> runs tile kernels on stable Rust with CUDA 13.3; <code>cuda-oxide</code> is a rustc backend emitting PTX on a pinned nightly. NVIDIA: "Both projects are early-stage and neither is production-ready."</li>
+          <li><b>rust-gpu</b> (SPIR-V): "not yet production-ready". Its maintainer recommends cuda-oxide over rust-cuda for anything new.</li>
+          <li>Kernel speed, framework speed and production readiness are separate claims; only the first has evidence here, and only from the projects themselves.</li>
+        </ul></div></details></div>
+
+      <div class="layer boundary"><div class="lid">L0</div><details>
+        <summary><span class="name">Drivers and toolchain</span><span class="chip notrust">Not Rust</span>
+          <span class="crates">NVIDIA driver and CUDA runtime, ROCm, Mesa, Metal, LLVM inside rustc</span><span class="hint">evidence</span></summary>
+        <div class="body"><ul>
+          <li>GPU drivers are C/C++: closed for NVIDIA and Apple, open source for AMD ROCm and Mesa. The PTX JIT runs inside NVIDIA's driver.</li>
+          <li>rustc's default code generator is LLVM (C++). Cranelift is a Rust alternative for CPU code that generates slower code today.</li>
+          <li>Our rule stops at this line: no C/C++ source in our repos or our dependencies; drivers and the compiler backend are documented, not rewritten.</li>
+        </ul></div></details></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="evidence">
+    <div class="eyebrow">Measured evidence</div>
+    <h2 id="evidence">Where Rust already wins on speed, and where it loses</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Workload</th><th>Rust</th><th>Baseline</th><th>Result</th><th>Source</th></tr></thead>
+      <tbody>
+        <tr><td>argmin over axis 0, (32, 512, 4096), CPU</td><td class="num">6.89 ms</td><td class="num">230.4 ms (LibTorch CPU)</td><td class="win">CubeCL 33x</td><td><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> <span class="tag">self-reported</span></td></tr>
+        <tr><td>reduce-sum over axis 2, same shape, CPU</td><td class="num">4.15 ms</td><td class="num">4.24 ms (LibTorch CPU)</td><td>about equal</td><td><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> <span class="tag">self-reported</span></td></tr>
+        <tr><td>Max pool 2D (2, 128, 512, 512), CPU</td><td class="num">5.73 ms</td><td class="num">18.51 ms (LibTorch CPU)</td><td class="win">CubeCL 3.2x</td><td><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> <span class="tag">self-reported</span></td></tr>
+        <tr><td>Fused sum over axis 2, CPU</td><td class="num">4.85 ms</td><td class="num">32.6 ms (LibTorch CPU)</td><td class="win">CubeCL 6.7x</td><td><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> <span class="tag">self-reported</span></td></tr>
+        <tr><td>GPU matmul 4096², NVIDIA</td><td class="num">639 µs</td><td class="num">627 µs (LibTorch, cuBLAS)</td><td>about equal</td><td><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20</a> <span class="tag">self-reported</span></td></tr>
+        <tr><td>sum of 1e7 f64, 1 thread each</td><td class="num">5.57 ms</td><td class="num">7.96 ms (NumPy 2.3.2)</td><td class="win">rustnum 1.4x</td><td><span class="tag own">our run</span></td></tr>
+        <tr><td>sum of 1e7 f64, rustnum on 18 threads</td><td class="num">1.84 ms</td><td class="num">7.05 ms (NumPy, 1 thread)</td><td class="win">rustnum 3.8x</td><td><span class="tag own">our run</span></td></tr>
+        <tr><td>exp of 1e6 f64, 1 thread each</td><td class="num">8.87 ms</td><td class="num">5.76 ms (NumPy SIMD)</td><td class="lose">NumPy 1.5x</td><td><span class="tag own">our run</span></td></tr>
+        <tr><td>matmul 1024² f64, both multi-threaded</td><td class="num">35.81 ms</td><td class="num">17.43 ms (OpenBLAS 0.3.30)</td><td class="lose">NumPy 2.1x</td><td><span class="tag own">our run</span></td></tr>
+        <tr><td>inv 200×200 f64</td><td class="num">6.12 ms</td><td class="num">0.97 ms (OpenBLAS, 1 thread)</td><td class="lose">NumPy 6.3x</td><td><span class="tag own">our run</span></td></tr>
+        <tr><td>SVD 100×100 f64</td><td class="num">113.04 ms</td><td class="num">6.87 ms (LAPACK via NumPy)</td><td class="lose">NumPy 16x</td><td><span class="tag own">our run</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="small">Our runs: Windows 11, 18 hardware threads, Rust 1.99.1 <code>--release</code>, NumPy 2.3.2 + OpenBLAS 0.3.30, f64, criterion (1 s warm-up, 3 s measurement) vs timeit median of 7, idle machine. Harness: <code>rustnum/benches/core.rs</code> and <code>tools/bench_numpy.py</code> in the repo.</p>
+    <p>The pattern: Rust wins where work can be fused or framework overhead skipped, and where we wrote a good kernel (pairwise sum). It loses where our first implementation is still simple (Jacobi SVD, unblocked LU, scalar <code>exp</code>) against LAPACK, OpenBLAS and NumPy's SIMD loops. The Burn wins are against eager LibTorch on CPU, the case where eager frameworks are weakest; on plain sums LibTorch is level. faer's results show the LAPACK-class gap can be closed in Rust.</p>
+  </section>
+
+  <section aria-labelledby="better">
+    <div class="eyebrow">Why Rust, concretely</div>
+    <h2 id="better">What a Rust-native stack does better, and what it does not yet</h2>
+    <div class="split">
+      <div class="panel">
+        <h3>Structural advantages</h3>
+        <ul>
+          <li><b>One language from kernel to API.</b> Python ML is Python over C++ over CUDA. In Rust the model, the kernels (CubeCL, cutile-rs) and the server can be one codebase, one debugger, one build system.</li>
+          <li><b>One codebase and model file for train and serve.</b> Compiled per target, with no Python runtime, no export step and no GIL. Python's route is libtorch or ONNX Runtime after export.</li>
+          <li><b>One kernel source, many GPU vendors.</b> CubeCL targets NVIDIA, AMD, Apple, Vulkan, WebGPU and CPU. Triton, XLA and SYCL also target several vendors; CubeCL is the one that also reaches the browser and <code>no_std</code>.</li>
+          <li><b>Fusion without a separate compile step.</b> Burn fuses lazily by default; PyTorch fuses through <code>torch.compile</code>.</li>
+          <li><b>Safe concurrency.</b> Data loading, augmentation and serving in parallel threads, with data races caught at compile time.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3>Where Python is still ahead</h3>
+        <ul>
+          <li><b>Research speed.</b> New papers ship PyTorch code; notebooks and plotting are weaker in Rust.</li>
+          <li><b>Pretrained models.</b> Rust loads <code>safetensors</code> but has fewer model implementations.</li>
+          <li><b>Multi-node training.</b> No NCCL replacement yet.</li>
+          <li><b>LAPACK-class kernels in our code.</b> Our SVD is 16x and inv 6.3x behind.</li>
+          <li><b>Compile times and the learning curve</b> for researchers used to Python.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="plan">
+    <div class="eyebrow">Recommendation for ML in Rust</div>
+    <h2 id="plan">Build the missing top, make the bottom fast, reuse what is proven</h2>
+    <p>Writing our own GPU compiler would duplicate CubeCL, so we reuse it and contribute kernels to it. Everything else that is empty or partial is ours to build: the task layer, classical ML on CPU and GPU, deployment, a GPU data loader, Python bindings, and a fast rustnum.</p>
+    <div class="arch"><pre>
+<span class="us">L9  task API      Classifier · Regressor · Clusterer · Forecaster · auto(data)  ← ours, new</span>
+<span class="us">L8  deploy        model.save() → native / WASM + WebGPU / no_std builds        ← ours</span>
+<span class="us">    bindings      PyO3 package so Python users can adopt it (Rust code only)   ← ours</span>
+<span class="reuse">L7  LLM, search   tokenizers · safetensors · Qdrant/tantivy                    ← reuse</span>
+<span class="reuse">L6  DL training   burn (modules, optimizers, DDP)                              ← reuse</span>
+<span class="us">L5  classical ML  linear · trees · gradient boosting · kNN · SVM, CPU and GPU   ← ours, the wedge</span>
+<span class="us">L4  data          polars · arrow-rs · lance  +  our GPU DataLoader             ← reuse + ours</span>
+<span class="reuse">L3  tensors       burn tensors + autodiff + fusion                             ← reuse</span>
+<span class="us">L2  CPU numerics  rustnum (NumPy API), faster kernels, faer for decompositions  ← ours, optimize</span>
+<span class="reuse">L1  GPU kernels   CubeCL / CubeK  + our kernels for histograms, splits, kNN    ← reuse + contribute</span>
+<span class="reuse">L0  drivers       vendor                                                        ← boundary</span></pre></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Opportunity</th><th>Why it is open</th><th>Rust edge</th><th>Size</th></tr></thead>
+      <tbody>
+        <tr><td>Task-first API with model search</td><td>Rust has algorithms and small AutoML crates, but no unified classical + deep workflow</td><td>Parallel search on all cores, deployable output</td><td>Medium</td></tr>
+        <tr><td>Gradient boosting on GPU in pure Rust</td><td>XGBoost and LightGBM are C++; Rust boosting is CPU-only</td><td>CubeCL histogram kernels run on any GPU vendor</td><td>Large</td></tr>
+        <tr><td>Train-to-deploy from one codebase, incl. browser</td><td>Python needs export and a second runtime</td><td>Burn + tract + WebGPU already exist</td><td>Small</td></tr>
+        <tr><td>Python bindings (PyO3)</td><td>Polars and tokenizers won Python users this way</td><td>Python users get the speed; the code stays Rust</td><td>Small</td></tr>
+        <tr><td>GPU DataLoader (shuffle, shard, prefetch)</td><td>Listed as partial</td><td>Threads without a GIL, Arrow zero-copy</td><td>Medium</td></tr>
+        <tr><td>Fast rustnum linear algebra and SIMD</td><td>SVD 16x, inv 6.3x, exp 1.5x behind NumPy</td><td>faer, blocked kernels, <code>wide</code> SIMD</td><td>Medium</td></tr>
+        <tr><td>LoRA fine-tuning, RL, seaborn-style plots, multi-node collectives</td><td>Listed as early</td><td>Builds on Burn training and CubeCL</td><td>Large</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="roadmap">
+    <div class="eyebrow">Phases</div>
+    <h2 id="roadmap">Roadmap with exit criteria</h2>
+    <p>Phases A–D can run at the same time in separate worktrees, as rustnum was built. The order below shows dependencies, not a reduced scope.</p>
+    <div class="phases">
+      <div class="phase"><div class="when">Phase A<span>Medium</span></div><div class="what"><h3>rustnum performance</h3><p>faer as the decomposition backend (LU, QR, SVD, eig), cache-blocked axis reductions and transposes, SIMD element-wise math, parallel sort.</p><p class="exit">Exit: every benchmark in the README within 1.5x of NumPy + OpenBLAS at equal thread counts, parity still 93/93.</p></div></div>
+      <div class="phase"><div class="when">Phase B<span>Large</span></div><div class="what"><h3>Tabular task layer</h3><p>Classifier, Regressor and Clusterer traits; linear and logistic models, trees, random forest, histogram gradient boosting, kNN, SVM, preprocessing, metrics, cross-validation and model search, with <code>auto()</code>.</p><p class="exit">Exit: datasets, metrics, seeds and tolerances fixed before running. Classification: ROC-AUC and macro-F1 within 0.01 absolute of scikit-learn; regression: RMSE within 2% relative; clustering: ARI within 0.02, each on 10 public datasets with 5-fold CV. Training time and peak memory reported next to scikit-learn and LightGBM.</p></div></div>
+      <div class="phase"><div class="when">Phase C<span>Small</span></div><div class="what"><h3>Deploy and Python bindings</h3><p>Versioned model file, <code>model.save()</code> and <code>load()</code>, native, WASM and <code>no_std</code> builds, a PyO3 wheel.</p><p class="exit">Exit: predictions agree across Windows, Linux and Chrome (WASM) within 1e-6 relative for f64; the wheel installs with <code>pip</code> and passes the same parity tests.</p></div></div>
+      <div class="phase"><div class="when">Phase D<span>Large</span></div><div class="what"><h3>Classical ML on GPU</h3><p>CubeCL kernels for histograms, split finding and distance matrices so boosting and kNN run on NVIDIA, AMD, Apple and WebGPU, chunked to stay under browser buffer limits.</p><p class="exit">Exit: GPU boosting training time within 2x of XGBoost GPU on a 1M-row dataset at matched depth, rounds and bins, with equal-or-better validation AUC.</p></div></div>
+      <div class="phase"><div class="when">Phase E<span>Large</span></div><div class="what"><h3>Deep models behind the same API</h3><p>MLP, CNN and Transformers via Burn, searched by <code>Classifier::auto</code> next to the classical models; GPU DataLoader.</p><p class="exit">Exit: one image and one text classification task solved end to end with one call, accuracy reported against a PyTorch baseline.</p></div></div>
+      <div class="phase"><div class="when">Phase F<span>Large</span></div><div class="what"><h3>The early layers</h3><p>LoRA fine-tuning, reinforcement learning, seaborn-style statistical plotting, and a Rust collective-communication layer for multi-node training.</p><p class="exit">Exit per item, defined when the phase starts.</p></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="risks">
+    <div class="eyebrow">Risks</div>
+    <h2 id="risks">What could go wrong</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td>Users stay on scikit-learn, AutoGluon, FLAML or cuML</td><td>Ship the PyO3 wheel early so adoption costs one <code>pip install</code>; lead with measured speed and one-call deployment</td></tr>
+        <tr><td>Burn makes breaking changes (0.22 was a breaking migration)</td><td>Pin versions; keep our models behind our own traits so the backend can change</td></tr>
+        <tr><td>Most speed claims in this space are self-reported</td><td>Run our own idle-machine benchmarks with stated thread counts before every claim</td></tr>
+        <tr><td>Numerical differences from scikit-learn</td><td>Parity fixtures from the real library, as with rustnum's 93 NumPy cases</td></tr>
+        <tr><td>WebGPU buffer caps (128–256 MB per binding) limit GPU boosting in the browser</td><td>Chunk histograms and data; fall back to WASM CPU</td></tr>
+        <tr><td>NVIDIA's Rust projects may change the GPU kernel landscape</td><td>Treat kernel languages as replaceable; our value sits in L2, L5, L8 and L9</td></tr>
+        <tr><td>Maintainer capacity for a stack this wide</td><td>Agent fleet with per-area worktrees, API contracts and parity tests, the method that delivered rustnum</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section aria-labelledby="changes">
+    <div class="eyebrow">Revision 2</div>
+    <h2 id="changes">What changed after the reviews</h2>
+    <div class="tablewrap"><table>
+      <thead><tr><th>Change</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>smartcore listed as 0.6.16 (12 Oct 2026), not "0.5.4 yanked"</td><td>Checked crates.io: the old claim was stale</td></tr>
+        <tr><td>WebGPU: Firefox 141 on Windows, 147 on Apple-silicon Macs, Safari 26</td><td>Previous browser versions were wrong</td></tr>
+        <tr><td>L9 wording: small AutoML crates exist; the unified workflow does not</td><td>The <code>automl</code> crate compares smartcore models</td></tr>
+        <tr><td>Thread counts on every rustnum row; new 1-thread sum and exp rows; inv row added</td><td>The 3.8x sum win was partly threading; the old exp win was entirely threading</td></tr>
+        <tr><td>Burn rows name LibTorch CPU as the baseline; the sum row where LibTorch ties is shown</td><td>The baseline was unnamed and the table showed only wins</td></tr>
+        <tr><td>Single-machine training moved to Partial; tokenizer row moved out of the speed table</td><td>Contradicted L6; it had no baseline</td></tr>
+        <tr><td>Phase A (rustnum performance) and PyO3 bindings added; exit criteria made per task and stated in advance</td><td>The plan cited rustnum gaps but never fixed them; "1% accuracy" was ambiguous</td></tr>
+        <tr><td>Not applied: narrowing the plan to a CPU-only first release and adding deep learning "only when demonstrated"</td><td>Scope is kept; phases run in parallel and are ordered only by dependency</td></tr>
+        <tr><td>Not applied: adding <code>&lt;!doctype&gt;</code>, <code>&lt;head&gt;</code> and a viewport tag</td><td>The artifact host wraps the page in that skeleton (charset and viewport included) when it publishes</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="sources" aria-labelledby="sources">
+    <div class="eyebrow">Sources</div>
+    <h2 id="sources">References</h2>
+    <ol>
+      <li><a href="https://www.arewelearningyet.com/">Are We Learning Yet: the state of machine learning in Rust</a> · <a href="https://www.arewelearningyet.com/gpu/">GPU and accelerators</a></li>
+      <li><a href="https://developer.nvidia.com/blog/introducing-cuda-rust-two-tracks-for-writing-gpu-kernels/">NVIDIA: Introducing CUDA Rust, two tracks for writing GPU kernels</a></li>
+      <li><a href="https://tracel.ai/blog/release-0.20.0">Burn 0.20.0 release: unifying CPU and GPU kernels with CubeCL</a> · <a href="https://burn.dev/blog/release-0.19.0/">Burn 0.19.0 release</a> · <a href="https://docs.rs/burn">burn on docs.rs</a> · <a href="https://www.phoronix.com/news/Burn-0.20-Released">Phoronix on Burn 0.20</a> · <a href="https://blog.redlinesoft.net/posts/burn-rust-deep-learning-framework/">Burn comes of age (review)</a></li>
+      <li><a href="https://github.com/rust-gpu/rust-gpu">rust-gpu</a> · <a href="https://github.com/rust-gpu/rust-cuda">rust-cuda</a> · <a href="https://rust-gpu.github.io/blog/2025/01/27/rust-cuda-reboot/">Rebooting the Rust CUDA project</a> · <a href="https://news.ycombinator.com/item?id=49143096">maintainer comment (HN)</a></li>
+      <li><a href="https://users.rust-lang.org/t/kaio-v0-2-0-write-gpu-kernels-in-rust-tensor-core-matmul-at-92-5-of-cublas-sgemm/139555">KAIO v0.2.0</a> · <a href="https://github.com/tracel-ai/burn/issues/6115">burn-cubecl tensor-core proposal</a></li>
+      <li><a href="https://docs.rs/crate/faer-lu/0.9.1">faer benchmark table (faer-lu 0.9.1)</a> · <a href="https://www.theoj.org/joss-papers/joss.06099/10.21105.joss.06099.pdf">faer JOSS paper</a> · <a href="https://docs.rs/crate/gemmkit/latest">gemmkit</a> · <a href="https://docs.rs/crate/ferray/0.3.1">ferray</a></li>
+      <li><a href="https://crates.io/crates/smartcore">smartcore on crates.io</a> · <a href="https://crates.io/crates/linfa">linfa on crates.io</a> · <a href="https://gittrend.io/repo/rust-ml/linfa">linfa activity</a></li>
+      <li><a href="https://docs.rs/crate/automl/latest">automl crate</a> · <a href="https://docs.rs/crate/hyperopt-rs/0.1.1">hyperopt-rs</a> · <a href="https://docs.rs/crate/perpetual/latest">perpetual</a> · <a href="https://pypi.org/p/perpetual">perpetual on PyPI</a></li>
+      <li><a href="https://jimmysong.io/en/ai/candle">candle overview</a> · <a href="https://www.sourcepulse.org/projects/927004">candle build notes</a> (secondary)</li>
+      <li><a href="https://fosdem.org/schedule/event/YJJQTD-tract-and-torch-to-nnef">tract at FOSDEM 2026</a> · <a href="https://docs.rs/crate/sceptre/0.3.0/source/src/inference/tract_backend.rs">sceptre tract backend</a></li>
+      <li><a href="https://docs.rs/crate/luminal">luminal</a> · <a href="https://ai.engineer/talks/luminal-search-based-deep-learning-compilers-joe-fioti">luminal talk</a></li>
+      <li><a href="https://rust.googlesource.com/rust-lang/rustc-dev-guide/+show/refs/heads/main/src/autodiff/installation.md">rustc-dev-guide: autodiff installation</a> · <a href="https://rust-lang.github.io/goals/blog-post-2026-01.html">Rust project goals, Jan 2026</a></li>
+      <li><a href="https://blog.prompt20.com/posts/nccl-guide/">AI training collectives guide</a> · <a href="https://github.com/tracel-ai/burn/issues/3413">burn distributed training issue</a></li>
+      <li><a href="https://github.com/EricLBuehler/mistral.rs/blob/master/README.md">mistral.rs README</a> · <a href="https://www.everydev.ai/tools/mistral-rs">mistral.rs listing</a> (secondary)</li>
+      <li><a href="https://pythondataeng.substack.com/p/monthly-python-data-engineering-january-9da">Python data engineering, Jan 2026 (Arrow 23, Polars)</a> · <a href="https://huggingface.co/docs/tokenizers">Hugging Face tokenizers docs</a></li>
+      <li><a href="https://www.ai-pulse.eu/agenda/moshi's-behind-the-scenes:-from-conception-to-inference">Moshi behind the scenes (talk abstract)</a></li>
+      <li><a href="https://github.com/gpuweb/gpuweb/wiki/implementation-status">WebGPU implementation status</a> · <a href="https://linuxiac.com/webgpu-lands-in-firefox-141-on-windows-eyes-linux-and-macos-next/">Firefox 141 WebGPU on Windows</a> · <a href="https://www.macg.co/logiciels/2026/01/firefox-active-webgpu-pour-les-mac-apple-silicon-les-intel-attendront-306161">Firefox 147 on Apple silicon</a> · <a href="https://web.dev/blog/webgpu-supported-major-browsers">WebGPU in major browsers</a> · <a href="https://www.sitepoint.com/definitive-guide-local-first-ai-2026/">local-first AI guide (buffer limits)</a></li>
+      <li><a href="https://docs.rs/crate/rwrd/0.4.0">rwrd</a> · <a href="https://github.com/laboroai/border">border</a> · <a href="https://docs.rs/crate/bayes-rs/0.2.0">bayes-rs</a></li>
+      <li>Our measurements: <code>README.md</code> benchmark table, <code>rustnum/benches/core.rs</code>, <code>tools/bench_numpy.py</code> in the ML in Rust repo</li>
+    </ol>
+  </section>
+
+  <footer>Prepared for the ML in Rust project. Figures tagged "self-reported" come from the projects themselves and were not reproduced here; figures tagged "our run" were measured on our machine.</footer>
+</main>
+
+<script>
+(function () {
+  var btn = document.getElementById('toggle-all');
+  var all = Array.prototype.slice.call(document.querySelectorAll('.stack details'));
+  function sync() {
+    var open = all.every(function (d) { return d.open; });
+    btn.textContent = open ? 'Collapse all layers' : 'Expand all layers';
+  }
+  btn.addEventListener('click', function () {
+    var open = !all.every(function (d) { return d.open; });
+    all.forEach(function (d) { d.open = open; });
+    sync();
+  });
+  all.forEach(function (d) { d.addEventListener('toggle', sync); });
+})();
+</script>
