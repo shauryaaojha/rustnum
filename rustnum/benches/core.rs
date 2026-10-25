@@ -3,7 +3,43 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use rustnum as np;
+use rustnum::Num;
 use std::hint::black_box;
+
+// `kernels.rs` is included below as benchmark-local source, so its crate-local helper imports
+// need equivalents in this benchmark crate.
+mod element {
+    use super::Num;
+
+    macro_rules! arithmetic {
+        ($name:ident, $method:ident, $op:tt) => {
+            pub(crate) fn $name<T: Num>(x: T, y: T) -> T {
+                use std::any::Any;
+                macro_rules! cast {
+                    ($ty:ty) => {
+                        if let (Some(a), Some(b)) = (
+                            (&x as &dyn Any).downcast_ref::<$ty>(),
+                            (&y as &dyn Any).downcast_ref::<$ty>(),
+                        ) {
+                            let value = a.$method(*b);
+                            return *(&value as &dyn Any)
+                                .downcast_ref::<T>()
+                                .expect("same numeric type");
+                        }
+                    };
+                }
+                cast!(i32);
+                cast!(i64);
+                cast!(u8);
+                cast!(usize);
+                x $op y
+            }
+        };
+    }
+
+    arithmetic!(add, wrapping_add, +);
+    arithmetic!(mul, wrapping_mul, *);
+}
 
 #[allow(dead_code)]
 #[path = "../src/linalg/kernels.rs"]

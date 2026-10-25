@@ -1,177 +1,227 @@
 # rustnum v0.1 API contract
 
-This is the binding spec for every module. Names follow NumPy. When this file and NumPy
-disagree, this file wins; when this file is silent, do what NumPy does.
+This is the binding contract for the final v0.1 code. Names and behavior follow NumPy unless this document states otherwise; misuse panics with NumPy-style wording, while I/O, parsing, singular matrices, non-positive-definite matrices, and solver non-convergence return `rustnum::Result` where the signature permits it.
 
-Convention used below: `a`, `b` are `Array<T>`; `shape` is `&[usize]`; `axis` is `isize`
-(negative counts from the end, `-1` = last axis). Panics use NumPy's wording where one
-exists, e.g. `operands could not be broadcast together with shapes [2, 3] [4]`.
+Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` and `b` are arrays, shapes implement `AsRef<[usize]>` where shown, and an `axis: isize` accepts negative indexing.
 
 ## 0. Crate surface
-- Users write `use rustnum as np;`. Core items are at the crate root (`np::Array`, `np::zeros`).
-- Public modules: `np::linalg`, `np::random`, `np::io`. Everything else is a private module
-  re-exported from `lib.rs` exactly once (one path per item).
-- Macros at the root: `np::array!`, `np::s!`.
-- `np::Error` (enum) + `np::Result<T>` for fallible operations (I/O, parsing, linalg on
-  singular / non-positive-definite input). Everything else panics on misuse.
-- No lifetimes in any public signature. No `unsafe` unless measured necessary and commented.
 
-## 1. Element types (`element.rs`)
-```rust
-pub trait Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static {
-    const DTYPE: &'static str;            // "float64", "float32", "int64", "int32", "uint8", "bool", "uint64"(usize)
-    fn to_f64(self) -> f64;               // bool -> 0.0/1.0
-    fn from_f64(v: f64) -> Self;          // truncating cast like NumPy astype (bool: v != 0)
-}
-pub trait Num: Element + Add<Output=Self> + Sub<Output=Self> + Mul<Output=Self> + Div<Output=Self> + Rem<Output=Self> {
-    const ZERO: Self; const ONE: Self; const MIN_VALUE: Self; const MAX_VALUE: Self;
-    fn abs(self) -> Self; fn from_usize(n: usize) -> Self;
-}
-pub trait Float: Num + Neg<Output=Self> {
-    const NAN: Self; const INFINITY: Self; const NEG_INFINITY: Self; const EPSILON: Self; const PI: Self; const E: Self;
-    // exp ln log2 log10 sqrt cbrt sin cos tan asin acos atan sinh cosh tanh exp_m1 ln_1p
-    // floor ceil round trunc powf powi is_nan is_infinite is_finite atan2 hypot max min (NaN-propagating where NumPy does)
-}
-```
-Implementations: `Element` for `f32 f64 i32 i64 u8 usize bool`; `Num` for `f32 f64 i32 i64 u8 usize`;
-`Float` for `f32 f64`. Signed-only helpers may use a private `Signed` trait.
+- Users write `use rustnum as np;`; core items are re-exported once at the crate root.
+- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, and `np::random`; implementation modules remain private.
+- Root macros are `np::array!` for literals through three dimensions and `np::s!` for slice arguments.
+- Public APIs contain no explicit lifetime parameters and no public `unsafe` functions.
+- Integer addition, subtraction, multiplication, powers, reductions, and linear-algebra products wrap on overflow like fixed-width NumPy dtypes.
 
-## 2. The array (`array.rs`, `layout.rs`)
-```rust
-pub struct Array<T> { data: Arc<Vec<T>>, shape: Vec<usize>, strides: Vec<isize>, offset: usize }
-```
-- Strides are in elements. C-order (row-major) by default. `[]` shape = 0-d array (holds one value).
-- Value semantics with copy-on-write: every mutating method calls `Arc::make_mut` first. A view
-  never writes into another array. (Documented difference from NumPy.)
-- Traits: `Clone` (cheap), `Debug` (`array([[1., 2.]], dtype=float64)`), `Display` (NumPy print),
-  `PartialEq` (same shape and all elements equal), `Default` (empty 1-d), `From<Vec<T>>` (1-d),
-  `From<T>`? NO (ambiguous) — use `Array::scalar(v)`, `FromIterator<T>` (1-d), `Index<[usize; N]>` and
-  `IndexMut<[usize; N]>` for any const N, `Index<&[usize]>`/`IndexMut<&[usize]>`, `IntoIterator for &Array<T>`
-  (yields `T` in C order), `Send + Sync`.
+## 1. Element types and errors
 
-Methods (all on `Array<T: Element>` unless noted):
-| Method | NumPy | Notes |
-|---|---|---|
-| `Array::from_vec(data: Vec<T>, shape: &[usize]) -> Array<T>` | `np.array(...).reshape` | panics if `len != product(shape)` |
-| `Array::from_shape_fn(shape, f: impl FnMut(&[usize]) -> T)` | `np.fromfunction` | |
-| `Array::scalar(v: T)` | `np.array(v)` | 0-d |
-| `shape() -> &[usize]`, `ndim() -> usize`, `size() -> usize`, `len() -> usize` (first axis, panics on 0-d), `is_empty()` | `.shape .ndim .size len()` | |
-| `strides() -> &[isize]`, `dtype() -> &'static str` | `.strides .dtype` | strides in elements |
-| `is_contiguous() -> bool` | `.flags.c_contiguous` | |
-| `get(index: &[usize]) -> T`, `set(index: &[usize], v: T)` | `a[i, j]`, `a[i, j] = v` | panics: `index 5 is out of bounds for axis 0 with size 3` |
-| `item() -> T` | `.item()` | panics unless size == 1 |
-| `to_vec() -> Vec<T>` | `.ravel().tolist()` | C order |
-| `as_slice() -> Option<&[T]>` | | `Some` only when contiguous |
-| `iter() -> impl Iterator<Item = T> + '_` | `.flat` | C order |
-| `to_contiguous() -> Array<T>` | `np.ascontiguousarray` | no copy if already contiguous |
-| `astype<U: Element>() -> Array<U>` | `.astype` | via to_f64/from_f64, except identical types |
-| `map<U: Element>(f: impl Fn(T) -> U) -> Array<U>` | `np.vectorize` | |
-| `mapv_inplace(f: impl Fn(T) -> T)` | | |
-| `zip_map<U, R>(other: impl IntoArray<U>, f: impl Fn(T, U) -> R) -> Array<R>` | binary ufunc | broadcasts |
-| `fill(v: T)` | `.fill` | |
-| `copy() -> Array<T>` | `.copy()` | deep, contiguous |
+- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, and `bool`.
+- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, and `usize`.
+- `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32` and `f64`.
+- `Error` variants are `Shape(String)`, `DType { expected: String, found: String }`, `Singular`, `NotPositiveDefinite`, `Io(std::io::Error)`, `Parse(String)`, `Format(String)`, and `NoConvergence(String)`.
+- `type Result<T> = std::result::Result<T, Error>`.
 
-## 3. Scalars anywhere (`broadcast.rs`)
-```rust
-pub trait IntoArray<T: Element> { fn into_array(self) -> Array<T>; }
-```
-Implemented for `T` (0-d), `Array<T>`, `&Array<T>` (cheap clone), `Vec<T>` (1-d), `&[T]` (1-d), `[T; N]` (1-d).
-Every function/method below that takes "array-like" takes `impl IntoArray<T>`.
+## 2. `Array<T>`
 
-Broadcasting (`broadcast.rs`): `broadcast_shapes(&[usize], &[usize]) -> Option<Vec<usize>>` (pub),
-`a.broadcast_to(shape) -> Array<T>` (view, zero strides; panics on incompatible),
-`np::broadcast_arrays(&a, &b) -> (Array<T>, Array<U>)`.
+- `Array<T>` is a runtime-dimensional, row-major-by-default buffer with shape, element strides, offset, and copy-on-write `Arc<Vec<T>>` value semantics.
+- Constructors are `Array::from_vec(data: Vec<T>, shape: &[usize])`, `Array::from_shape_fn(shape: impl AsRef<[usize]>, f: impl FnMut(&[usize]) -> T)`, and `Array::scalar(value: T)`.
+- Metadata methods are `shape() -> &[usize]`, `ndim() -> usize`, `size() -> usize`, `len() -> usize`, `is_empty() -> bool`, `strides() -> &[isize]`, `dtype() -> &'static str`, and `is_contiguous() -> bool`.
+- Element methods are `get(index: &[usize]) -> T`, `set(index: &[usize], value: T)`, `item() -> T`, `to_vec() -> Vec<T>`, `as_slice() -> Option<&[T]>`, and `iter() -> impl ExactSizeIterator<Item = T>`.
+- Conversion methods are `to_contiguous()`, `astype<U: Element>() -> Array<U>`, `map<U: Element>(f) -> Array<U>`, `mapv_inplace(f)`, `zip_map<U: Element, R: Element>(other: impl IntoArray<U>, f) -> Array<R>`, `fill(value)`, and `copy()`.
+- Traits are `Clone`, `Default`, `Display`, `Debug`, `PartialEq`, `From<Vec<T>>`, `FromIterator<T>`, const-array and slice indexing, mutable indexing, and iteration over `&Array<T>` in C order.
+- A shape `[]` is a 0-d array containing one value; `len()` panics for a 0-d array and `item()` panics unless `size() == 1`.
 
-## 4. Creation (`creation.rs`) — free functions at the root
-`zeros::<T>(shape)`, `ones::<T>(shape)`, `full(shape, v)`, `zeros_like(&a)`, `ones_like(&a)`, `full_like(&a, v)`,
-`arange(start: T, stop: T, step: T) -> Array<T>` (T: Num; panics on step 0; float length = ceil((stop-start)/step)),
-`linspace(start: F, stop: F, num: usize) -> Array<F>` (endpoint included), `logspace(start, stop, num)` (base 10),
-`eye::<T>(n)`, `identity::<T>(n)`, `diag(v: &Array<T>) -> Array<T>` (1-d → 2-d diagonal matrix, 2-d → 1-d diagonal),
-`tri::<T>(n)`, `tril(&a)`, `triu(&a)`, `meshgrid(&x, &y) -> (Array<T>, Array<T>)` (indexing='xy').
-`array!` macro: `array![1, 2, 3]`, `array![[1.0, 2.0], [3.0, 4.0]]`, 3-d nesting too. Panics on ragged input.
+## 3. Array-like values and broadcasting
 
-## 5. Indexing and slicing (`slicing.rs`)
-- `s![...]` builds `Vec<SliceArg>`: `a..b`, `a..`, `..b`, `..`, `a..=b`, a single index (removes the axis),
-  steps with `;` (`s![..;2, 1..;-1]` -- NumPy `[::2, 1::-1]`), negative values count from the end, `NewAxis` via `np::NEW_AXIS`.
-  Integer literals must work without suffixes: `s![1..3, .., -1]`.
-- `a.slice(args: &[SliceArg]) -> Array<T>` (view, O(1)), `a.slice_assign(args, values: impl IntoArray<T>)` (in place, broadcasts).
-- Axis helpers: `a.index_axis(axis, i) -> Array<T>` (drops axis), `a.row(i)`, `a.col(j)` (2-d).
-- Boolean mask: `a.mask(&m: &Array<bool>) -> Array<T>` (1-d result, like `a[m]`; m must match shape),
-  `a.mask_assign(&m, v: T)` (`a[m] = v`).
-- Integer take: `a.take(indices: &[usize], axis) -> Array<T>` (`np.take`).
+- `IntoArray<T> { fn into_array(self) -> Array<T>; }` is implemented for `T`, `Array<T>`, `&Array<T>`, `Vec<T>`, `&[T]`, and `[T; N]`.
+- `broadcast_shapes(a: &[usize], b: &[usize]) -> Option<Vec<usize>>` returns the NumPy broadcast shape.
+- `broadcast_arrays(a: &Array<T>, b: &Array<U>) -> (Array<T>, Array<U>)` returns zero-stride broadcast views.
+- `a.broadcast_to(target: &[usize]) -> Array<T>` returns a view and panics for an incompatible target.
 
-## 6. Operators (`ops.rs`)
-- `+ - * / %` for all four combinations `Array op Array`, `&Array op &Array`, `Array op &Array`, `&Array op Array`,
-  plus `Array op T`, `&Array op T`, and `T op Array`, `T op &Array` for each concrete `Num` type (macro).
-  All broadcast. Integer division by zero panics like Rust; floats follow IEEE.
-- Unary `-` for signed/float types. `+= -= *= /= %=` with `impl IntoArray<T>`-like RHS (`Array`, `&Array`, `T`), in place, RHS broadcasts to LHS shape.
-- Comparisons return `Array<bool>`: `a.eq_elem(b) a.ne_elem(b) a.lt(b) a.le(b) a.gt(b) a.ge(b)`, `b: impl IntoArray<T>`.
-- Logic on `Array<bool>`: `& | ^ !` operators, `np::logical_and/or/xor/not`.
-- `a.allclose(b, rtol, atol) -> bool`, `np::isclose(a, b, rtol, atol) -> Array<bool>` (NumPy formula, Float only), `a.array_equal(b)`.
+## 4. Creation functions at the root
 
-## 7. Element-wise math (`ufunc.rs`) — methods on `Array<F: Float>`, return a new array
-`exp exp2 expm1 log log2 log10 log1p sqrt cbrt square sin cos tan arcsin arccos arctan sinh cosh tanh
-floor ceil round trunc abs sign reciprocal powf(p) powi(n) clip(lo, hi) is_nan is_inf is_finite (-> Array<bool>)
-sigmoid relu` (sigmoid/relu are extras, documented as non-NumPy).
-For `Num`: `abs`, `square`, `clip`, `sign` also on integers.
-Binary free functions (broadcasting): `np::maximum np::minimum np::power np::arctan2 np::hypot`, `np::where_(cond: &Array<bool>, x, y)`
-(`where` is a Rust keyword, hence `where_`). NaN handling: `maximum/minimum` propagate NaN like NumPy.
+- `zeros<T: Element>(shape: impl AsRef<[usize]>) -> Array<T>` and `full<T: Element>(shape: impl AsRef<[usize]>, value: T) -> Array<T>`.
+- `ones<T: Num>(shape: impl AsRef<[usize]>) -> Array<T>`.
+- `zeros_like<T: Element>(&a)`, `full_like<T: Element>(&a, value)`, and `ones_like<T: Num>(&a)` preserve the shape.
+- `arange<T: Num>(start: T, stop: T, step: T) -> Array<T>` is stop-exclusive and rejects zero step.
+- `linspace<F: Float>(start: F, stop: F, num: usize)` and `logspace<F: Float>(start: F, stop: F, num: usize)` include the endpoint.
+- `eye<T: Num>(n)`, `identity<T: Num>(n)`, and `tri<T: Num>(n)` return square arrays.
+- `diag<T: Element>(&a)` maps 1-d to a diagonal matrix and 2-d to its main diagonal.
+- `tril<T: Num>(&a)` and `triu<T: Num>(&a)` retain the lower and upper triangles.
+- `meshgrid<T: Element>(&x, &y) -> (Array<T>, Array<T>)` uses NumPy's `indexing="xy"` convention.
 
-## 8. Reductions (`reduce.rs`)
-Whole array → scalar: `sum prod min max mean var std argmin argmax (-> usize, flat index) any all (bool) cumsum cumprod (-> 1-d flat)
-count_nonzero median percentile(q) ptp`. `mean var std median percentile` need `Float`. `var/std` have `ddof: usize` variants
-`var_ddof(ddof)`, `std_ddof(ddof)` (default 0 like NumPy). Empty `min/max/argmin/argmax` panic: `zero-size array to reduction operation minimum which has no identity`.
-Along an axis → array with that axis removed: `sum_axis(axis) prod_axis mean_axis var_axis std_axis min_axis max_axis
-argmin_axis argmax_axis (-> Array<usize>) any_axis all_axis cumsum_axis cumprod_axis (keeps shape) median_axis`.
-Keep dims: `a.sum_axis(1).expand_dims(1)` (documented pattern; no keepdims flag).
-`nan` variants: `nansum nanmean nanmax nanmin` (Float).
+## 5. Indexing and slicing
 
-## 9. Shape manipulation (`manip.rs`)
-Methods: `reshape(shape: &[isize]-like)` — accepts `&[usize]`; plus `reshape_infer(&[isize])` allowing one `-1`;
-view when contiguous, copy otherwise; panic `cannot reshape array of size 6 into shape [4, 2]`.
-`ravel flatten t() (reverse axes, = .T) transpose(axes: &[usize]) permute_axes(=transpose) swapaxes(a, b) moveaxis(src, dst)
-squeeze squeeze_axis(axis) expand_dims(axis) flip(axis) flip_all() roll(shift: isize, axis) repeat(n, axis) tile(reps: &[usize])
-sort() (along last axis, floats NaN last) sort_axis(axis) argsort() (last axis -> Array<usize>) argsort_axis(axis)`.
-Free functions: `np::concatenate(&[&Array<T>], axis)`, `np::stack(&[&Array<T>], axis)`, `np::vstack`, `np::hstack`,
-`np::split(&a, sections: usize, axis) -> Vec<Array<T>>` (equal split, panics otherwise), `np::array_split`,
-`np::unique(&a) -> Array<T>` (sorted 1-d), `np::unique_counts(&a) -> (Array<T>, Array<usize>)`,
-`np::nonzero(&a) -> Vec<Array<usize>>`, `np::argwhere(&a) -> Array<usize>`, `np::searchsorted(&sorted, v) -> usize`,
-`np::clip` NOT here (method only), `np::pad(&a, width: usize, value: T)` (constant mode).
+- `SliceArg` variants are `Index(isize)`, `Range { start: Option<isize>, end: Option<isize>, step: isize }`, `Inclusive { start: Option<isize>, end: isize, step: isize }`, and `NewAxis`; `NEW_AXIS` is `SliceArg::NewAxis`.
+- `s![...]` supports indices, Rust ranges, negative indices, `;step`, and `NEW_AXIS`.
+- `slice(args: &[SliceArg]) -> Array<T>` returns a view and `slice_assign(args, values: impl IntoArray<T>)` broadcasts into the selected region.
+- `index_axis(axis, i)`, `row(i)`, and `col(i)` drop the selected axis where applicable.
+- `mask(&Array<bool>) -> Array<T>` flattens selected values and `mask_assign(&mask, value)` assigns them.
+- `take(indices: &[usize], axis: isize) -> Array<T>` implements `np.take`.
+- `compress(mask: &Array<bool>, axis: isize) -> Array<T>` implements `np.compress`.
 
-## 10. Printing (`display.rs`)
-`Display` matches NumPy layout: `[1 2 3]`, `[1. 2.5 3.]`, `[[1. 2.]\n [3. 4.]]`, bools as `[ True False]`, 0-d as the bare value.
-Floats: NumPy's default precision 8, trailing zeros trimmed, aligned columns, summarised with `...` when size > 1000
-(first/last 3 per axis). `Debug`: `array([[1., 2.],\n       [3., 4.]], dtype=float64)` style (exact spacing best effort).
+## 6. Operators and comparisons
 
-## 11. Linear algebra (`linalg.rs`) — `np::linalg::*`, plus `matmul`/`dot` as methods
-Methods on `Array<T: Num>`: `a.matmul(&b)` (`@`): 1-d·1-d → 0-d, 2-d @ 2-d, 1-d @ 2-d, 2-d @ 1-d, batched n-d (broadcast batch dims);
-`a.dot(&b)` (NumPy `dot` rules for ≤ 2-d), `a.trace()`. f32/f64 use `matrixmultiply::{sgemm,dgemm}` with strides; other types a generic loop.
-Free in `np::linalg` (`F: Float`): `outer(&a,&b)`, `inner`, `det(&a) -> F`, `inv(&a) -> Result<Array<F>>`, `solve(&a, &b) -> Result<Array<F>>`,
-`lstsq(&a, &b) -> Result<Array<F>>` (solution only), `pinv(&a)`, `norm(&a) -> F` (Frobenius / 2-norm vector), `norm_axis(&a, ord, axis)`,
-`cholesky(&a) -> Result<Array<F>>` (lower), `qr(&a) -> (Array<F>, Array<F>)` (reduced, Householder),
-`eigh(&a) -> (Array<F>, Array<F>)` (symmetric; ascending eigenvalues, eigenvectors as columns; Jacobi),
-`svd(&a) -> (Array<F>, Array<F>, Array<F>)` (reduced: U, S descending, Vt; one-sided Jacobi), `matrix_rank(&a) -> usize`, `matrix_power(&a, n)`.
-Errors: `Error::Singular`, `Error::NotPositiveDefinite`, `Error::Shape(String)` for linalg input checks.
+- `+`, `-`, `*`, `/`, and `%` support owned/borrowed arrays and scalar operands, broadcast, and preserve the element dtype.
+- Unary `-` is available for signed integers and floats; `+=`, `-=`, `*=`, `/=`, and `%=` accept arrays, references, and scalars with RHS broadcasting.
+- `eq_elem`, `ne_elem`, `lt`, `le`, `gt`, and `ge` accept `impl IntoArray<T>` and return `Array<bool>`.
+- `array_equal(other: impl IntoArray<T>) -> bool` requires equal shape and values.
+- `allclose<F: Float>(other, rtol, atol) -> bool` and `isclose<F: Float>(a, b, rtol, atol) -> Array<bool>` use `abs(a-b) <= atol + rtol*abs(b)`.
+- Boolean arrays support `&`, `|`, `^`, and `!`; root functions are `logical_and`, `logical_or`, `logical_xor`, and `logical_not`.
 
-## 12. Random (`random.rs`) — `np::random::Rng`
-```rust
-let mut rng = np::random::Rng::seed(42);   // np.random.default_rng(42)
-let mut rng = np::random::Rng::from_entropy();
-```
-Generator: xoshiro256** seeded via SplitMix64 (no deps). Methods: `random(shape) -> Array<f64>` [0,1),
-`uniform(low, high, shape)`, `normal(mean, std, shape)` (Box-Muller or ziggurat), `standard_normal(shape)`,
-`integers(low: i64, high: i64, shape) -> Array<i64>` (high exclusive, unbiased), `choice(&a, n, replace: bool)`,
-`shuffle(&mut a)` (first axis), `permutation(n) -> Array<usize>`, `binomial(n, p, shape)`, `poisson(lam, shape)`,
-`exponential(scale, shape)`, `beta`/`gamma` optional. Same seed → same numbers on every platform (tested).
+## 7. Element-wise math
 
-## 13. I/O (`io.rs`) — `np::io::*`
-`save_npy(path, &a) -> Result<()>`, `load_npy::<T>(path) -> Result<Array<T>>` (format v1.0/2.0, little-endian,
-C and Fortran order, dtype must match T or return `Error::DType`), `save_csv(path, &a2d, delimiter) -> Result<()>`,
-`load_csv::<T>(path, delimiter, skip_header: usize) -> Result<Array<T>>` (`np.loadtxt`). `to_npy_bytes`/`from_npy_bytes` for in-memory.
+- `Array<F: Float>` methods are `exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p`, `sqrt`, `cbrt`, `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`, `sinh`, `cosh`, `tanh`, `floor`, `ceil`, `round`, `round_decimals(i32)`, `trunc`, `reciprocal`, `powf(F)`, `powi(i32)`, `is_nan`, `is_inf`, `is_finite`, `sigmoid`, and `relu`.
+- `Array<N: Num>` methods are `abs`, `square`, `clip(lo, hi)`, and `sign`.
+- Root broadcasting functions are `maximum<N>`, `minimum<N>`, `power<N>`, `arctan2<F>`, `hypot<F>`, and `where_<T>(&condition, x, y)`.
+- Additional `Array<F>` methods are `sinc`, `i0`, `deg2rad`, `rad2deg`, `rint`, `fix`, `fabs`, `positive`, `negative`, `signbit`, `spacing`, `modf`, `frexp`, `nan_to_num`, `nan_to_num_with`, `unwrap`, and `unwrap_with`.
+- Root floating functions are `logaddexp`, `logaddexp2`, `fmod`, `remainder`, `floor_divide`, `divmod`, `copysign`, `heaviside`, `nextafter`, `ldexp`, and `float_power`; arguments are `impl IntoArray`, and `float_power` returns `Array<f64>`.
+- `angle<F: Float>(a: impl IntoArray<F>)` and `angle_deg<F: Float>(a: impl IntoArray<F>)` are root free functions returning `Array<F>`.
+- `ediff1d<N: Num>(a: impl IntoArray<N>)` and `ediff1d_with<N: Num>(a, to_end: &[N], to_begin: &[N])` are root free functions and flatten first.
+- `gcd(a: impl IntoArray<i64>, b: impl IntoArray<i64>)` and `lcm(...)` return `Array<i64>`.
+- `hanning(m)`, `hamming(m)`, `blackman(m)`, `bartlett(m)`, and `kaiser(m, beta)` return `Array<f64>`.
 
-## 14. Performance rules
-- Every element-wise op and reduction has a contiguous fast path on slices.
-- With feature `rayon` (default), contiguous ops on arrays with `size >= 1 << 15` run in parallel. Results must be
-  identical with and without the feature for integer ops and within float rounding for float sums (use pairwise summation
-  in both paths so `sum` of f32 is accurate like NumPy).
-- No allocation per element; no `Vec<usize>` index allocation per element in strided iteration (use an odometer).
+## 8. Reductions and statistics methods
+
+- `Array<T: Element>` methods are `min`, `max`, `argmin`, `argmax`, `min_axis`, `max_axis`, `argmin_axis`, `argmax_axis`, `any`, `all`, `any_axis`, `all_axis`, and `count_nonzero`.
+- `Array<N: Num>` methods are `sum`, `prod`, `ptp`, `sum_axis`, `prod_axis`, `cumsum`, `cumprod`, `cumsum_axis`, and `cumprod_axis`; integer accumulation wraps.
+- `Array<F: Float>` methods are `mean`, `var`, `std`, `var_ddof`, `std_ddof`, `mean_axis`, `var_axis`, `std_axis`, `var_ddof_axis(axis, ddof)`, `std_ddof_axis(axis, ddof)`, `median`, `percentile`, and `median_axis`.
+- `Array<F: Float>` NaN methods are `nansum`, `nanmean`, `nanmin`, `nanmax`, `nansum_axis`, `nanmean_axis`, `nanmin_axis`, and `nanmax_axis`.
+- Empty `min`, `max`, `argmin`, and `argmax` panic; empty/all-NaN floating statistics return NaN where NumPy would warn.
+
+## 9. Shape manipulation and sets
+
+- View/copy methods are `reshape(&[usize])`, `reshape_infer(&[isize])`, `ravel`, `flatten`, `t`, `transpose(&[usize])`, `permute_axes(&[usize])`, `swapaxes`, `moveaxis`, `squeeze`, `squeeze_axis`, and `expand_dims`.
+- Reordering methods are `flip`, `flip_all`, `roll`, `repeat`, `tile`, `sort`, `sort_axis`, `argsort`, and `argsort_axis`; NaNs sort last.
+- Root combining functions are `concatenate(&[&Array<T>], axis)`, `stack`, `vstack`, `hstack`, `split`, and `array_split`.
+- Root index/set functions are `unique`, `unique_counts`, `nonzero`, `argwhere`, `searchsorted`, and constant-mode `pad(a, width, value)`.
+- `intersect1d`, `union1d`, `setdiff1d`, `setxor1d`, and `isin` flatten inputs; set outputs are sorted and unique except NumPy-compatible NaN edge cases.
+
+## 10. Statistics, signal, and numeric free functions
+
+- `Bins` is `Count(usize)` or `Edges(Vec<f64>)` and implements `From<usize>`, `From<Vec<f64>>`, `From<&[f64]>`, and `From<&Array<f64>>`.
+- `ConvolveMode` is `Full`, `Same`, or `Valid`; its default is `Full`.
+- `Spacing` is `Uniform(f64)` or `Coords(Vec<f64>)` and implements `From<f64>`, `From<Vec<f64>>`, and `From<&Array<f64>>`.
+- `cov<T: Element>(m: &Array<T>, bias: bool, ddof: Option<usize>) -> Array<f64>` treats rows as variables.
+- `corrcoef<T: Element>(x: &Array<T>) -> Array<f64>` returns the row-wise correlation matrix.
+- `histogram<T: Element>(a, bins: impl Into<Bins>, range, density, weights) -> (Array<f64>, Array<f64>)` returns counts and edges; string bin rules are unsupported.
+- `histogram_bin_edges<T: Element>(a, bins: impl Into<Bins>, range) -> Array<f64>` uses the same bin selection.
+- `bincount(x: &Array<i64>, weights: Option<&Array<f64>>, minlength: usize) -> Array<f64>` rejects negative inputs.
+- `digitize<T: Element, B: Element>(x, bins, right) -> Array<usize>` accepts increasing or decreasing bins.
+- `average<T: Element>(a, weights) -> f64` and `average_axis<T: Element>(a, weights, axis) -> Array<f64>` reject a zero weight sum.
+- `quantile<T: Element>(a, q) -> f64` and `quantile_axis<T: Element>(a, q, axis) -> Array<f64>` support scalar `q` and linear interpolation.
+- `nanquantile<T: Element>(a, q) -> f64` and `nanquantile_axis<T: Element>(a, q, axis) -> Array<f64>` ignore NaNs.
+- `convolve<N: Num>(a, v, mode)` and `correlate<N: Num>(a, v, mode)` are 1-d and return `Array<N>`.
+- `diff<N: Num>(a, n, axis) -> Array<N>` preserves dtype and wraps integer subtraction.
+- `gradient<F: Float>(f, dx) -> Vec<Array<F>>` returns one gradient per axis.
+- `gradient_axis<F: Float>(f, spacing: impl Into<Spacing>, axis, edge_order) -> Array<F>` accepts edge order 1 or 2.
+- `interp(x: &Array<f64>, xp: &Array<f64>, fp: &Array<f64>, left, right) -> Array<f64>` is one-dimensional linear interpolation.
+- `trapezoid<F: Float>(y, spacing: impl Into<Spacing>, axis) -> Array<F>` removes the integration axis.
+- `cross<N: Num>(a, b) -> Array<N>` uses last axes of length 2 or 3 and broadcasts leading axes.
+- `kron<N: Num>(a, b) -> Array<N>` implements the n-dimensional Kronecker product.
+
+## 11. Linear algebra (`np::linalg`)
+
+- `LinalgFloat: Float` is the sealed bound for `f32` and `f64` decomposition kernels.
+- `NormOrd` variants are `Fro`, `Two`, `One`, `Inf`, `NegOne`, `NegTwo`, `NegInf`, `Zero`, and `Nuc`; `Nuc` is matrix-only and `Zero` is vector-only.
+- `Array<N: Num>::matmul(&b) -> Array<N>` implements vector promotion and broadcast batches; f32/f64 use `matrixmultiply`, and generic integer products wrap.
+- `Array<N: Num>::dot(&b) -> Array<N>` supports operands of at most two dimensions and scalar multiplication.
+- `Array<N: Num>::trace() -> N` requires a 2-d array and wraps integer accumulation.
+- `outer<T: Num>(a: &Array<T>, b: &Array<T>) -> Array<T>` flattens both inputs.
+- `inner<T: Num>(a: &Array<T>, b: &Array<T>) -> T` requires equal-length vectors.
+- `det<F: LinalgFloat>(a: &Array<F>) -> F` returns zero for a singular matrix.
+- `inv<F: LinalgFloat>(a: &Array<F>) -> Result<Array<F>>` returns `Singular` or `Shape` errors.
+- `solve<F: LinalgFloat>(a: &Array<F>, b: &Array<F>) -> Result<Array<F>>` accepts vector or matrix right-hand sides.
+- `lstsq<F: LinalgFloat>(a: &Array<F>, b: &Array<F>) -> Result<Array<F>>` returns the minimum-norm solution.
+- `pinv<F: LinalgFloat>(a: &Array<F>) -> Array<F>` panics with `SVD did not converge` on non-finite input.
+- `norm<F: LinalgFloat>(a: &Array<F>) -> F` is the flattened Euclidean/Frobenius norm.
+- `norm_axis<F: LinalgFloat>(a: &Array<F>, ord: NormOrd, axis: isize) -> Array<F>` computes vector norms along one axis.
+- `vector_norm<F: LinalgFloat>(a: &Array<F>, ord: NormOrd) -> F` flattens its input.
+- `matrix_norm<F: LinalgFloat>(a: &Array<F>, ord: NormOrd) -> F` requires a 2-d input.
+- `cholesky<F: LinalgFloat>(a: &Array<F>) -> Result<Array<F>>` returns a lower factor or `NotPositiveDefinite`.
+- `qr<F: LinalgFloat>(a: &Array<F>) -> (Array<F>, Array<F>)` returns the reduced factorization.
+- `eigh<F: LinalgFloat>(a: &Array<F>) -> (Array<F>, Array<F>)` returns ascending symmetric eigenvalues and column eigenvectors.
+- `svd<F: LinalgFloat>(a: &Array<F>) -> (Array<F>, Array<F>, Array<F>)` returns reduced `(u, s, vt)`.
+- `matrix_rank<F: LinalgFloat>(a: &Array<F>) -> usize` uses NumPy's default SVD tolerance.
+- `matrix_power<F: LinalgFloat>(a: &Array<F>, n: i32) -> Result<Array<F>>` supports negative powers through one inverse.
+- `eig<F: LinalgFloat>(a: &Array<F>) -> Result<(Array<F>, Array<F>, Array<F>, Array<F>)>` returns `(w_re, w_im, v_re, v_im)`.
+- `eigvals<F: LinalgFloat>(a: &Array<F>) -> Result<(Array<F>, Array<F>)>` returns `(w_re, w_im)`.
+- `eigvalsh<F: LinalgFloat>(a: &Array<F>) -> Array<F>` returns ascending symmetric eigenvalues.
+- `slogdet<F: LinalgFloat>(a: &Array<F>) -> (F, F)` returns sign and log absolute determinant.
+- `cond<F: LinalgFloat>(a: &Array<F>) -> F` returns the 2-norm condition number.
+- `cond_ord<F: LinalgFloat>(a: &Array<F>, ord: NormOrd) -> F` selects another supported norm.
+- `multi_dot<T: Num>(arrays: &[&Array<T>]) -> Array<T>` chooses the cheapest matrix-chain parenthesization and wraps integer arithmetic.
+- `tensordot<T: Num>(a: &Array<T>, b: &Array<T>, axes_a: &[isize], axes_b: &[isize]) -> Array<T>` wraps integer arithmetic.
+- `tensordot_n<T: Num>(a: &Array<T>, b: &Array<T>, n: usize) -> Array<T>` implements NumPy's integer `axes=n` form.
+- `vdot<T: Num>(a: &Array<T>, b: &Array<T>) -> T` flattens both real arrays, does no conjugation, and wraps integer arithmetic.
+- Non-finite eigensolver input maps to `NoConvergence("Eigenvalues did not converge")`; SVD-based failures use `NoConvergence("SVD did not converge")` or the same panic text for infallible signatures.
+
+## 12. Random (`np::random::Rng`)
+
+- `Rng::seed(seed: u64)` and `Rng::from_entropy()` construct the xoshiro256** generator; seeded streams are platform-stable but intentionally differ from NumPy PCG64.
+- `random(&mut self, shape: &[usize])`, `uniform(low, high, shape)`, `normal(mean, std, shape)`, and `standard_normal(shape)` return `Array<f64>`.
+- `integers(low: i64, high: i64, shape: &[usize]) -> Array<i64>` uses an exclusive high bound.
+- `choice<T: Element>(&mut self, a, n, replace) -> Array<T>`, `shuffle<T: Element>(&mut self, a: &mut Array<T>)`, and `permutation(n) -> Array<usize>` provide sampling and permutations.
+- `binomial(n: u64, p: f64, shape: &[usize]) -> Array<i64>` and `poisson(lam: f64, shape: &[usize]) -> Array<i64>` return signed integer arrays.
+- `exponential(scale, shape)`, `beta(a, b, shape)`, and `gamma(shape_param, scale, shape)` return `Array<f64>`.
+
+## 13. I/O (`np::io`)
+
+- `save_npy<T: Element>(path: impl AsRef<Path>, a: &Array<T>) -> Result<()>` and `load_npy<T: Element>(path) -> Result<Array<T>>` support NPY v1/v2, C/Fortran order, and exact dtype checking.
+- `to_npy_bytes<T: Element>(&a) -> Vec<u8>` and `from_npy_bytes<T: Element>(bytes: &[u8]) -> Result<Array<T>>` provide the in-memory NPY codec.
+- `save_csv<T>(path: impl AsRef<Path>, a: &Array<T>, delimiter: char) -> Result<()> where T: Element + Display` requires a 2-d array.
+- `load_csv<T>(path: impl AsRef<Path>, delimiter: char, skip_header: usize) -> Result<Array<T>> where T: Element + FromStr, <T as FromStr>::Err: Display` implements the supported `np.loadtxt` subset.
+- `savez<T: Element>(path: impl AsRef<Path>, arrays: &[(&str, &Array<T>)]) -> Result<()>` writes named uncompressed NPY members in a ZIP archive.
+- `savez_compressed<T: Element>(path: impl AsRef<Path>, arrays: &[(&str, &Array<T>)]) -> Result<()>` DEFLATE-compresses members when smaller.
+- `load_npz<T: Element>(path: impl AsRef<Path>) -> Result<Vec<(String, Array<T>)>>` loads every member in archive order and requires one dtype.
+- `NpzFile::open(path) -> Result<NpzFile>`, `keys(&self) -> Vec<String>`, and `get<T: Element>(&self, name: &str) -> Result<Array<T>>` provide lazy mixed-dtype member access.
+- NPZ names must be non-empty and unique; readers verify ZIP structure, compression, sizes, and CRC-32 and report corruption as `Error::Format`.
+
+## 14. FFT (`np::fft`)
+
+- v0.1 complex arrays are represented by equal-shaped `(re, im)` real arrays; transforms use NumPy's default backward normalization and operate on the last axis.
+- `fft<F: Float>(&re, &im)` and `ifft<F: Float>(&re, &im)` return `(Array<F>, Array<F>)`.
+- `rfft<F: Float>(&a) -> (Array<F>, Array<F>)` returns `n/2 + 1` bins and `irfft<F: Float>(&re, &im, n: usize) -> Array<F>` requires the output length.
+- `fft2<F: Float>(&re, &im)` and `ifft2<F: Float>(&re, &im)` transform the last two axes.
+- `fftfreq<F: Float>(n, d)` and `rfftfreq<F: Float>(n, d)` return `Array<F>`.
+- `fftshift<T: Element>(&a)` and `ifftshift<T: Element>(&a)` shift every axis and return `Array<T>`.
+- Length zero panics; radix-2 and Bluestein kernels support every positive length without external dependencies.
+
+## 15. Polynomials (`np::poly`)
+
+- Polynomial coefficients are 1-d, highest power first; all polynomial arguments are `impl IntoArray<F>` with `F: Float`.
+- `polyval<F: Float>(p: impl IntoArray<F>, x: impl IntoArray<F>) -> Array<F>` evaluates by Horner's method and preserves `x`'s shape.
+- `polyfit<F: Float>(x: impl IntoArray<F>, y: impl IntoArray<F>, deg: usize) -> Array<F>` returns `deg + 1` least-squares coefficients; weights, covariance, full output, and 2-d `y` are unsupported.
+- `polyadd<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F>` aligns constant coefficients.
+- `polysub<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F>` aligns constant coefficients.
+- `polymul<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F>` convolves coefficients.
+- `polydiv<F: Float>(u: impl IntoArray<F>, v: impl IntoArray<F>) -> (Array<F>, Array<F>)` returns quotient and remainder.
+- `polyder<F: Float>(p: impl IntoArray<F>, m: usize) -> Array<F>` differentiates `m` times.
+- `polyint<F: Float>(p: impl IntoArray<F>, m: usize, k: &[F]) -> Array<F>` integrates `m` times.
+- `roots<F: Float>(p: impl IntoArray<F>) -> (Array<F>, Array<F>)` returns real and imaginary root arrays; root order is not a stable contract.
+
+## 16. Einstein summation
+
+- `einsum<N: Num>(subscripts: &str, operands: &[&Array<N>]) -> Array<N>` is re-exported at the root.
+- Supported forms include explicit/implicit output, repeated labels, any operand count, scalar operands, labeled broadcasting, and right-aligned ellipses.
+- Unsupported forms are `optimize=`, `einsum_path`, `out=`, `dtype=`, and NumPy's interleaved sublist syntax.
+- The implementation is a direct nested contraction and wraps fixed-width integer multiply/add operations.
+
+## 17. Scalar complex numbers
+
+- `Complex<F> { pub re: F, pub im: F }` is a scalar type for `F = f32 | f64`; it is not an `Element`, so v0.1 has no `Array<Complex<F>>` dtype.
+- Constructors are `Complex::new`, `from_real`, `from_polar`, and `i`.
+- Methods are `conj`, `norm`, `norm_sqr`, `arg`, `is_nan`, `is_infinite`, `is_finite`, `exp`, `ln`, `sqrt`, `powc`, `powf`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, and `cmp_numpy`.
+- Operators are complex/complex and complex/real `+`, `-`, `*`, `/`, unary `-`, and their assignment forms; branch cuts follow signed zero.
+
+## 18. Printing and performance
+
+- `Display` uses NumPy-style array layout and `Debug` uses `array(..., dtype=...)`; large arrays are summarized.
+- Contiguous element-wise operations and reductions use slice fast paths; the default `rayon` feature parallelizes sufficiently large inputs.
+- Results with and without `rayon` are identical for integer operations and agree within floating rounding for floating reductions.
+- f32/f64 matrix multiplication uses `matrixmultiply`; all other numerical kernels are pure Rust and dependencies stay minimal.
+
+## 19. Deliberate v0.1 limits
+
+- Not supported as array dtypes: complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
+- Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
+- Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.

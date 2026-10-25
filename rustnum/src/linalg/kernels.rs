@@ -7,6 +7,9 @@
 
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
+use crate::Num;
+use crate::element::{add, mul};
+
 /// The deliberately small floating-point surface needed by these kernels.
 pub trait KernelFloat:
     Copy
@@ -199,11 +202,11 @@ pub(crate) fn gemm<T>(
     b_col_stride: isize,
 ) -> Vec<T>
 where
-    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+    T: Num,
 {
     assert_matrix_fits(a, m, k, a_row_stride, a_col_stride);
     assert_matrix_fits(b, k, n, b_row_stride, b_col_stride);
-    let mut result = vec![T::default(); m * n];
+    let mut result = vec![T::ZERO; m * n];
     // i-k-j keeps the output row hot in cache and also avoids an allocation per
     // element for strided Array views.
     for i in 0..m {
@@ -212,7 +215,7 @@ where
             for j in 0..n {
                 let right = b[(p as isize * b_row_stride + j as isize * b_col_stride) as usize];
                 let index = i * n + j;
-                result[index] = result[index] + left * right;
+                result[index] = add(result[index], mul(left, right));
             }
         }
     }
@@ -536,7 +539,7 @@ pub(crate) fn qr<T: KernelFloat>(
 }
 
 /// Minimum-norm least-squares solution `pinv(A) B` (what NumPy's SVD-based `lstsq` returns).
-fn lstsq_min_norm<T: KernelFloat>(
+fn lstsq_min_norm<T: KernelFloat + Num>(
     a: &[T],
     rows: usize,
     cols: usize,
@@ -561,7 +564,7 @@ fn lstsq_min_norm<T: KernelFloat>(
 ///
 /// Full-column-rank tall systems use Householder QR; under-determined or rank-deficient systems
 /// return the minimum-norm solution through the SVD, exactly as NumPy does.
-pub(crate) fn lstsq<T: KernelFloat>(
+pub(crate) fn lstsq<T: KernelFloat + Num>(
     a: &[T],
     rows: usize,
     cols: usize,
@@ -577,10 +580,10 @@ pub(crate) fn lstsq<T: KernelFloat>(
     let (q, r, _) = qr(a, rows, cols)?;
     // QR without pivoting is only trusted when R is comfortably non-singular; otherwise NumPy's
     // answer is the minimum-norm solution, which the SVD route below reproduces.
-    let mut largest = T::ZERO;
+    let mut largest = <T as KernelFloat>::ZERO;
     let mut smallest = T::INFINITY;
     for i in 0..cols {
-        let d = r[i * cols + i].abs();
+        let d = KernelFloat::abs(r[i * cols + i]);
         if d > largest {
             largest = d;
         }
@@ -588,11 +591,12 @@ pub(crate) fn lstsq<T: KernelFloat>(
             smallest = d;
         }
     }
-    let hundred = T::from_usize(100);
-    if cols > 0 && smallest <= largest * T::EPSILON * T::from_usize(rows) * hundred {
+    let hundred = <T as KernelFloat>::from_usize(100);
+    if cols > 0 && smallest <= largest * T::EPSILON * <T as KernelFloat>::from_usize(rows) * hundred
+    {
         return lstsq_min_norm(a, rows, cols, b, rhs_cols);
     }
-    let mut y = vec![T::ZERO; cols * rhs_cols];
+    let mut y = vec![<T as KernelFloat>::ZERO; cols * rhs_cols];
     for i in 0..cols {
         for j in 0..rhs_cols {
             for row in 0..rows {
@@ -1746,11 +1750,11 @@ pub(crate) fn multi_dot<T>(
     matrices: &[(&[T], usize, usize)],
 ) -> Result<(Vec<T>, usize, usize), KernelError>
 where
-    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+    T: Num,
 {
     fn product<T>(matrices: &[(&[T], usize, usize)], splits: &[usize], i: usize, j: usize) -> Vec<T>
     where
-        T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+        T: Num,
     {
         if i == j {
             return matrices[i].0.to_vec();
@@ -1836,7 +1840,7 @@ pub(crate) fn tensordot<T>(
     axes_b: &[usize],
 ) -> Result<(Vec<T>, Vec<usize>), KernelError>
 where
-    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+    T: Num,
 {
     if axes_a.len() != axes_b.len()
         || a.len() != a_shape.iter().product::<usize>()
@@ -1890,21 +1894,21 @@ where
 /// Dot product of the flattened operands, like `np.vdot(a, b)` for real data.
 pub(crate) fn vdot<T>(a: &[T], b: &[T]) -> Result<T, KernelError>
 where
-    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+    T: Num,
 {
     if a.len() != b.len() {
         return Err(KernelError::Shape);
     }
     Ok(a.iter()
         .zip(b)
-        .fold(T::default(), |sum, (&x, &y)| sum + x * y))
+        .fold(T::ZERO, |sum, (&x, &y)| add(sum, mul(x, y))))
 }
 
 /// Integer power of a square matrix, like `np.linalg.matrix_power(a, power)`.
 ///
 /// `power == 0` gives the identity (even for singular input); negative powers invert `a` first
 /// and fail with [`KernelError::Singular`] when it has no inverse.
-pub(crate) fn matrix_power<T: KernelFloat>(
+pub(crate) fn matrix_power<T: KernelFloat + Num>(
     a: &[T],
     n: usize,
     power: i64,
@@ -1912,9 +1916,9 @@ pub(crate) fn matrix_power<T: KernelFloat>(
     if a.len() != n * n {
         return Err(KernelError::Shape);
     }
-    let mut result = vec![T::ZERO; n * n];
+    let mut result = vec![<T as KernelFloat>::ZERO; n * n];
     for i in 0..n {
-        result[i * n + i] = T::ONE;
+        result[i * n + i] = <T as KernelFloat>::ONE;
     }
     if power == 0 {
         return Ok(result);

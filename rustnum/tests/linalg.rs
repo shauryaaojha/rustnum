@@ -142,6 +142,19 @@ fn matmul_integers() {
 }
 
 #[test]
+fn integer_linalg_products_wrap_on_overflow() {
+    let a = np::array![[i32::MAX]];
+    let two = np::array![[2_i32]];
+    let one = np::array![[1_i32]];
+    assert_eq!(linalg::multi_dot(&[&a, &two, &one]).item(), -2);
+    assert_eq!(linalg::vdot(&a, &two), -2);
+
+    let x = np::array![i64::MAX];
+    let y = np::array![2_i64];
+    assert_eq!(linalg::tensordot(&x, &y, &[0], &[0]).item(), -2);
+}
+
+#[test]
 fn matmul_empty_dimensions() {
     let a = np::zeros::<f64>([3, 0]);
     let b = np::zeros::<f64>([0, 2]);

@@ -40,13 +40,14 @@ println!("{y}");
 | Parallelism | Single-threaded per op (GIL, mostly) | Large ops use all cores via `rayon` (feature, on by default) | Free speedup |
 | GEMM | OpenBLAS / MKL (C, Fortran) | `matrixmultiply` (pure Rust) | Builds anywhere with just `cargo build` |
 | Random | `np.random.default_rng(42)` (PCG64) | `np::random::Rng::seed(42)` (xoshiro256**) | Same API style. Numbers differ from NumPy's stream, by design |
-| File format | `.npy` / `.npz` | Reads and writes `.npy` (100% compatible), CSV | Exchange arrays with Python both ways |
+| File format | `.npy` / `.npz` | Reads and writes `.npy` and `.npz` (NumPy-compatible), plus CSV | Exchange arrays with Python both ways |
 | Install | `pip install numpy` | `cargo add rustnum` | Pure Rust, no system libraries |
 
 ### Out of scope for v0.1 (honest list)
-Complex numbers, `float16`, structured/record dtypes, object arrays, datetime dtypes,
-masked arrays, `np.fft`, polynomials, `.npz`, memory-mapped files, string arrays,
-`einsum`, fancy multi-axis advanced indexing. These are later phases (section 7).
+Complex **array dtype**, `float16`, structured/record dtypes, object arrays, datetime dtypes,
+masked arrays, memory-mapped files, string arrays, and fancy multi-axis advanced indexing remain
+out of scope. `Complex<F>` is delivered as a scalar type but is not an `Element`. FFT, polynomials,
+`.npz`, and `einsum` are in the v0.1 scope and are complete.
 
 ## 3. Design principles
 
@@ -72,7 +73,7 @@ masked arrays, `np.fft`, polynomials, `.npz`, memory-mapped files, string arrays
 3. **`llms.txt` and `AGENTS.md`** at the repo root: a compact API summary and the rules for
    contributing (where code goes, how to test).
 4. **One path per public item** (M-SINGLE-ITEM-PATH). Core items live at the crate root; only
-   `linalg`, `random` and `io` are sub-modules, exactly like NumPy.
+   `fft`, `io`, `linalg`, `poly` and `random` are public sub-modules, exactly like NumPy.
 5. **Every public function has a doc example that runs** (doctest). The examples are the spec.
 6. **Strong types, few generics in signatures.** No lifetimes or exotic trait bounds in the public
    API, so compiler errors stay short and readable.
@@ -136,19 +137,20 @@ pub struct Array<T> {
 - **Fast path:** when an array is C-contiguous, operations work on the raw slice (and in parallel above a size threshold). Strided arrays go through a general index iterator.
 - **Writes:** `IndexMut`, `set`, `+=` call `Arc::make_mut`, so a shared buffer is copied once before the first write.
 
-## 6. Build phases (today)
+## 6. Build phases (delivered v0.1)
 
-| Phase | Who | Scope | Exit criteria |
-|---|---|---|---|
-| 0. Plan + scaffold | Claude | This plan, workspace, module skeleton, `AGENTS.md`, git | `cargo build` passes on the empty skeleton |
-| 1. Core | codex | element, array, layout, broadcast, creation, slicing, ops, ufunc, reduce, manip, display, `astype` | `cargo test` green, every pub fn has a doctest |
-| 2a. Linear algebra + speed | codex (worktree) | `linalg`, rayon fast paths, criterion benches | Tests green, results match NumPy within 1e-10 (f64) |
-| 2b. Random + I/O + parity | agy (worktree) | `random`, `io` (.npy, CSV), `tools/gen_fixtures.py`, parity tests | `.npy` round-trips with real NumPy, parity tests green |
-| 3. Docs | agy | `README.md`, `docs/NUMPY_MAPPING.md`, `docs/ARCHITECTURE.md`, `llms.txt`, examples | Every mapping row compiles; examples run |
-| 4. Verify | Claude | Merge, full test suite, clippy, doc build, benchmarks vs NumPy | All gates green, benchmark table in README |
+| Phase | Scope | Delivered result |
+|---|---|---|
+| 0. Plan + scaffold | Workspace, module skeleton, `AGENTS.md`, git | Complete |
+| 1. Core | Element traits, arrays, broadcasting, creation, slicing, operators, ufuncs, reductions, manipulation, display | Complete with runnable public-item docs |
+| 2a. Linear algebra + speed | `linalg`, wrapping generic products, Rayon fast paths, criterion benches | Complete with NumPy parity coverage |
+| 2b. Random + base I/O | `random`, `.npy`, CSV, fixture generation, parity tests | Complete with NumPy-compatible round trips |
+| 2c. Extended NumPy surface | FFT, polynomials, `einsum`, statistics, signal, sets, misc math, scalar `Complex<F>`, `.npz` | Complete and wired into the public API |
+| 3. Docs + examples | API contract, mapping, architecture, LLM guide, runnable examples | Complete for the delivered v0.1 surface |
+| 4. Verify | Formatting, clippy, all-features/no-default tests, docs, release examples | Required release gates |
 
 ## 7. Later phases (not today)
-- v0.2: `einsum`, `.npz`, fancy indexing with index arrays on several axes, `fft`, `polynomial`, complex numbers.
+- v0.2: complex array dtype support, fancy indexing with index arrays on several axes, and memory mapping.
 - v0.3: SIMD kernels (`wide`), optional BLAS backend feature, `f16`/`bf16`.
 - v0.4: Python bindings via PyO3 (`import rustnum`) so Python users can try it.
 - Then the next libraries on top: dataframe glue (Polars), plotting (`seaborn`-style), classical ML, autograd.
