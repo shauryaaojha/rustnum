@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+__pycache__/
+*.pyc
+.venv/
+/rustnum/tests/fixtures/*.npy
+!/rustnum/tests/fixtures/.gitkeep

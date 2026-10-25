@@ -1,0 +1,26 @@
+[package]
+name = "rustnum"
+version = "0.1.0"
+description = "NumPy-style n-dimensional arrays for Rust: one array type, NumPy names, pure Rust."
+readme = "../README.md"
+keywords = ["numpy", "ndarray", "array", "linear-algebra", "scientific"]
+categories = ["science", "mathematics", "data-structures"]
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["rayon"]
+rayon = ["dep:rayon"]
+
+[dependencies]
+matrixmultiply = "0.3"
+rayon = { version = "1.12", optional = true }
+
+[dev-dependencies]
+proptest = "1"
+criterion = "0.8"
+
+[[bench]]
+name = "core"
+harness = false
