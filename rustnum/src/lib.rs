@@ -32,6 +32,7 @@ mod extra;
 mod layout;
 mod manip;
 mod npz;
+mod misc;
 mod ops;
 mod reduce;
 mod slicing;
