@@ -1,0 +1,164 @@
+//! Public I/O API — `np::io::*`.
+//!
+//! This file is `.pending` and will be renamed to `api.rs` after the core
+//! Array type is merged from the Phase 1 worktree.
+
+use std::path::Path;
+use crate::{Array, Element};
+use super::npy::{self, NpyElement};
+use super::csv as csv_io;
+use super::IoError;
+
+// ---- .npy ----
+
+/// Save an array to a .npy file, like `np.save(path, a)`.
+///
+/// Writes NumPy format v1.0 (v2.0 if the header exceeds 65535 bytes).
+/// Only little-endian dtypes are supported.
+///
+/// # Errors
+///
+/// Returns `Err` on I/O failure.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rustnum as np;
+/// let a = np::arange(0.0_f64, 12.0, 1.0).reshape(&[3, 4]);
+/// np::io::save_npy("data.npy", &a).unwrap();
+/// ```
+pub fn save_npy<T>(path: impl AsRef<Path>, a: &Array<T>) -> crate::Result<()>
+where
+    T: Element + NpyElement,
+{
+    let bytes = to_npy_bytes(a);
+    std::fs::write(path, bytes).map_err(|e| map_io_err(IoError::Io(e)))
+}
+
+/// Load an array from a .npy file, like `np.load(path)`.
+///
+/// The dtype in the file must match `T`, or `Error::DType` is returned.
+/// Both C and Fortran order are supported.
+///
+/// # Errors
+///
+/// Returns `Err` on I/O failure, dtype mismatch, or invalid format.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rustnum as np;
+/// let a: np::Array<f64> = np::io::load_npy("data.npy").unwrap();
+/// ```
+pub fn load_npy<T>(path: impl AsRef<Path>) -> crate::Result<Array<T>>
+where
+    T: Element + NpyElement,
+{
+    let bytes = std::fs::read(path).map_err(|e| map_io_err(IoError::Io(e)))?;
+    from_npy_bytes(&bytes)
+}
+
+/// Serialize an array to .npy bytes in memory, like `np.save` to a buffer.
+///
+/// # Examples
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::Array::from_vec(vec![1.0_f64, 2.0, 3.0], &[3]);
+/// let bytes = np::io::to_npy_bytes(&a);
+/// let b: np::Array<f64> = np::io::from_npy_bytes(&bytes).unwrap();
+/// assert_eq!(a, b);
+/// ```
+pub fn to_npy_bytes<T>(a: &Array<T>) -> Vec<u8>
+where
+    T: Element + NpyElement,
+{
+    let data = a.to_vec();
+    npy::encode_npy(&data, a.shape())
+}
+
+/// Deserialize an array from .npy bytes in memory.
+///
+/// # Errors
+///
+/// Returns `Err` on dtype mismatch or invalid format.
+///
+/// # Examples
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::Array::from_vec(vec![1i64, 2, 3], &[3]);
+/// let bytes = np::io::to_npy_bytes(&a);
+/// let b: np::Array<i64> = np::io::from_npy_bytes(&bytes).unwrap();
+/// assert_eq!(a, b);
+/// ```
+pub fn from_npy_bytes<T>(bytes: &[u8]) -> crate::Result<Array<T>>
+where
+    T: Element + NpyElement,
+{
+    let (data, shape) = npy::decode_npy::<T>(bytes).map_err(map_io_err)?;
+    Ok(Array::from_vec(data, &shape))
+}
+
+// ---- CSV ----
+
+/// Save a 2-d (or 1-d) array to CSV, like `np.savetxt`.
+///
+/// # Errors
+///
+/// Returns `Err` on I/O failure or if the array has more than 2 dimensions.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rustnum as np;
+/// let a = np::arange(0.0_f64, 6.0, 1.0).reshape(&[2, 3]);
+/// np::io::save_csv("data.csv", &a, ',').unwrap();
+/// ```
+pub fn save_csv<T>(path: impl AsRef<Path>, a: &Array<T>, delimiter: char) -> crate::Result<()>
+where
+    T: Element + std::fmt::Display,
+{
+    let text = csv_io::format_csv(&a.to_vec(), a.shape(), delimiter)
+        .map_err(map_io_err)?;
+    std::fs::write(path, text).map_err(|e| map_io_err(IoError::Io(e)))
+}
+
+/// Load a 2-d (or 1-d) array from CSV, like `np.loadtxt`.
+///
+/// # Errors
+///
+/// Returns `Err` on I/O failure, parse errors, or ragged rows.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rustnum as np;
+/// let a: np::Array<f64> = np::io::load_csv("data.csv", ',', 0).unwrap();
+/// ```
+pub fn load_csv<T>(
+    path: impl AsRef<Path>,
+    delimiter: char,
+    skip_header: usize,
+) -> crate::Result<Array<T>>
+where
+    T: Element + std::str::FromStr,
+    <T as std::str::FromStr>::Err: std::fmt::Display,
+{
+    let text = std::fs::read_to_string(path).map_err(|e| map_io_err(IoError::Io(e)))?;
+    let (data, shape) = csv_io::parse_csv::<T>(&text, delimiter, skip_header)
+        .map_err(map_io_err)?;
+    Ok(Array::from_vec(data, &shape))
+}
+
+// ---- error mapping ----
+
+/// Map internal IoError to the crate-level Error.
+fn map_io_err(e: IoError) -> crate::Error {
+    match e {
+        IoError::Io(io) => crate::Error::Io(io),
+        IoError::DType(s) => crate::Error::DType(s),
+        IoError::Format(s) => crate::Error::Format(s),
+        IoError::Parse(s) => crate::Error::Parse(s),
+    }
+}

@@ -1,0 +1,301 @@
+//! Public random number generator API — `np::random::Rng`.
+//!
+//! This file is `.pending` and will be renamed to `api.rs` after the core
+//! Array type is merged from the Phase 1 worktree.
+
+use crate::Array;
+use super::engine::{self, Xoshiro256StarStar};
+
+/// Random number generator using xoshiro256** seeded by SplitMix64, like
+/// `np.random.default_rng`.
+///
+/// Same seed produces the same sequence on every platform.
+///
+/// # Examples
+///
+/// ```
+/// use rustnum as np;
+///
+/// let mut rng = np::random::Rng::seed(42);
+/// let a = rng.random(&[3, 4]);   // 3×4 of f64 in [0, 1)
+/// assert_eq!(a.shape(), &[3, 4]);
+///
+/// let n = rng.normal(0.0, 1.0, &[1000]);
+/// assert!(n.mean().abs() < 0.1);
+/// ```
+pub struct Rng {
+    inner: Xoshiro256StarStar,
+}
+
+impl Rng {
+    /// Create a new RNG from a u64 seed, like `np.random.default_rng(seed)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.random(&[5]);
+    /// assert_eq!(a.shape(), &[5]);
+    /// ```
+    pub fn seed(seed: u64) -> Self {
+        Self {
+            inner: Xoshiro256StarStar::seed(seed),
+        }
+    }
+
+    /// Create a new RNG from system entropy (time + address).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::from_entropy();
+    /// let a = rng.random(&[5]);
+    /// assert_eq!(a.shape(), &[5]);
+    /// ```
+    pub fn from_entropy() -> Self {
+        Self {
+            inner: Xoshiro256StarStar::from_entropy(),
+        }
+    }
+
+    /// Uniform random f64 values in [0, 1), like `rng.random(shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(0);
+    /// let a = rng.random(&[2, 3]);
+    /// assert_eq!(a.shape(), &[2, 3]);
+    /// for &v in a.iter() {
+    ///     assert!((0.0..1.0).contains(&v));
+    /// }
+    /// ```
+    pub fn random(&mut self, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::random_vec(&mut self.inner, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Uniform random f64 values in [low, high), like `rng.uniform(low, high, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(0);
+    /// let a = rng.uniform(2.0, 5.0, &[100]);
+    /// for v in a.iter() {
+    ///     assert!(v >= 2.0 && v < 5.0);
+    /// }
+    /// ```
+    pub fn uniform(&mut self, low: f64, high: f64, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::uniform_vec(&mut self.inner, low, high, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Normal (Gaussian) random values, like `rng.normal(mean, std, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.normal(0.0, 1.0, &[10000]);
+    /// let mean = a.mean();
+    /// assert!((mean).abs() < 0.05, "mean={mean}");
+    /// ```
+    pub fn normal(&mut self, mean: f64, std: f64, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::normal_vec(&mut self.inner, mean, std, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Standard normal (mean=0, std=1), like `rng.standard_normal(shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.standard_normal(&[5000]);
+    /// assert!(a.mean().abs() < 0.05);
+    /// ```
+    pub fn standard_normal(&mut self, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::standard_normal_vec(&mut self.inner, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Random integers in [low, high), like `rng.integers(low, high, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.integers(0, 10, &[100]);
+    /// for v in a.iter() {
+    ///     assert!(v >= 0 && v < 10);
+    /// }
+    /// ```
+    pub fn integers(&mut self, low: i64, high: i64, shape: &[usize]) -> Array<i64> {
+        let len: usize = shape.iter().product();
+        let data = engine::integers_vec(&mut self.inner, low, high, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Random choice from array elements, like `rng.choice(a, n, replace)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = np::arange(0.0, 10.0, 1.0);
+    /// let chosen = rng.choice(&a, 5, false);
+    /// assert_eq!(chosen.shape(), &[5]);
+    /// ```
+    pub fn choice<T: crate::Element>(&mut self, a: &Array<T>, n: usize, replace: bool) -> Array<T> {
+        let indices = engine::choice_indices(&mut self.inner, a.size(), n, replace);
+        let src = a.to_vec();
+        let data: Vec<T> = indices.into_iter().map(|i| src[i]).collect();
+        Array::from_vec(data, &[n])
+    }
+
+    /// Shuffle array along first axis in place, like `rng.shuffle(a)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let mut a = np::arange(0.0, 10.0, 1.0);
+    /// rng.shuffle(&mut a);
+    /// assert_eq!(a.size(), 10);
+    /// ```
+    pub fn shuffle<T: crate::Element>(&mut self, a: &mut Array<T>) {
+        // Shuffle along first axis: swap rows (or elements for 1-d).
+        if a.ndim() <= 1 {
+            let mut data = a.to_vec();
+            engine::shuffle(&mut self.inner, &mut data);
+            *a = Array::from_vec(data, a.shape());
+        } else {
+            let n = a.shape()[0];
+            // For n-d, shuffle indices and rebuild
+            let mut indices: Vec<usize> = (0..n).collect();
+            engine::shuffle(&mut self.inner, &mut indices);
+            let rows: Vec<Array<T>> = indices.iter().map(|&i| a.index_axis(0, i)).collect();
+            let refs: Vec<&Array<T>> = rows.iter().collect();
+            *a = crate::stack(&refs, 0);
+        }
+    }
+
+    /// Random permutation of 0..n, like `rng.permutation(n)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let p = rng.permutation(10);
+    /// assert_eq!(p.size(), 10);
+    /// let mut sorted = p.to_vec();
+    /// sorted.sort();
+    /// assert_eq!(sorted, (0..10).collect::<Vec<_>>());
+    /// ```
+    pub fn permutation(&mut self, n: usize) -> Array<usize> {
+        let data = engine::permutation_vec(&mut self.inner, n);
+        Array::from_vec(data, &[n])
+    }
+
+    /// Binomial distribution, like `rng.binomial(n, p, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.binomial(10, 0.5, &[1000]);
+    /// let mean: f64 = a.to_vec().iter().map(|&x| x as f64).sum::<f64>() / 1000.0;
+    /// assert!((mean - 5.0).abs() < 0.5);
+    /// ```
+    pub fn binomial(&mut self, n: u64, p: f64, shape: &[usize]) -> Array<u64> {
+        let len: usize = shape.iter().product();
+        let data = engine::binomial_vec(&mut self.inner, n, p, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Poisson distribution, like `rng.poisson(lam, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.poisson(5.0, &[1000]);
+    /// let mean: f64 = a.to_vec().iter().map(|&x| x as f64).sum::<f64>() / 1000.0;
+    /// assert!((mean - 5.0).abs() < 0.5);
+    /// ```
+    pub fn poisson(&mut self, lam: f64, shape: &[usize]) -> Array<u64> {
+        let len: usize = shape.iter().product();
+        let data = engine::poisson_vec(&mut self.inner, lam, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Exponential distribution, like `rng.exponential(scale, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let a = rng.exponential(2.0, &[10000]);
+    /// let mean = a.mean();
+    /// assert!((mean - 2.0).abs() < 0.1);
+    /// ```
+    pub fn exponential(&mut self, scale: f64, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::exponential_vec(&mut self.inner, scale, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Beta distribution, like `rng.beta(a, b, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let arr = rng.beta(2.0, 5.0, &[10000]);
+    /// let mean = arr.mean();
+    /// // Expected mean = a/(a+b) = 2/7 ≈ 0.2857
+    /// assert!((mean - 2.0/7.0).abs() < 0.02);
+    /// ```
+    pub fn beta(&mut self, a: f64, b: f64, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::beta_vec(&mut self.inner, a, b, len);
+        Array::from_vec(data, shape)
+    }
+
+    /// Gamma distribution, like `rng.gamma(shape_param, scale, shape)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let mut rng = np::random::Rng::seed(42);
+    /// let arr = rng.gamma(2.0, 1.0, &[10000]);
+    /// let mean = arr.mean();
+    /// // Expected mean = shape * scale = 2.0
+    /// assert!((mean - 2.0).abs() < 0.1);
+    /// ```
+    pub fn gamma(&mut self, shape_param: f64, scale: f64, shape: &[usize]) -> Array<f64> {
+        let len: usize = shape.iter().product();
+        let data = engine::gamma_vec(&mut self.inner, shape_param, scale, len);
+        Array::from_vec(data, shape)
+    }
+}
