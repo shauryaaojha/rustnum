@@ -6,8 +6,8 @@
 //! This file is `.pending` — it will be renamed to `parity.rs` and placed
 //! in `rustnum/tests/` after the core Array type is merged.
 
-use rustnum as np;
 use np::Array;
+use rustnum as np;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone)]
 enum Json {
     Null,
-    Bool(bool),
+    Bool,
     Num(f64),
     Str(String),
     Arr(Vec<Json>),
@@ -59,14 +59,6 @@ impl Json {
         }
         panic!("key not found: {key}");
     }
-    fn get_opt(&self, key: &str) -> Option<&Json> {
-        for (k, v) in self.as_obj() {
-            if k == key {
-                return Some(v);
-            }
-        }
-        None
-    }
 }
 
 fn parse_json(s: &str) -> Json {
@@ -89,11 +81,11 @@ fn parse_value(b: &[u8], i: usize) -> (Json, usize) {
         b'[' => parse_array(b, i),
         b't' => {
             assert!(&b[i..i + 4] == b"true");
-            (Json::Bool(true), i + 4)
+            (Json::Bool, i + 4)
         }
         b'f' => {
             assert!(&b[i..i + 5] == b"false");
-            (Json::Bool(false), i + 5)
+            (Json::Bool, i + 5)
         }
         b'n' => {
             assert!(&b[i..i + 4] == b"null");
@@ -208,12 +200,6 @@ fn load_npy_bool(path: &Path) -> Array<bool> {
         .unwrap_or_else(|e| panic!("cannot decode {}: {e}", path.display()))
 }
 
-fn load_npy_usize(path: &Path) -> Array<usize> {
-    let bytes = fs::read(path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    np::io::from_npy_bytes::<usize>(&bytes)
-        .unwrap_or_else(|e| panic!("cannot decode {}: {e}", path.display()))
-}
-
 // ---------------------------------------------------------------------------
 // allclose comparison
 // ---------------------------------------------------------------------------
@@ -238,10 +224,6 @@ fn exact_bool(a: &Array<bool>, b: &Array<bool>) -> bool {
     a.shape() == b.shape() && a.iter().zip(b.iter()).all(|(x, y)| x == y)
 }
 
-fn exact_usize(a: &Array<usize>, b: &Array<usize>) -> bool {
-    a.shape() == b.shape() && a.iter().zip(b.iter()).all(|(x, y)| x == y)
-}
-
 // ---------------------------------------------------------------------------
 // Dispatch: run one case
 // ---------------------------------------------------------------------------
@@ -258,10 +240,6 @@ fn param_f64(case: &Json, key: &str) -> f64 {
     case.get("params").get(key).as_f64()
 }
 
-fn param_f64_opt(case: &Json, key: &str) -> Option<f64> {
-    case.get("params").get_opt(key).map(|v| v.as_f64())
-}
-
 fn param_usize(case: &Json, key: &str) -> usize {
     case.get("params").get(key).as_f64() as usize
 }
@@ -273,7 +251,6 @@ fn param_isize(case: &Json, key: &str) -> isize {
 /// Dispatch on `op`, return Ok(computed) or Err("skipped: reason").
 fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
     let op = case.get("op").as_str();
-    let dtype = case.get("dtype").as_str();
 
     match op {
         // -- creation --
@@ -441,8 +418,8 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
         }
         "swapaxes" => {
             let inputs = load_f64_inputs(fixture_dir, case);
-            let a = param_usize(case, "axis1");
-            let b = param_usize(case, "axis2");
+            let a = param_isize(case, "axis1");
+            let b = param_isize(case, "axis2");
             Ok(RunResult::F64(inputs[0].swapaxes(a, b)))
         }
         "concatenate" => {
@@ -501,22 +478,17 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
             Ok(RunResult::F64(np::unique(&inputs[0])))
         }
         "where" => {
-            let cond = load_npy_bool(&fixture_dir.join(
-                case.get("inputs").as_arr()[0].as_str(),
-            ));
-            let x = load_npy_f64(&fixture_dir.join(
-                case.get("inputs").as_arr()[1].as_str(),
-            ));
-            let y = load_npy_f64(&fixture_dir.join(
-                case.get("inputs").as_arr()[2].as_str(),
-            ));
+            let cond = load_npy_bool(&fixture_dir.join(case.get("inputs").as_arr()[0].as_str()));
+            let x = load_npy_f64(&fixture_dir.join(case.get("inputs").as_arr()[1].as_str()));
+            let y = load_npy_f64(&fixture_dir.join(case.get("inputs").as_arr()[2].as_str()));
             Ok(RunResult::F64(np::where_(&cond, &x, &y)))
         }
 
         // -- slicing --
         "slice" => {
-            // Slicing tests are complex; skip for now, implement per-case
-            Err("skipped: slice dispatch not yet wired".to_string())
+            let inputs = load_f64_inputs(fixture_dir, case);
+            let step = param_isize(case, "step");
+            Ok(RunResult::F64(inputs[0].slice(&np::s![..;step])))
         }
 
         // -- comparisons --
@@ -544,11 +516,74 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
             Ok(RunResult::F64(inputs[0].astype::<f64>()))
         }
 
-        // -- linalg (SKIPPED — another agent is writing linalg) --
-        "matmul" | "matmul_batched" | "dot" | "det" | "inv" | "solve"
-        | "norm" | "cholesky" | "qr_q" | "qr_r" | "eigh_eigenvalues"
-        | "svd_singular" | "pinv" | "matrix_rank" | "outer" | "trace" => {
-            Err(format!("skipped: op `{op}` not wired (linalg)"))
+        // -- linalg --
+        "matmul" | "matmul_batched" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(i[0].matmul(&i[1])))
+        }
+        "dot" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(i[0].dot(&i[1])))
+        }
+        "det" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(Array::scalar(np::linalg::det(&i[0]))))
+        }
+        "inv" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            np::linalg::inv(&i[0])
+                .map(RunResult::F64)
+                .map_err(|e| e.to_string())
+        }
+        "solve" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            np::linalg::solve(&i[0], &i[1])
+                .map(RunResult::F64)
+                .map_err(|e| e.to_string())
+        }
+        "norm" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(Array::scalar(np::linalg::norm(&i[0]))))
+        }
+        "cholesky" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            np::linalg::cholesky(&i[0])
+                .map(RunResult::F64)
+                .map_err(|e| e.to_string())
+        }
+        "qr_q" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::qr(&i[0]).0))
+        }
+        "qr_r" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::qr(&i[0]).1))
+        }
+        "eigh_eigenvalues" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::eigh(&i[0]).0))
+        }
+        "svd_singular" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::svd(&i[0]).1))
+        }
+        "pinv" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::pinv(&i[0])))
+        }
+        "matrix_rank" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::I64(Array::scalar(
+                np::linalg::matrix_rank(&i[0]) as i64,
+            )))
+        }
+        "outer" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(np::linalg::outer(&i[0], &i[1])))
+        }
+        "trace" => {
+            let i = load_f64_inputs(fixture_dir, case);
+            Ok(RunResult::F64(Array::scalar(i[0].trace())))
         }
 
         _ => Err(format!("skipped: op `{op}` not wired")),
@@ -559,7 +594,6 @@ enum RunResult {
     F64(Array<f64>),
     I64(Array<i64>),
     Bool(Array<bool>),
-    Usize(Array<usize>),
 }
 
 // ---------------------------------------------------------------------------
@@ -614,10 +648,6 @@ fn parity_with_numpy() {
                     (RunResult::Bool(computed), "bool") => {
                         let expected = load_npy_bool(&output_file);
                         exact_bool(&computed, &expected)
-                    }
-                    (RunResult::Usize(computed), _) => {
-                        let expected = load_npy_usize(&output_file);
-                        exact_usize(&computed, &expected)
                     }
                     _ => {
                         eprintln!("  {name}: dtype mismatch in dispatch");

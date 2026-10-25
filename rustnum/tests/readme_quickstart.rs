@@ -42,6 +42,9 @@ fn readme_contains_the_tested_lines() {
         "println!(\"a @ a.T =\\n{}\", a.matmul(&a.t()));",
     ];
     for line in lines {
-        assert!(readme.contains(line), "README.md no longer contains: {line}");
+        assert!(
+            readme.contains(line),
+            "README.md no longer contains: {line}"
+        );
     }
 }

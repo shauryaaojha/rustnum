@@ -1,6 +1,6 @@
 # rustnum
 
-> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`. Element types: f32 f64 i32 i64 u8 usize bool. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
+> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`, `np::fft::fft`, `np::poly::polyval`, `np::io::save_npy`. Element types: f32 f64 i32 i64 u8 usize bool. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
 
 ## Rules for writing rustnum code
 - Always `use rustnum as np;`. `shape` is `&[usize]`, `axis` is `isize` (negative allowed).
@@ -8,12 +8,13 @@
 - Float literals need `.0`: `np::arange(0.0, 5.0, 1.0)`. `np::array![1, 2]` is `Array<i32>`.
 - Borrow to keep arrays: `&a + &b`. `a + b` moves both.
 - Scalars work on either side: `&a * 2.0`, `1.0 - &a`. The scalar type must equal the element type.
-- Math is a method: `a.exp()`, not `np::exp(&a)`. Exceptions: maximum, minimum, power, arctan2, hypot, where_.
+- Math is mostly a method: `a.exp()`, not `np::exp(&a)`. Binary math functions are free functions: `np::maximum`, `minimum`, `power`, `arctan2`, `hypot`, `where_`, `logaddexp`, `fmod`, `remainder`, `floor_divide`, `divmod`, `copysign`, `heaviside`, `nextafter`, `ldexp`, `float_power`, `gcd`, `lcm`.
 - `where` is `where_`. `-1` in reshape needs `reshape_infer(&[-1, 3])`.
 - Comparisons are methods returning `Array<bool>`: `a.gt(0.5)`, `a.eq_elem(&b)`. `a == b` returns one bool.
-- Fallible calls need `?`: `np::linalg::solve`, `inv`, `cholesky`, `lstsq`, all `np::io` functions.
+- Fallible calls need `?`: `np::linalg::solve`, `inv`, `cholesky`, `lstsq`, `matrix_power`, `eig`, `eigvals`, all `np::io` functions (`load_npy`, `save_npy`, `load_csv`, `save_csv`, `savez`, `savez_compressed`, `load_npz`, `NpzFile::open`).
 - Random methods need `let mut rng = np::random::Rng::seed(42);`. Streams differ from NumPy.
 - A slice is a view, but a write never changes the parent. Use `a.slice_assign(..)` to write into part of an array.
+- Complex data is handled as `(re, im)` pairs of real arrays in `np::fft`, `np::poly::roots`, and `np::linalg::eig`. Scalar complex is `np::Complex::new(re, im)`.
 
 ## 10 NumPy to rustnum translations
 ```
@@ -33,7 +34,8 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `Array<T>` — the array. Cheap to clone (shared buffer). Implements Clone Debug Display PartialEq Default Send Sync.
 - `Element` — all element types. `Num: Element` — f32 f64 i32 i64 u8 usize. `Float: Num` — f32 f64.
 - `IntoArray<T>` — anything array-like: `T`, `Array<T>`, `&Array<T>`, `Vec<T>`, `&[T]`, `[T; N]`.
-- `np::Error` — variants include Singular, NotPositiveDefinite, Shape(String), DType. `np::Result<T>`.
+- `np::Error` — variants include Singular, NotPositiveDefinite, Shape(String), DType, Parse, Format, NoConvergence, Io. `np::Result<T>`.
+- `np::Complex<F>` — scalar complex number `re + im*j`.
 
 ## Construction
 - `np::array![1.0, 2.0]`, `np::array![[1.0, 2.0], [3.0, 4.0]]` — array literal (ragged panics)
@@ -68,13 +70,14 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `a.fill(v)`
 
 ## Indexing and slicing
-- `np::s![1..3, .., -1]` — slice spec. Forms: `a..b` `a..` `..b` `..` `a..=b`, one index drops the axis, `;step`
+- `np::s![1..3, .., -1]` — slice spec. Forms: `a..b` `a..` `..b` `..` `a..=b`, one index drops the axis, `;step`, `np::NEW_AXIS`
 - `a.slice(&np::s![..;2, 1..;-1])` — O(1) view
 - `a.slice_assign(&np::s![0, ..], v)` — write into a region, v is array-like and broadcasts
 - `a.index_axis(axis, i)`, `a.row(i)`, `a.col(j)` — drop an axis (row, col are 2-d only)
 - `a.mask(&m)` — a[m], 1-d result, m: Array<bool> with a's shape
 - `a.mask_assign(&m, v)` — a[m] = v
 - `a.take(&[0, 2], axis)` — np.take with usize indices
+- `a.compress(&mask, axis)` — np.compress with 1-d bool mask
 - `np::nonzero(&a)` — Vec<Array<usize>>. `np::argwhere(&a)`
 - `np::searchsorted(&sorted, v)` — usize
 
@@ -87,28 +90,43 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `a.array_equal(&b)`
 - `a.broadcast_to(&[3, 4])` — view. `np::broadcast_arrays(&a, &b)`. `np::broadcast_shapes(&s1, &s2)` — Option<Vec<usize>>
 
-## Element-wise math (methods on float arrays, return new array)
+## Element-wise math (methods on float arrays unless noted)
 - `exp exp2 expm1 log log2 log10 log1p sqrt cbrt square reciprocal` — log is natural log
 - `sin cos tan arcsin arccos arctan sinh cosh tanh`
 - `floor ceil round trunc abs sign` — abs, sign, square, clip also work on integers
+- `a.round_decimals(n)` — round to `n` decimal places
 - `a.powf(p)` — float exponent. `a.powi(n)` — integer exponent
 - `a.clip(lo, hi)` — method only
 - `a.is_nan()`, `a.is_inf()`, `a.is_finite()` — Array<bool>
+- `a.sinc()`, `a.i0()`, `a.deg2rad()`, `a.rad2deg()`, `a.rint()`, `a.fix()`, `a.fabs()`, `a.positive()`, `a.negative()`
+- `a.signbit()` — Array<bool>. `a.spacing()` — distance to next float
+- `a.modf()` — (frac, int). `a.frexp()` — (mantissa, exponent: Array<i32>)
+- `a.nan_to_num()`, `a.nan_to_num_with(nan, posinf, neginf)`
+- `a.unwrap()`, `a.unwrap_with(discont, axis, period)`
 - `a.sigmoid()`, `a.relu()` — extras, not NumPy
-- `np::maximum(&a, &b)`, `np::minimum(&a, &b)` — broadcast, NaN propagates. Scalars allowed.
-- `np::power(&a, &b)`, `np::arctan2(&y, &x)`, `np::hypot(&a, &b)`
-- `np::where_(&cond, x, y)` — np.where(cond, x, y), x and y array-like
+- Free functions:
+  - `np::maximum(&a, &b)`, `np::minimum(&a, &b)` — broadcast, NaN propagates. Scalars allowed.
+  - `np::power(&a, &b)`, `np::arctan2(&y, &x)`, `np::hypot(&a, &b)`
+  - `np::where_(&cond, x, y)` — np.where(cond, x, y), x and y array-like
+  - `np::logaddexp(&a, &b)`, `np::logaddexp2(&a, &b)`
+  - `np::fmod(&a, &b)`, `np::remainder(&a, &b)`, `np::floor_divide(&a, &b)`, `np::divmod(&a, &b)` (returns (div, rem))
+  - `np::copysign(&a, &b)`, `np::heaviside(&x, h0)`, `np::nextafter(&a, &b)`, `np::ldexp(&a, &e)`
+  - `np::float_power(&a, &b)` — returns Array<f64>
+  - `np::gcd(&a, &b)`, `np::lcm(&a, &b)` — i64
+  - `np::ediff1d(&a)`, `np::ediff1d_with(&a, to_end, to_begin)`
+  - `np::angle(&a)`, `np::angle_deg(&a)`
+  - Windows: `np::hanning(m)`, `np::hamming(m)`, `np::blackman(m)`, `np::bartlett(m)`, `np::kaiser(m, beta)`
 
 ## Reductions (whole array returns a value; `_axis(axis)` removes that axis)
 - `sum prod min max` — T. `sum_axis prod_axis min_axis max_axis`
 - `mean var std` — floats only. `mean_axis var_axis std_axis`
-- `var_ddof(ddof)`, `std_ddof(ddof)` — whole array only
+- `var_ddof(ddof)`, `std_ddof(ddof)` — whole array. `var_ddof_axis(axis, ddof)`, `std_ddof_axis(axis, ddof)` — along axis
 - `argmin argmax` — usize, flat index. `argmin_axis argmax_axis` — Array<usize>
 - `any all` — bool. `any_axis all_axis`
 - `cumsum cumprod` — flat 1-d. `cumsum_axis cumprod_axis` — keep shape
 - `count_nonzero ptp` — whole array
 - `median`, `median_axis(axis)`, `percentile(q)` — floats, q in 0..=100
-- `nansum nanmean nanmax nanmin` — floats, whole array
+- `nansum nanmean nanmax nanmin` — floats, whole array. `nansum_axis nanmean_axis nanmin_axis nanmax_axis`
 - Empty min/max/argmin/argmax panic.
 - Keep dims: `a.sum_axis(1).expand_dims(1)`
 
@@ -126,21 +144,60 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `np::unique(&a)` — sorted 1-d. `np::unique_counts(&a)` — (values, counts)
 - `np::pad(&a, width, value)` — constant padding
 
-## Linear algebra
+## Linear algebra (np::linalg)
 - `a.matmul(&b)` — 1-d, 2-d, batched n-d. f32/f64 use matrixmultiply.
 - `a.dot(&b)`, `a.trace()`
-- `np::linalg::outer(&a, &b)`, `inner(&a, &b)`
-- `np::linalg::det(&a)` — F
+- `np::linalg::outer(&a, &b)`, `np::linalg::inner(&a, &b)`, `np::linalg::vdot(&a, &b)`
+- `np::linalg::det(&a)` — F. `slogdet(&a)` — (sign, logabsdet)
 - `np::linalg::inv(&a)?`, `solve(&a, &b)?`, `lstsq(&a, &b)?` — Result<Array<F>>. Error::Singular if singular
 - `np::linalg::pinv(&a)`
-- `np::linalg::norm(&a)` — F. `norm_axis(&a, ord, axis)`
+- `np::linalg::norm(&a)` — F. `norm_axis(&a, ord, axis)`, `vector_norm(&x, ord)`, `matrix_norm(&a, ord)`
+- `np::linalg::cond(&a)` — 2-norm. `cond_ord(&a, ord)`
 - `np::linalg::cholesky(&a)?` — lower triangle. Error::NotPositiveDefinite
 - `np::linalg::qr(&a)` — (q, r), reduced
-- `np::linalg::eigh(&a)` — (values ascending, vectors as columns), symmetric input
+- `np::linalg::eigh(&a)` — (values ascending, vectors as columns), symmetric input. `eigvalsh(&a)` — values only
+- `np::linalg::eig(&a)?` — Result<(w_re, w_im, v_re, v_im)>. `eigvals(&a)?` — Result<(re, im)>
 - `np::linalg::svd(&a)` — (u, s descending, vt), reduced
-- `np::linalg::matrix_rank(&a)` — usize. `matrix_power(&a, n)`
+- `np::linalg::matrix_rank(&a)` — usize. `matrix_power(&a, n)?` — Result<Array<F>>
+- `np::linalg::multi_dot(&[&a, &b, &c])`
+- `np::linalg::tensordot(&a, &b, &axes_a, &axes_b)`, `tensordot_n(&a, &b, n)`
 
-## Random
+## Discrete Fourier Transform (np::fft)
+- `np::fft::fft(&re, &im)`, `ifft(&re, &im)` — 1-d complex FFT over last axis, return (re, im)
+- `np::fft::rfft(&a)` — real FFT over last axis, returns (re, im) with n/2 + 1 bins
+- `np::fft::irfft(&re, &im, n)` — inverse real FFT to length n, returns Array<F>
+- `np::fft::fft2(&re, &im)`, `ifft2(&re, &im)` — 2-d FFT over last two axes, return (re, im)
+- `np::fft::fftfreq(n, d)`, `rfftfreq(n, d)` — sample frequencies
+- `np::fft::fftshift(&a)`, `ifftshift(&a)` — shift zero-frequency to centre
+
+## Polynomials (np::poly)
+- Coefficients 1-d, highest power first (`[1.0, -3.0, 2.0]` is `x^2 - 3x + 2`)
+- `np::poly::polyval(&p, &x)` — evaluate polynomial at scalar or array
+- `np::poly::polyfit(&x, &y, deg)` — least-squares polynomial fit of degree deg
+- `np::poly::polyadd(&a, &b)`, `polysub(&a, &b)`, `polymul(&a, &b)`
+- `np::poly::polydiv(&u, &v)` — returns (quotient, remainder)
+- `np::poly::polyder(&p, m)` — m-th derivative
+- `np::poly::polyint(&p, m, &k)` — m-fold antiderivative with constants k
+- `np::poly::roots(&p)` — roots as (re, im) arrays
+
+## Statistics, signal, sets and einsum (crate root)
+- `np::cov(&m, bias, ddof)` — covariance matrix of rows. `np::corrcoef(&x)` — Pearson correlation
+- `np::histogram(&a, bins, range, density, weights)` — returns (counts, edges). `np::histogram_bin_edges(&a, bins, range)`
+- `np::bincount(&x, weights, minlength)` — counts of non-negative i64
+- `np::digitize(&x, &bins, right)` — bin index for each element
+- `np::average(&a, weights)`, `np::average_axis(&a, weights, axis)` — weighted average
+- `np::quantile(&a, q)`, `np::quantile_axis(&a, q, axis)`
+- `np::nanquantile(&a, q)`, `np::nanquantile_axis(&a, q, axis)`
+- `np::convolve(&a, &v, mode)`, `np::correlate(&a, &v, mode)` — 1-d signal convolution/correlation (ConvolveMode)
+- `np::diff(&a, n, axis)` — n-th discrete difference
+- `np::gradient(&f, dx)` — returns Vec<Array<F>>. `np::gradient_axis(&f, spacing, axis, edge_order)`
+- `np::interp(&x, &xp, &fp, left, right)` — 1-d linear interpolation
+- `np::trapezoid(&y, spacing, axis)` — trapezoidal integration
+- `np::cross(&a, &b)` — cross product. `np::kron(&a, &b)` — Kronecker product
+- Sets: `np::intersect1d(&a, &b)`, `np::union1d(&a, &b)`, `np::setdiff1d(&a, &b)`, `np::setxor1d(&a, &b)`, `np::isin(&element, &test_elements)`
+- `np::einsum(subscripts, &[&a, &b])` — Einstein summation (supports "ij,jk->ik", "ii", ellipsis "...", diagonals)
+
+## Random (np::random)
 - `let mut rng = np::random::Rng::seed(42);` or `Rng::from_entropy()`
 - `rng.random(shape)` — [0, 1). `rng.uniform(lo, hi, shape)`
 - `rng.normal(mean, std, shape)`, `rng.standard_normal(shape)`
@@ -149,8 +206,11 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `rng.binomial(n, p, shape)`, `rng.poisson(lam, shape)`, `rng.exponential(scale, shape)`
 - Same seed gives same numbers on every platform. Not NumPy's numbers.
 
-## I/O
+## I/O (np::io)
 - `np::io::save_npy(path, &a)?`, `np::io::load_npy::<T>(path)?` — NumPy .npy v1/v2. Wrong dtype gives Error::DType
+- `np::io::savez(path, &[("a", &a)])?`, `np::io::savez_compressed(path, &[("a", &a)])?` — .npz archive
+- `np::io::load_npz::<T>(path)?` — loads all members into Vec<(String, Array<T>)>
+- `let f = np::io::NpzFile::open(path)?;` — lazy .npz reader: `f.keys()`, `f.get::<T>("a")?`
 - `np::io::save_csv(path, &a, ',')?`, `np::io::load_csv::<T>(path, ',', skip_header)?`
 - `np::io::to_npy_bytes(&a)`, `np::io::from_npy_bytes::<T>(&bytes)?`
 
@@ -159,7 +219,7 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `println!("{a:?}")` — `array([[1., 2.], [3., 4.]], dtype=float64)`
 
 ## Not supported in v0.1
-complex numbers, float16, datetime/struct dtypes, masked arrays, fft, polynomial, .npz, einsum, fancy indexing on several axes, np.cov, np.diff, linalg.eig.
+float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arrays, fancy indexing with multidimensional index arrays on several axes at once, Array<Complex<F>> element type (complex numbers are supported as scalar Complex<F> and (re, im) array pairs).
 
 ## Files
 - README.md — overview and quick start
