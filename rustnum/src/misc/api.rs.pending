@@ -1,0 +1,527 @@
+//! PENDING, NOT COMPILED. Public `Array` wrappers for the kernels in `math_kernels.rs` and
+//! `window_kernels.rs` (docs/API.md section 2, 3 and 7 are the only Array API used).
+//!
+//! # Enabling this file
+//! 1. `git mv api.rs.pending api.rs`, add `mod api;` plus the `pub use api::{...};` line from
+//!    `docs/api/misc.md` to `misc/mod.rs`, and re-export the same names once from `lib.rs`
+//!    (`pub use misc::{...};`). Remove `#![allow(dead_code)]` from `misc/mod.rs`.
+//! 2. Array API assumed (all from docs/API.md): `Array::from_vec`, `From<Vec<T>>`, `shape`, `ndim`,
+//!    `to_vec`, `map`, `zip_map`, `moveaxis(src: isize, dst: isize)`, `IntoArray::into_array`.
+//!    `moveaxis` takes `isize` here because the spec says "axis is `isize`" without a signature.
+//! 3. Bounds are `F: Element + KFloat`, not `F: Float`: `KFloat` is implemented only for `f32` and
+//!    `f64`, exactly like `Float`, and avoids calling `F::from_f64` / `F::ZERO` where `Element`
+//!    and `KFloat` (and `Num`) would be ambiguous. Always write `<F as KFloat>::ZERO`.
+//!
+//! Every example below uses `use rustnum as np;` and was derived from NumPy 2.3 output.
+
+use core::f64::consts::TAU;
+
+use super::math_kernels::{self as k, KFloat};
+use super::window_kernels as w;
+use crate::{Array, Element, IntoArray, Num};
+
+// ---------------------------------------------------------------------------------------
+// Unary ufunc-style methods
+// ---------------------------------------------------------------------------------------
+
+impl<F: Element + KFloat> Array<F> {
+    /// Normalized sinc `sin(pi x) / (pi x)`, like `np.sinc(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let v: Vec<f64> = np::array![0.0, 0.5, 1.0].sinc().to_vec();
+    /// assert_eq!(v[0], 1.0);
+    /// assert!((v[1] - 0.6366197723675814).abs() < 1e-15);
+    /// assert!(v[2].abs() < 1e-15);
+    /// ```
+    pub fn sinc(&self) -> Array<F> {
+        self.map(k::sinc::<F>)
+    }
+
+    /// Modified Bessel function of the first kind, order 0, like `np.i0(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let v: Vec<f64> = np::array![0.0, 1.0, 2.0].i0().to_vec();
+    /// assert_eq!(v[0], 1.0);
+    /// assert!((v[1] - 1.2660658777520082).abs() < 1e-14);
+    /// assert!((v[2] - 2.279585302336067).abs() < 1e-14);
+    /// ```
+    pub fn i0(&self) -> Array<F> {
+        self.map(k::i0::<F>)
+    }
+
+    /// Degrees to radians, like `np.deg2rad(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// use std::f64::consts::{FRAC_PI_2, PI};
+    /// assert_eq!(np::array![0.0, 90.0, 180.0].deg2rad().to_vec(), vec![0.0, FRAC_PI_2, PI]);
+    /// ```
+    pub fn deg2rad(&self) -> Array<F> {
+        self.map(k::deg2rad::<F>)
+    }
+
+    /// Radians to degrees, like `np.rad2deg(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// use std::f64::consts::{FRAC_PI_2, PI};
+    /// assert_eq!(np::array![0.0, FRAC_PI_2, PI].rad2deg().to_vec(), vec![0.0, 90.0, 180.0]);
+    /// ```
+    pub fn rad2deg(&self) -> Array<F> {
+        self.map(k::rad2deg::<F>)
+    }
+
+    /// Round to the nearest integer, halves to even, like `np.rint(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let r: Vec<f64> = np::array![0.5, 1.5, 2.5, -0.5, -1.5].rint().to_vec();
+    /// assert_eq!(r, vec![0.0, 2.0, 2.0, 0.0, -2.0]);
+    /// assert!(r[3].is_sign_negative()); // -0.0 like NumPy
+    /// ```
+    pub fn rint(&self) -> Array<F> {
+        self.map(k::rint::<F>)
+    }
+
+    /// Round towards zero, like `np.fix(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![2.7, -2.7, -0.4].fix().to_vec(), vec![2.0, -2.0, 0.0]);
+    /// ```
+    pub fn fix(&self) -> Array<F> {
+        self.map(k::fix::<F>)
+    }
+
+    /// Absolute value as a float, like `np.fabs(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![-1.5, 2.0].fabs().to_vec(), vec![1.5, 2.0]);
+    /// ```
+    pub fn fabs(&self) -> Array<F> {
+        self.map(k::fabs::<F>)
+    }
+
+    /// Unary plus (a copy), like `np.positive(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![-1.0, 2.0].positive().to_vec(), vec![-1.0, 2.0]);
+    /// ```
+    pub fn positive(&self) -> Array<F> {
+        self.map(k::positive::<F>)
+    }
+
+    /// Unary minus, like `np.negative(a)` (`negative(0.0)` is `-0.0`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![1.0, -2.0].negative().to_vec(), vec![-1.0, 2.0]);
+    /// ```
+    pub fn negative(&self) -> Array<F> {
+        self.map(k::negative::<F>)
+    }
+
+    /// True where the sign bit is set (so `-0.0` is true), like `np.signbit(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![-0.0, 0.0, -1.0].signbit().to_vec(), vec![true, false, true]);
+    /// ```
+    pub fn signbit(&self) -> Array<bool> {
+        self.map(k::signbit::<F>)
+    }
+
+    /// Distance to the next float away from zero, like `np.spacing(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![1.0, 1e16].spacing().to_vec(), vec![f64::EPSILON, 2.0]);
+    /// ```
+    pub fn spacing(&self) -> Array<F> {
+        self.map(k::spacing::<F>)
+    }
+
+    /// Fractional and integral parts `(frac, int)`, like `np.modf(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let (frac, int) = np::array![3.75, -3.75].modf();
+    /// assert_eq!(frac.to_vec(), vec![0.75, -0.75]);
+    /// assert_eq!(int.to_vec(), vec![3.0, -3.0]);
+    /// ```
+    pub fn modf(&self) -> (Array<F>, Array<F>) {
+        (
+            self.map(|x| k::modf(x).0),
+            self.map(|x| k::modf(x).1),
+        )
+    }
+
+    /// Mantissa and exponent `(m, e)` with `a = m * 2**e`, like `np.frexp(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let (m, e) = np::array![8.0, 0.1, -3.0].frexp();
+    /// assert_eq!(m.to_vec(), vec![0.5, 0.8, -0.75]);
+    /// assert_eq!(e.to_vec(), vec![4, -3, 2]);
+    /// ```
+    pub fn frexp(&self) -> (Array<F>, Array<i32>) {
+        (
+            self.map(|x| k::frexp(x).0),
+            self.map(|x| k::frexp(x).1),
+        )
+    }
+
+    /// Replace NaN by `0` and infinities by the largest/smallest finite float, like `np.nan_to_num(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let a = np::array![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0];
+    /// assert_eq!(a.nan_to_num().to_vec(), vec![0.0, f64::MAX, -f64::MAX, 1.0]);
+    /// ```
+    pub fn nan_to_num(&self) -> Array<F> {
+        self.nan_to_num_with(<F as KFloat>::ZERO, None, None)
+    }
+
+    /// `np.nan_to_num(a, nan=nan, posinf=posinf, neginf=neginf)`; `None` keeps NumPy's default
+    /// (largest / smallest finite float).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let a = np::array![f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1.0];
+    /// let r = a.nan_to_num_with(0.0, Some(9.0), Some(-9.0));
+    /// assert_eq!(r.to_vec(), vec![0.0, 9.0, -9.0, 1.0]);
+    /// ```
+    pub fn nan_to_num_with(&self, nan: F, posinf: Option<F>, neginf: Option<F>) -> Array<F> {
+        self.map(|x| k::nan_to_num(x, nan, posinf, neginf))
+    }
+
+    /// Angle of real numbers in radians (`0` or `pi`), like `np.angle(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![1.0, -1.0, 0.0].angle().to_vec(), vec![0.0, std::f64::consts::PI, 0.0]);
+    /// ```
+    pub fn angle(&self) -> Array<F> {
+        self.map(|x| k::angle(x, <F as KFloat>::ZERO))
+    }
+
+    /// Angle of real numbers in degrees, like `np.angle(a, deg=True)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let d: Vec<f64> = np::array![1.0, -1.0].angle_deg().to_vec();
+    /// assert_eq!(d[0], 0.0);
+    /// assert!((d[1] - 180.0).abs() < 1e-12);
+    /// ```
+    pub fn angle_deg(&self) -> Array<F> {
+        self.map(|x| k::angle_deg(x, <F as KFloat>::ZERO))
+    }
+
+    /// Undo `2 pi` jumps along the last axis, like `np.unwrap(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let v: Vec<f64> = np::array![0.0, 3.0, 6.5].unwrap().to_vec();
+    /// assert_eq!(&v[..2], &[0.0, 3.0]);
+    /// assert!((v[2] - 0.21681469282041377).abs() < 1e-12);
+    /// ```
+    pub fn unwrap(&self) -> Array<F> {
+        self.unwrap_with(None, -1, <F as KFloat>::from_f64(TAU))
+    }
+
+    /// `np.unwrap(a, discont=discont, axis=axis, period=period)` for float input.
+    ///
+    /// `discont = None` means `period / 2`. Integer inputs are not supported (convert with
+    /// `astype` first). Panics for 0-d arrays and out-of-range axes.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// use std::f64::consts::TAU;
+    /// // shape [3, 2]; unwrap down the columns (axis 0)
+    /// let a = np::Array::from_vec(vec![0.0, 0.0, 3.0, 3.0, 6.5, 6.5], &[3, 2]);
+    /// let u = a.unwrap_with(None, 0, TAU).to_vec();
+    /// assert_eq!(&u[..4], &[0.0, 0.0, 3.0, 3.0]);
+    /// assert!((u[4] - 0.21681469282041377).abs() < 1e-12);
+    /// ```
+    pub fn unwrap_with(&self, discont: Option<F>, axis: isize, period: F) -> Array<F> {
+        let nd = self.ndim();
+        assert!(nd > 0, "diff requires input that is at least one dimensional");
+        let ax = if axis < 0 { axis + nd as isize } else { axis };
+        assert!(
+            ax >= 0 && (ax as usize) < nd,
+            "axis {axis} is out of bounds for array of dimension {nd}"
+        );
+        let moved = self.moveaxis(ax, -1);
+        let n = moved.shape()[nd - 1];
+        let data = moved.to_vec();
+        let out = if n == 0 {
+            data
+        } else {
+            data.chunks(n)
+                .flat_map(|row| k::unwrap(row, discont, period))
+                .collect()
+        };
+        Array::from_vec(out, moved.shape()).moveaxis(-1, ax)
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Integer / any-numeric helpers
+// ---------------------------------------------------------------------------------------
+
+impl<T: Num> Array<T> {
+    /// Differences between consecutive elements of the flattened array, like `np.ediff1d(a)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::array![1, 2, 4, 7].ediff1d().to_vec(), vec![1, 2, 3]);
+    /// ```
+    pub fn ediff1d(&self) -> Array<T> {
+        self.ediff1d_with(&[], &[])
+    }
+
+    /// `np.ediff1d(a, to_end=to_end, to_begin=to_begin)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let r = np::array![1, 2, 4, 7].ediff1d_with(&[99], &[-1]);
+    /// assert_eq!(r.to_vec(), vec![-1, 1, 2, 3, 99]);
+    /// ```
+    pub fn ediff1d_with(&self, to_end: &[T], to_begin: &[T]) -> Array<T> {
+        Array::from(k::ediff1d(&self.to_vec(), to_end, to_begin))
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Binary free functions (broadcasting, scalars allowed anywhere)
+// ---------------------------------------------------------------------------------------
+
+/// `log(exp(a) + exp(b))` without overflow, like `np.logaddexp(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![0.0, 1.0, f64::NEG_INFINITY];
+/// let r = np::logaddexp(&a, &a);
+/// assert_eq!(r.to_vec(), vec![std::f64::consts::LN_2, 1.0 + std::f64::consts::LN_2, f64::NEG_INFINITY]);
+/// // adding probabilities that would underflow as plain numbers
+/// let s = np::logaddexp(1e-50f64.ln(), 2.5e-50f64.ln()).item();
+/// assert!((s - 3.5e-50f64.ln()).abs() < 1e-12);
+/// ```
+pub fn logaddexp<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::logaddexp::<F>)
+}
+
+/// `log2(2**a + 2**b)` without overflow, like `np.logaddexp2(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 3.0];
+/// assert_eq!(np::logaddexp2(&a, &a).to_vec(), vec![2.0, 4.0]);
+/// ```
+pub fn logaddexp2<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::logaddexp2::<F>)
+}
+
+/// C `fmod`: remainder with the sign of the dividend, like `np.fmod(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::fmod(np::array![-7.0, 7.0, 7.0], np::array![3.0, -3.0, 3.0]);
+/// assert_eq!(r.to_vec(), vec![-1.0, 1.0, 1.0]);
+/// ```
+pub fn fmod<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::fmod::<F>)
+}
+
+/// Remainder with the sign of the divisor (Python `%`), like `np.remainder(a, b)` / `np.mod(a, b)`.
+///
+/// `mod` is a Rust keyword, so there is no `np::mod_` alias; use `remainder`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::remainder(np::array![-7.0, 7.0, 7.0], np::array![3.0, -3.0, 3.0]);
+/// assert_eq!(r.to_vec(), vec![2.0, -2.0, 1.0]);
+/// ```
+pub fn remainder<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::remainder::<F>)
+}
+
+/// Floor of the quotient, like `np.floor_divide(a, b)` (`a // b`).
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::floor_divide(np::array![-7.0, 7.0, 7.0], np::array![3.0, -3.0, 3.0]);
+/// assert_eq!(r.to_vec(), vec![-3.0, -3.0, 2.0]);
+/// ```
+pub fn floor_divide<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::floor_divide::<F>)
+}
+
+/// Quotient and remainder `(floor_divide, remainder)`, like `np.divmod(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let (q, r) = np::divmod(np::array![-7.0, 7.0], 3.0f64);
+/// assert_eq!(q.to_vec(), vec![-3.0, 2.0]);
+/// assert_eq!(r.to_vec(), vec![2.0, 1.0]);
+/// ```
+pub fn divmod<F: Element + KFloat>(
+    a: impl IntoArray<F>,
+    b: impl IntoArray<F>,
+) -> (Array<F>, Array<F>) {
+    let (a, b) = (a.into_array(), b.into_array());
+    (
+        a.zip_map(&b, |x, y| k::divmod(x, y).0),
+        a.zip_map(&b, |x, y| k::divmod(x, y).1),
+    )
+}
+
+/// Magnitude of `a` with the sign of `b`, like `np.copysign(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::copysign(np::array![1.0, -2.0, 3.0], np::array![-1.0, 1.0, -0.0]);
+/// assert_eq!(r.to_vec(), vec![-1.0, 2.0, -3.0]);
+/// ```
+pub fn copysign<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::copysign::<F>)
+}
+
+/// Heaviside step function with value `h0` at zero, like `np.heaviside(x, h0)`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::heaviside(np::array![-1.5, 0.0, 2.0], 0.5);
+/// assert_eq!(r.to_vec(), vec![0.0, 0.5, 1.0]);
+/// ```
+pub fn heaviside<F: Element + KFloat>(x: impl IntoArray<F>, h0: impl IntoArray<F>) -> Array<F> {
+    x.into_array().zip_map(h0, k::heaviside::<F>)
+}
+
+/// Next representable float after `a` in the direction of `b`, like `np.nextafter(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// assert_eq!(np::nextafter(1.0f64, 2.0).item(), 1.0 + f64::EPSILON);
+/// assert_eq!(np::nextafter(1.0f64, 0.0).item(), 1.0 - f64::EPSILON / 2.0);
+/// ```
+pub fn nextafter<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    a.into_array().zip_map(b, k::nextafter::<F>)
+}
+
+/// `a * 2**e` with an integer exponent array, like `np.ldexp(a, e)`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::ldexp(np::array![1.0, 0.5, 3.0], np::array![1, 2, -1]);
+/// assert_eq!(r.to_vec(), vec![2.0, 2.0, 1.5]);
+/// ```
+pub fn ldexp<F: Element + KFloat>(a: impl IntoArray<F>, e: impl IntoArray<i32>) -> Array<F> {
+    a.into_array().zip_map(e, k::ldexp::<F>)
+}
+
+/// Power computed in `float64` whatever the input type, like `np.float_power(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::float_power(np::array![2.0, 3.0], np::array![2.0, 0.5]).to_vec();
+/// assert_eq!(r[0], 4.0);
+/// assert!((r[1] - 1.7320508075688772).abs() < 1e-15);
+/// ```
+pub fn float_power<F: Element + KFloat>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<f64> {
+    a.into_array().zip_map(b, k::float_power::<F>)
+}
+
+/// Greatest common divisor of `int64` arrays, like `np.gcd(a, b)` (result is never negative).
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::gcd(np::array![12i64, 18, -4, 0], np::array![8i64, 27, 6, 0]);
+/// assert_eq!(r.to_vec(), vec![4, 9, 2, 0]);
+/// ```
+pub fn gcd(a: impl IntoArray<i64>, b: impl IntoArray<i64>) -> Array<i64> {
+    a.into_array().zip_map(b, k::gcd)
+}
+
+/// Least common multiple of `int64` arrays, like `np.lcm(a, b)` (wraps on overflow like NumPy).
+///
+/// ```
+/// use rustnum as np;
+/// let r = np::lcm(np::array![4i64, 6, -3, 0], np::array![6i64, 10, 5, 7]);
+/// assert_eq!(r.to_vec(), vec![12, 30, 15, 0]);
+/// ```
+pub fn lcm(a: impl IntoArray<i64>, b: impl IntoArray<i64>) -> Array<i64> {
+    a.into_array().zip_map(b, k::lcm)
+}
+
+// ---------------------------------------------------------------------------------------
+// Windows (float64, like NumPy)
+// ---------------------------------------------------------------------------------------
+
+/// Hann window of `m` points, like `np.hanning(m)`.
+///
+/// ```
+/// use rustnum as np;
+/// let w = np::hanning(5).to_vec();
+/// for (g, e) in w.iter().zip([0.0, 0.5, 1.0, 0.5, 0.0]) {
+///     assert!((g - e).abs() < 1e-15);
+/// }
+/// assert!(np::hanning(0).is_empty());
+/// assert_eq!(np::hanning(1).to_vec(), vec![1.0]);
+/// ```
+pub fn hanning(m: usize) -> Array<f64> {
+    Array::from(w::hanning(m))
+}
+
+/// Hamming window of `m` points, like `np.hamming(m)`.
+///
+/// ```
+/// use rustnum as np;
+/// let w = np::hamming(5).to_vec();
+/// for (g, e) in w.iter().zip([0.08, 0.54, 1.0, 0.54, 0.08]) {
+///     assert!((g - e).abs() < 1e-15);
+/// }
+/// ```
+pub fn hamming(m: usize) -> Array<f64> {
+    Array::from(w::hamming(m))
+}
+
+/// Blackman window of `m` points, like `np.blackman(m)`.
+///
+/// ```
+/// use rustnum as np;
+/// let w = np::blackman(5).to_vec();
+/// for (g, e) in w.iter().zip([-1.3877787807814457e-17, 0.34, 1.0, 0.34, -1.3877787807814457e-17]) {
+///     assert!((g - e).abs() < 1e-15);
+/// }
+/// ```
+pub fn blackman(m: usize) -> Array<f64> {
+    Array::from(w::blackman(m))
+}
+
+/// Bartlett (triangular) window of `m` points, like `np.bartlett(m)`.
+///
+/// ```
+/// use rustnum as np;
+/// assert_eq!(np::bartlett(5).to_vec(), vec![0.0, 0.5, 1.0, 0.5, 0.0]);
+/// ```
+pub fn bartlett(m: usize) -> Array<f64> {
+    Array::from(w::bartlett(m))
+}
+
+/// Kaiser window of `m` points with shape parameter `beta`, like `np.kaiser(m, beta)`.
+///
+/// ```
+/// use rustnum as np;
+/// let w = np::kaiser(5, 14.0).to_vec();
+/// assert!((w[0] - 7.726866835270368e-06).abs() < 1e-15);
+/// assert!((w[1] - 0.16493218754795197).abs() < 1e-14);
+/// assert!((w[2] - 1.0).abs() < 1e-15);
+/// ```
+pub fn kaiser(m: usize, beta: f64) -> Array<f64> {
+    Array::from(w::kaiser(m, beta))
+}

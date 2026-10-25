@@ -9,6 +9,7 @@ mod display;
 mod element;
 mod layout;
 mod manip;
+mod misc;
 mod ops;
 mod reduce;
 mod slicing;
