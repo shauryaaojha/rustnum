@@ -1,0 +1,667 @@
+//! NOT COMPILED. Public `Array`-level wrappers for the kernels in this folder.
+//!
+//! MERGE CHECKLIST (do this once the core `Array<T>` exists):
+//! 1. rename this file to `api.rs` and add `pub(crate) mod api;` to `extra/mod.rs`;
+//! 2. remove `#![allow(dead_code)]` from `extra/mod.rs`;
+//! 3. in `lib.rs` re-export once, at the root:
+//!    `pub use extra::api::{average, average_axis, bincount, corrcoef, cov, convolve, correlate,
+//!    cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges, interp,
+//!    intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis, setdiff1d,
+//!    setxor1d, trapezoid, union1d, Bins, ConvolveMode, Spacing};`
+//! 4. fix the paths in the `use` block below to whatever the core agent actually exported;
+//! 5. run `cargo test --doc`: every example below is meant to run as written.
+//!
+//! Assumptions (all from `docs/API.md` sections 1 to 3): `Array::from_vec(Vec<T>, &[usize])`,
+//! `shape()`, `ndim()`, `size()`, `to_vec()` (C order, any strides), `iter()`, `astype`,
+//! `Array::scalar`, `broadcast_to(&[usize])`, `crate::broadcast_shapes`, `Element::{to_f64, from_f64}`,
+//! and `as_slice()` on a contiguous array returning exactly the `size()` elements in C order.
+//!
+//! Signature conventions (same as `np::unique(&a)` and `np::linalg::outer(&a, &b)` in API.md): the
+//! main array arguments are `&Array<T>`, not `impl IntoArray<T>`, so the element type is always
+//! inferred without turbofish. Output is `Array<f64>` for the statistics functions (NumPy returns
+//! float64 for integer input); `T` is preserved for `convolve`, `correlate`, `diff`, `cross`,
+//! `kron`, `einsum`, the set functions, and for `gradient` / `trapezoid` (floats only).
+
+use super::einsum_kernels::{self as ek, Operand};
+use super::set_kernels as setk;
+use super::signal_kernels::{self as sig, Mode};
+use super::stats_kernels::{self as stats, Bins as KBins};
+use super::normalize_axis;
+use crate::{Array, Element, Float, Num};
+
+// ------------------------------------------------------------------ small public types
+
+/// Output size of [`convolve`] and [`correlate`], like NumPy's `mode="full" | "same" | "valid"`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConvolveMode {
+    /// Every overlap, length `n + m - 1` (NumPy's default for `convolve`).
+    #[default]
+    Full,
+    /// Length `max(n, m)`, centred with respect to `Full`.
+    Same,
+    /// Only positions where the signals fully overlap, length `max(n, m) - min(n, m) + 1`.
+    Valid,
+}
+
+impl From<ConvolveMode> for Mode {
+    fn from(m: ConvolveMode) -> Mode {
+        match m {
+            ConvolveMode::Full => Mode::Full,
+            ConvolveMode::Same => Mode::Same,
+            ConvolveMode::Valid => Mode::Valid,
+        }
+    }
+}
+
+/// The `bins` argument of [`histogram`]: a number of equal-width bins or explicit bin edges.
+///
+/// Convert with `.into()`: `10usize`, `vec![0.0, 1.0, 5.0]` and `&Array<f64>` all work.
+/// (NumPy's string rules such as `"auto"` are not supported.)
+#[derive(Clone, Debug, PartialEq)]
+pub enum Bins {
+    /// This many equal-width bins over the data range (or `range`).
+    Count(usize),
+    /// Monotonically increasing bin edges; bin `i` is `[edges[i], edges[i + 1])`, the last is closed.
+    Edges(Vec<f64>),
+}
+
+impl From<usize> for Bins {
+    fn from(n: usize) -> Bins {
+        Bins::Count(n)
+    }
+}
+impl From<Vec<f64>> for Bins {
+    fn from(e: Vec<f64>) -> Bins {
+        Bins::Edges(e)
+    }
+}
+impl From<&[f64]> for Bins {
+    fn from(e: &[f64]) -> Bins {
+        Bins::Edges(e.to_vec())
+    }
+}
+impl From<&Array<f64>> for Bins {
+    fn from(e: &Array<f64>) -> Bins {
+        Bins::Edges(e.to_vec())
+    }
+}
+
+/// Sample spacing for [`gradient_axis`] and [`trapezoid`]: a constant step or the sample coordinates.
+///
+/// Convert with `.into()`: `0.5f64`, `vec![0.0, 1.0, 3.0]` and `&Array<f64>` all work.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Spacing {
+    /// Constant distance between neighbouring samples (NumPy's scalar `dx` / `varargs`).
+    Uniform(f64),
+    /// Coordinates of the samples along the axis (NumPy's `x` / coordinate array).
+    Coords(Vec<f64>),
+}
+
+impl From<f64> for Spacing {
+    fn from(h: f64) -> Spacing {
+        Spacing::Uniform(h)
+    }
+}
+impl From<Vec<f64>> for Spacing {
+    fn from(c: Vec<f64>) -> Spacing {
+        Spacing::Coords(c)
+    }
+}
+impl From<&Array<f64>> for Spacing {
+    fn from(c: &Array<f64>) -> Spacing {
+        Spacing::Coords(c.to_vec())
+    }
+}
+
+// ------------------------------------------------------------------ private helpers
+
+fn f64s<T: Element>(a: &Array<T>) -> Vec<f64> {
+    a.iter().map(|v| v.to_f64()).collect()
+}
+
+fn with_bins<R>(bins: &Bins, f: impl FnOnce(KBins<'_>) -> R) -> R {
+    match bins {
+        Bins::Count(n) => f(KBins::Count(*n)),
+        Bins::Edges(e) => f(KBins::Edges(e)),
+    }
+}
+
+fn kernel_spacing(s: &Spacing) -> sig::Spacing<'_> {
+    match s {
+        Spacing::Uniform(h) => sig::Spacing::Uniform(*h),
+        Spacing::Coords(c) => sig::Spacing::Coords(c),
+    }
+}
+
+fn vec1<T: Element>(v: Vec<T>) -> Array<T> {
+    let n = v.len();
+    Array::from_vec(v, &[n])
+}
+
+/// Shape of an axis-reduction result: `shape` without `axis`.
+fn without_axis(shape: &[usize], axis: usize) -> Vec<usize> {
+    let mut s = shape.to_vec();
+    s.remove(axis);
+    s
+}
+
+/// Variables x observations split of an array for `cov` / `corrcoef`.
+fn var_obs<T: Element>(m: &Array<T>) -> (usize, usize) {
+    match m.ndim() {
+        0 => (1, 1),
+        1 => (1, m.shape()[0]),
+        2 => (m.shape()[0], m.shape()[1]),
+        _ => panic!("m has more than 2 dimensions"),
+    }
+}
+
+// ------------------------------------------------------------------ statistics
+
+/// Covariance matrix of the rows of `m`, like `np.cov(m, bias=bias, ddof=ddof)`.
+///
+/// Each row of a 2-d `m` is a variable and each column an observation; the result is
+/// `[nvars, nvars]`. A 1-d `m` is one variable and gives a 0-d result. `ddof` defaults to 1
+/// (0 when `bias` is true); an explicit `ddof` wins over `bias`. NumPy's `y`, `rowvar`,
+/// `fweights` and `aweights` arguments are not supported (stack `y` with `vstack`, transpose
+/// for `rowvar=False`).
+///
+/// ```
+/// use rustnum as np;
+/// let m = np::array![[0.0, 1.0, 2.0], [2.0, 1.0, 0.0]];
+/// let c = np::cov(&m, false, None);
+/// assert!(c.allclose(&np::array![[1.0, -1.0], [-1.0, 1.0]], 1e-12, 1e-12));
+/// ```
+pub fn cov<T: Element>(m: &Array<T>, bias: bool, ddof: Option<usize>) -> Array<f64> {
+    let (nvars, nobs) = var_obs(m);
+    let out = stats::cov(&f64s(m), nvars, nobs, bias, ddof);
+    if m.ndim() < 2 { Array::from_vec(out, &[]) } else { Array::from_vec(out, &[nvars, nvars]) }
+}
+
+/// Pearson correlation matrix of the rows of `x`, like `np.corrcoef(x)`.
+///
+/// Same layout as [`cov`]; entries are clipped to `[-1, 1]`. A constant row gives NaN. A 1-d
+/// input gives a 0-d result.
+///
+/// ```
+/// use rustnum as np;
+/// let x = np::array![[0.0, 1.0, 2.0], [2.0, 1.0, 0.0]];
+/// let r = np::corrcoef(&x);
+/// assert!(r.allclose(&np::array![[1.0, -1.0], [-1.0, 1.0]], 1e-12, 1e-12));
+/// ```
+pub fn corrcoef<T: Element>(x: &Array<T>) -> Array<f64> {
+    let (nvars, nobs) = var_obs(x);
+    let out = stats::corrcoef(&f64s(x), nvars, nobs);
+    if x.ndim() < 2 { Array::from_vec(out, &[]) } else { Array::from_vec(out, &[nvars, nvars]) }
+}
+
+/// Histogram of the flattened data, like `np.histogram(a, bins, range, density, weights)`.
+///
+/// Returns `(counts, bin_edges)`. The last bin is closed on the right, all others are half
+/// open; NaN and out-of-range values are ignored. Differences from NumPy: counts are `f64`
+/// (integer valued when unweighted) and the string bin rules are not supported.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 1.0];
+/// let (counts, edges) = np::histogram(&a, vec![0.0, 1.0, 2.0, 3.0], None, false, None);
+/// assert_eq!(counts.to_vec(), vec![0.0, 2.0, 1.0]);
+/// assert_eq!(edges.to_vec(), vec![0.0, 1.0, 2.0, 3.0]);
+/// // two equal-width bins over the data range, as a density
+/// let (counts, _) = np::histogram(&a, 2usize, None, true, None);
+/// assert_eq!(counts.to_vec(), vec![1.3333333333333333, 0.6666666666666666]);
+/// ```
+pub fn histogram<T: Element>(
+    a: &Array<T>,
+    bins: impl Into<Bins>,
+    range: Option<(f64, f64)>,
+    density: bool,
+    weights: Option<&Array<f64>>,
+) -> (Array<f64>, Array<f64>) {
+    let bins = bins.into();
+    let x = f64s(a);
+    let w = weights.map(|w| w.to_vec());
+    let (counts, edges) = with_bins(&bins, |b| stats::histogram(&x, b, range, density, w.as_deref()));
+    (vec1(counts), vec1(edges))
+}
+
+/// Bin edges that [`histogram`] would use, like `np.histogram_bin_edges(a, bins, range)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![0.0, 4.0];
+/// assert_eq!(np::histogram_bin_edges(&a, 2usize, None).to_vec(), vec![0.0, 2.0, 4.0]);
+/// ```
+pub fn histogram_bin_edges<T: Element>(a: &Array<T>, bins: impl Into<Bins>, range: Option<(f64, f64)>) -> Array<f64> {
+    let bins = bins.into();
+    let x = f64s(a);
+    vec1(with_bins(&bins, |b| stats::histogram_bin_edges(&x, b, range)))
+}
+
+/// Count occurrences of each non-negative integer, like `np.bincount(x, weights, minlength)`.
+///
+/// The result has length `max(x) + 1` (at least `minlength`). With `weights` each occurrence adds
+/// its weight instead of 1. Difference from NumPy: the result is always `f64`
+/// (use `.astype::<usize>()` for integer counts). Panics on negative values.
+///
+/// ```
+/// use rustnum as np;
+/// let x = np::array![0i64, 1, 1, 3];
+/// assert_eq!(np::bincount(&x, None, 0).to_vec(), vec![1.0, 2.0, 0.0, 1.0]);
+/// let w = np::array![0.5, 1.0, 2.0, 1.0];
+/// assert_eq!(np::bincount(&x, Some(&w), 5).to_vec(), vec![0.5, 3.0, 0.0, 1.0, 0.0]);
+/// ```
+pub fn bincount(x: &Array<i64>, weights: Option<&Array<f64>>, minlength: usize) -> Array<f64> {
+    let xs = x.to_vec();
+    let out = match weights {
+        Some(w) => stats::bincount_weighted(&xs, &w.to_vec(), minlength),
+        None => stats::bincount(&xs, minlength).into_iter().map(|c| c as f64).collect(),
+    };
+    vec1(out)
+}
+
+/// Index of the bin each value falls into, like `np.digitize(x, bins, right)`.
+///
+/// `bins` must be monotonic. With increasing bins and `right == false`, `i` satisfies
+/// `bins[i-1] <= x < bins[i]`; with `right == true`, `bins[i-1] < x <= bins[i]`. Values below
+/// the first bin give 0, above the last give `bins.len()`; NaN gives `bins.len()`.
+/// The output has the shape of `x`.
+///
+/// ```
+/// use rustnum as np;
+/// let x = np::array![0.2, 6.4, 3.0, 1.6];
+/// let bins = np::array![0.0, 1.0, 2.5, 4.0, 10.0];
+/// assert_eq!(np::digitize(&x, &bins, false).to_vec(), vec![1, 4, 3, 2]);
+/// ```
+pub fn digitize<T: Element, B: Element>(x: &Array<T>, bins: &Array<B>, right: bool) -> Array<usize> {
+    if bins.ndim() != 1 {
+        panic!("object too deep for desired array");
+    }
+    let idx = stats::digitize(&f64s(x), &f64s(bins), right);
+    Array::from_vec(idx, x.shape())
+}
+
+/// Weighted mean of all elements, like `np.average(a, weights=weights)`.
+///
+/// `weights` must have the same size as `a`; they need not be normalised. Panics if the weights
+/// sum to zero. Without weights this is the plain mean.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 3.0, 4.0];
+/// let w = np::array![4.0, 3.0, 2.0, 1.0];
+/// assert_eq!(np::average(&a, Some(&w)), 2.0);
+/// ```
+pub fn average<T: Element>(a: &Array<T>, weights: Option<&Array<f64>>) -> f64 {
+    if let Some(w) = weights
+        && w.shape() != a.shape()
+    {
+        panic!("Axis must be specified when shapes of a and weights differ.");
+    }
+    let w = weights.map(|w| w.to_vec());
+    stats::average(&f64s(a), w.as_deref())
+}
+
+/// Weighted mean along an axis, like `np.average(a, axis=axis, weights=weights)`.
+///
+/// `weights` is either the shape of `a` or 1-d with length `a.shape()[axis]`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1.0, 2.0], [3.0, 4.0]];
+/// let w = np::array![1.0, 3.0];
+/// assert_eq!(np::average_axis(&a, Some(&w), 0).to_vec(), vec![2.5, 3.5]);
+/// ```
+pub fn average_axis<T: Element>(a: &Array<T>, weights: Option<&Array<f64>>, axis: isize) -> Array<f64> {
+    let ax = normalize_axis(axis, a.ndim());
+    let w = weights.map(|w| w.to_vec());
+    let out = stats::average_axis(&f64s(a), a.shape(), ax, w.as_deref());
+    Array::from_vec(out, &without_axis(a.shape(), ax))
+}
+
+/// The `q`-th quantile of all elements (linear interpolation), like `np.quantile(a, q)`.
+///
+/// `q` is in `[0, 1]` (panics otherwise). NaN in `a` gives NaN. For several quantiles call it
+/// once per `q` (NumPy's array-valued `q` and the other interpolation methods are not supported).
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 3.0, 4.0];
+/// assert_eq!(np::quantile(&a, 0.5), 2.5);
+/// assert_eq!(np::quantile(&a, 0.0), 1.0);
+/// ```
+pub fn quantile<T: Element>(a: &Array<T>, q: f64) -> f64 {
+    stats::quantile(&f64s(a), q)
+}
+
+/// Quantile along an axis, like `np.quantile(a, q, axis=axis)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1.0, 2.0], [3.0, 4.0]];
+/// assert_eq!(np::quantile_axis(&a, 0.5, 0).to_vec(), vec![2.0, 3.0]);
+/// ```
+pub fn quantile_axis<T: Element>(a: &Array<T>, q: f64, axis: isize) -> Array<f64> {
+    let ax = normalize_axis(axis, a.ndim());
+    let out = stats::quantile_axis(&f64s(a), a.shape(), ax, q);
+    Array::from_vec(out, &without_axis(a.shape(), ax))
+}
+
+/// Quantile ignoring NaNs, like `np.nanquantile(a, q)`.
+///
+/// All-NaN or empty input gives NaN.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, f64::NAN, 3.0];
+/// assert_eq!(np::nanquantile(&a, 0.5), 2.0);
+/// ```
+pub fn nanquantile<T: Element>(a: &Array<T>, q: f64) -> f64 {
+    stats::nanquantile(&f64s(a), q)
+}
+
+/// NaN-ignoring quantile along an axis, like `np.nanquantile(a, q, axis=axis)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1.0, f64::NAN], [3.0, 4.0]];
+/// assert_eq!(np::nanquantile_axis(&a, 0.5, 0).to_vec(), vec![2.0, 4.0]);
+/// ```
+pub fn nanquantile_axis<T: Element>(a: &Array<T>, q: f64, axis: isize) -> Array<f64> {
+    let ax = normalize_axis(axis, a.ndim());
+    let out = stats::nanquantile_axis(&f64s(a), a.shape(), ax, q);
+    Array::from_vec(out, &without_axis(a.shape(), ax))
+}
+
+// ------------------------------------------------------------------ signal / numeric
+
+fn check_1d<T: Element>(a: &Array<T>, what: &str) {
+    if a.ndim() != 1 {
+        panic!("object too deep for desired array ({what} must be 1-d)");
+    }
+}
+
+/// Discrete linear convolution of two 1-d arrays, like `np.convolve(a, v, mode)`.
+///
+/// If `v` is longer than `a` the two are swapped first, exactly as NumPy does (the result is
+/// symmetric in the arguments anyway). Panics if either input is empty.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 3.0];
+/// let v = np::array![0.0, 1.0, 0.5];
+/// assert_eq!(np::convolve(&a, &v, np::ConvolveMode::Full).to_vec(), vec![0.0, 1.0, 2.5, 4.0, 1.5]);
+/// assert_eq!(np::convolve(&a, &v, np::ConvolveMode::Same).to_vec(), vec![1.0, 2.5, 4.0]);
+/// assert_eq!(np::convolve(&a, &v, np::ConvolveMode::Valid).to_vec(), vec![2.5]);
+/// ```
+pub fn convolve<T: Num>(a: &Array<T>, v: &Array<T>, mode: ConvolveMode) -> Array<T> {
+    check_1d(a, "a");
+    check_1d(v, "v");
+    vec1(sig::convolve(&a.to_vec(), &v.to_vec(), mode.into()))
+}
+
+/// Cross-correlation of two 1-d arrays, like `np.correlate(a, v, mode)`.
+///
+/// `c[k] = sum_n a[n + k] * v[n]` (real input, so no conjugation). If `v` is longer than `a` the
+/// arguments are swapped and the result reversed, as in NumPy. Note that NumPy's default mode here
+/// is `"valid"`; this function has no default, pass the mode explicitly.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 3.0];
+/// let v = np::array![0.0, 1.0, 0.5];
+/// assert_eq!(np::correlate(&a, &v, np::ConvolveMode::Full).to_vec(), vec![0.5, 2.0, 3.5, 3.0, 0.0]);
+/// ```
+pub fn correlate<T: Num>(a: &Array<T>, v: &Array<T>, mode: ConvolveMode) -> Array<T> {
+    check_1d(a, "a");
+    check_1d(v, "v");
+    vec1(sig::correlate(&a.to_vec(), &v.to_vec(), mode.into()))
+}
+
+/// The `n`-th discrete difference along `axis`, like `np.diff(a, n, axis)`.
+///
+/// The axis shrinks by `n` (to length 0 if `n` is larger). `n == 0` returns a copy.
+/// `prepend` / `append` are not supported. Unsigned element types panic on underflow in debug builds
+/// (NumPy wraps), so convert with `astype` first.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1i64, 4, 9, 16];
+/// assert_eq!(np::diff(&a, 1, -1).to_vec(), vec![3, 5, 7]);
+/// assert_eq!(np::diff(&a, 2, -1).to_vec(), vec![2, 2]);
+/// ```
+pub fn diff<T: Num>(a: &Array<T>, n: usize, axis: isize) -> Array<T> {
+    if a.ndim() == 0 {
+        panic!("diff requires input that is at least one dimensional");
+    }
+    let ax = normalize_axis(axis, a.ndim());
+    let (data, shape) = sig::diff(&a.to_vec(), a.shape(), n, ax);
+    Array::from_vec(data, &shape)
+}
+
+/// Numerical gradient along every axis with constant spacing `dx`, like `np.gradient(f, dx)`.
+///
+/// Interior points use second-order central differences, the two ends first-order one-sided
+/// differences. Returns one array per axis (a one-element `Vec` for 1-d input, where NumPy returns
+/// the array itself). Needs at least 2 samples along every axis.
+///
+/// ```
+/// use rustnum as np;
+/// let f = np::array![1.0, 2.0, 4.0, 7.0, 11.0, 16.0];
+/// let g = np::gradient(&f, 1.0);
+/// assert_eq!(g[0].to_vec(), vec![1.0, 1.5, 2.5, 3.5, 4.5, 5.0]);
+/// ```
+pub fn gradient<F: Float>(f: &Array<F>, dx: F) -> Vec<Array<F>> {
+    (0..f.ndim() as isize).map(|ax| gradient_axis(f, dx.to_f64(), ax, 1)).collect()
+}
+
+/// Gradient along one axis, like `np.gradient(f, spacing, axis=axis, edge_order=edge_order)`.
+///
+/// `spacing` is a constant step or the sample coordinates (`0.5f64`, `vec![0.0, 1.0, 3.0]`,
+/// `&coords`). `edge_order` is 1 or 2 (order of the one-sided differences at the ends; 2 needs
+/// at least 3 samples).
+///
+/// ```
+/// use rustnum as np;
+/// let f = np::array![1.0, 2.0, 4.0, 8.0];
+/// let g = np::gradient_axis(&f, vec![0.0, 1.0, 3.0, 7.0], 0, 1);
+/// assert_eq!(g.to_vec(), vec![1.0, 1.0, 1.0, 1.0]);
+/// let g2 = np::gradient_axis(&f, 1.0, 0, 2);
+/// assert_eq!(g2.to_vec(), vec![0.5, 1.5, 3.0, 5.0]);
+/// ```
+pub fn gradient_axis<F: Float>(f: &Array<F>, spacing: impl Into<Spacing>, axis: isize, edge_order: usize) -> Array<F> {
+    let ax = normalize_axis(axis, f.ndim());
+    let spacing = spacing.into();
+    let data: Vec<f64> = f64s(f);
+    let out = sig::gradient(&data, f.shape(), ax, kernel_spacing(&spacing), edge_order);
+    Array::from_vec(out.into_iter().map(F::from_f64).collect(), f.shape())
+}
+
+/// One-dimensional piecewise-linear interpolation, like `np.interp(x, xp, fp, left, right)`.
+///
+/// `xp` must be increasing (not checked). Values of `x` below `xp[0]` give `left` and above
+/// `xp[last]` give `right`; both default to `fp[0]` and `fp[last]`. NaN in `x` gives NaN. The
+/// `period` argument is not supported. The output has the shape of `x`.
+///
+/// ```
+/// use rustnum as np;
+/// let xp = np::array![1.0, 2.0, 3.0];
+/// let fp = np::array![3.0, 2.0, 0.0];
+/// let x = np::array![0.0, 1.5, 3.2];
+/// assert_eq!(np::interp(&x, &xp, &fp, None, None).to_vec(), vec![3.0, 2.5, 0.0]);
+/// assert_eq!(np::interp(&x, &xp, &fp, Some(-1.0), Some(9.0)).to_vec(), vec![-1.0, 2.5, 9.0]);
+/// ```
+pub fn interp(x: &Array<f64>, xp: &Array<f64>, fp: &Array<f64>, left: Option<f64>, right: Option<f64>) -> Array<f64> {
+    check_1d(xp, "xp");
+    check_1d(fp, "fp");
+    let out = sig::interp(&x.to_vec(), &xp.to_vec(), &fp.to_vec(), left, right);
+    Array::from_vec(out, x.shape())
+}
+
+/// Integrate with the trapezoidal rule along `axis`, like `np.trapezoid(y, x_or_dx, axis=axis)`.
+///
+/// `spacing` is a constant `dx` or the sample coordinates `x` (length `y.shape()[axis]`). The
+/// result has `axis` removed (a 0-d array for 1-d `y`; use `.item()`). Fewer than 2 samples gives 0.
+///
+/// ```
+/// use rustnum as np;
+/// let y = np::array![1.0, 2.0, 3.0];
+/// assert_eq!(np::trapezoid(&y, 1.0, -1).item(), 4.0);
+/// assert_eq!(np::trapezoid(&y, vec![0.0, 1.0, 3.0], -1).item(), 6.5);
+/// ```
+pub fn trapezoid<F: Float>(y: &Array<F>, spacing: impl Into<Spacing>, axis: isize) -> Array<F> {
+    let ax = normalize_axis(axis, y.ndim());
+    let spacing = spacing.into();
+    let out = sig::trapezoid(&f64s(y), y.shape(), ax, kernel_spacing(&spacing));
+    Array::from_vec(out.into_iter().map(F::from_f64).collect(), &without_axis(y.shape(), ax))
+}
+
+/// Cross product of 3-vectors (or 2-vectors) along the last axis, like `np.cross(a, b)`.
+///
+/// The last axis of each input has length 2 or 3; leading axes broadcast. A 2-vector is a
+/// 3-vector with `z = 0`. Two 2-vectors give only the z component, so the last axis disappears
+/// (a 0-d result for two plain 2-vectors). `axisa`, `axisb`, `axisc` are not supported.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1, 2, 3];
+/// let b = np::array![4, 5, 6];
+/// assert_eq!(np::cross(&a, &b).to_vec(), vec![-3, 6, -3]);
+/// ```
+pub fn cross<T: Num>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    if a.ndim() == 0 || b.ndim() == 0 {
+        panic!("incompatible dimensions for cross product\n(dimension must be 2 or 3)");
+    }
+    let (da, db) = (a.shape()[a.ndim() - 1], b.shape()[b.ndim() - 1]);
+    let batch_a = &a.shape()[..a.ndim() - 1];
+    let batch_b = &b.shape()[..b.ndim() - 1];
+    let batch = crate::broadcast_shapes(batch_a, batch_b).unwrap_or_else(|| {
+        panic!("operands could not be broadcast together with shapes {:?} {:?}", a.shape(), b.shape())
+    });
+    let with = |batch: &[usize], d: usize| {
+        let mut s = batch.to_vec();
+        s.push(d);
+        s
+    };
+    let av = a.broadcast_to(&with(&batch, da)).to_vec();
+    let bv = b.broadcast_to(&with(&batch, db)).to_vec();
+    let out = sig::cross(&av, da, &bv, db);
+    let last = if da == 2 && db == 2 { None } else { Some(3) };
+    let mut shape = batch;
+    shape.extend(last);
+    Array::from_vec(out, &shape)
+}
+
+/// Kronecker product, like `np.kron(a, b)`.
+///
+/// The result has shape `a.shape()[i] * b.shape()[i]` per axis; the array with fewer dimensions
+/// gets leading axes of length 1.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1, 10, 100];
+/// let b = np::array![5, 6, 7];
+/// assert_eq!(np::kron(&a, &b).to_vec(), vec![5, 6, 7, 50, 60, 70, 500, 600, 700]);
+/// ```
+pub fn kron<T: Num>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    let (data, shape) = sig::kron(&a.to_vec(), a.shape(), &b.to_vec(), b.shape());
+    Array::from_vec(data, &shape)
+}
+
+// ------------------------------------------------------------------ sets
+
+/// Sorted values present in both arrays, like `np.intersect1d(a, b)`.
+///
+/// Inputs are flattened; the result is 1-d, sorted and without duplicates. NaN is never in the
+/// intersection (NaN != NaN). `return_indices` is not supported.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1, 3, 4, 3];
+/// let b = np::array![3, 1, 2, 1];
+/// assert_eq!(np::intersect1d(&a, &b).to_vec(), vec![1, 3]);
+/// ```
+pub fn intersect1d<T: Element>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    vec1(setk::intersect1d(&a.to_vec(), &b.to_vec()))
+}
+
+/// Sorted distinct values present in either array, like `np.union1d(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![-1, 0];
+/// let b = np::array![-2, 0, 2];
+/// assert_eq!(np::union1d(&a, &b).to_vec(), vec![-2, -1, 0, 2]);
+/// ```
+pub fn union1d<T: Element>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    vec1(setk::union1d(&a.to_vec(), &b.to_vec()))
+}
+
+/// Sorted distinct values of `a` that are not in `b`, like `np.setdiff1d(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1, 2, 3, 2, 4, 1];
+/// let b = np::array![3, 4, 5, 6];
+/// assert_eq!(np::setdiff1d(&a, &b).to_vec(), vec![1, 2]);
+/// ```
+pub fn setdiff1d<T: Element>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    vec1(setk::setdiff1d(&a.to_vec(), &b.to_vec()))
+}
+
+/// Sorted values that are in exactly one of the arrays, like `np.setxor1d(a, b)`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1, 2, 3, 2, 4];
+/// let b = np::array![2, 3, 5, 7, 5];
+/// assert_eq!(np::setxor1d(&a, &b).to_vec(), vec![1, 4, 5, 7]);
+/// ```
+pub fn setxor1d<T: Element>(a: &Array<T>, b: &Array<T>) -> Array<T> {
+    vec1(setk::setxor1d(&a.to_vec(), &b.to_vec()))
+}
+
+/// Membership test, like `np.isin(element, test_elements)`.
+///
+/// The result has the shape of `element`. NaN is never found (NaN != NaN).
+///
+/// ```
+/// use rustnum as np;
+/// let element = np::array![[1, 2], [3, 4]];
+/// let test = np::array![1, 3];
+/// assert_eq!(np::isin(&element, &test).to_vec(), vec![true, false, true, false]);
+/// ```
+pub fn isin<T: Element>(element: &Array<T>, test_elements: &Array<T>) -> Array<bool> {
+    Array::from_vec(setk::isin(&element.to_vec(), &test_elements.to_vec()), element.shape())
+}
+
+// ------------------------------------------------------------------ einsum
+
+/// Einstein summation, like `np.einsum(subscripts, *operands)`.
+///
+/// Supports explicit (`"ij,jk->ik"`) and implicit (`"ij,jk"`) output, summed labels
+/// (`"i,i->"`), repeated labels in one operand for diagonals and traces (`"ii->i"`, `"ii"`),
+/// any number of operands, size-1 broadcasting, spaces, and `...` ellipsis (right-aligned and
+/// broadcast like NumPy). Panics with NumPy's messages on malformed subscripts or mismatched
+/// sizes. Not supported: `optimize=`, `out=`, the sublist calling form. Cost is the product of
+/// all label sizes (no contraction-order optimisation).
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1, 2], [3, 4]];
+/// let b = np::array![[5, 6], [7, 8]];
+/// assert_eq!(np::einsum("ij,jk->ik", &[&a, &b]).to_vec(), vec![19, 22, 43, 50]);
+/// assert_eq!(np::einsum("ii", &[&a]).item(), 5); // trace
+/// assert_eq!(np::einsum("ij->ji", &[&a]).to_vec(), vec![1, 3, 2, 4]);
+/// ```
+pub fn einsum<T: Num>(subscripts: &str, operands: &[&Array<T>]) -> Array<T> {
+    let owned: Vec<Array<T>> = operands.iter().map(|a| a.to_contiguous()).collect();
+    let slices: Vec<&[T]> = owned.iter().map(|a| a.as_slice().expect("contiguous after to_contiguous")).collect();
+    let strides: Vec<Vec<isize>> = owned.iter().map(|a| ek::c_strides(a.shape())).collect();
+    let ops: Vec<Operand<'_, T>> = owned
+        .iter()
+        .enumerate()
+        .map(|(k, a)| Operand { data: slices[k], shape: a.shape(), strides: &strides[k], offset: 0 })
+        .collect();
+    let (data, shape) = ek::einsum(subscripts, &ops);
+    Array::from_vec(data, &shape)
+}
