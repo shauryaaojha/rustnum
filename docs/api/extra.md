@@ -3,7 +3,7 @@
 Same rules as `docs/API.md`: names follow NumPy, misuse panics with NumPy's wording, one path per
 item (everything below is re-exported at the crate root, `np::cov`, `np::einsum`, ...). Code lives in
 `rustnum/src/extra/` (pure slice kernels, tested against NumPy) and `extra/api.rs` (the `Array`
-wrappers; shipped as `api.rs.pending` until the core `Array` exists).
+wrappers).
 
 Conventions specific to this addendum:
 - Main array arguments are `&Array<T>` (like `np::unique(&a)`), so `T` is inferred without turbofish.

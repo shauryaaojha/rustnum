@@ -1,15 +1,7 @@
-//! PENDING: public `np::fft` wrappers over `Array<T>`. Not compiled yet.
+//! Public `np::fft` wrappers over `Array<T>`.
 //!
-//! To enable once the core `Array<T>` lands (docs/API.md section 2 and 3):
-//!   1. `git mv api.rs.pending api.rs`
-//!   2. in `fft/mod.rs` add `mod api;` and
-//!      `pub use api::{fft, ifft, rfft, irfft, fft2, ifft2, fftfreq, rfftfreq, fftshift, ifftshift};`
-//!      and drop the `#[allow(dead_code)]` on `mod kernels`.
-//!   3. fix the two `use crate::...` lines below if the core crate re-exports differ.
-//!   4. `cargo test -p rustnum --doc` (every example below is a doctest).
-//!
-//! Only these `Array` methods from docs/API.md are used: `shape`, `ndim`, `size`, `iter`,
-//! `to_vec`, `Array::from_vec`, plus `Element::{to_f64, from_f64}` through the `Float` bound.
+//! Only slice-level kernels from `super::kernels` do the arithmetic; this layer converts
+//! between `Array<F>` and `f64` buffers.
 //!
 //! v0.1 limitation: rustnum has no complex dtype. A complex array is a pair
 //! `(re, im)` of same-shaped real arrays, both as inputs and as outputs. Arithmetic is done in

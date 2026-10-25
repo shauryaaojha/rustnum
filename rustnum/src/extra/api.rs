@@ -1,20 +1,4 @@
-//! NOT COMPILED. Public `Array`-level wrappers for the kernels in this folder.
-//!
-//! MERGE CHECKLIST (do this once the core `Array<T>` exists):
-//! 1. rename this file to `api.rs` and add `pub(crate) mod api;` to `extra/mod.rs`;
-//! 2. remove `#![allow(dead_code)]` from `extra/mod.rs`;
-//! 3. in `lib.rs` re-export once, at the root:
-//!    `pub use extra::api::{average, average_axis, bincount, corrcoef, cov, convolve, correlate,
-//!    cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges, interp,
-//!    intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis, setdiff1d,
-//!    setxor1d, trapezoid, union1d, Bins, ConvolveMode, Spacing};`
-//! 4. fix the paths in the `use` block below to whatever the core agent actually exported;
-//! 5. run `cargo test --doc`: every example below is meant to run as written.
-//!
-//! Assumptions (all from `docs/API.md` sections 1 to 3): `Array::from_vec(Vec<T>, &[usize])`,
-//! `shape()`, `ndim()`, `size()`, `to_vec()` (C order, any strides), `iter()`, `astype`,
-//! `Array::scalar`, `broadcast_to(&[usize])`, `crate::broadcast_shapes`, `Element::{to_f64, from_f64}`,
-//! and `as_slice()` on a contiguous array returning exactly the `size()` elements in C order.
+//! Public `Array`-level wrappers for the kernels in this folder, re-exported from the crate root.
 //!
 //! Signature conventions (same as `np::unique(&a)` and `np::linalg::outer(&a, &b)` in API.md): the
 //! main array arguments are `&Array<T>`, not `impl IntoArray<T>`, so the element type is always
@@ -23,23 +7,50 @@
 //! `kron`, `einsum`, the set functions, and for `gradient` / `trapezoid` (floats only).
 
 use super::einsum_kernels::{self as ek, Operand};
+use super::normalize_axis;
 use super::set_kernels as setk;
 use super::signal_kernels::{self as sig, Mode};
 use super::stats_kernels::{self as stats, Bins as KBins};
-use super::normalize_axis;
 use crate::{Array, Element, Float, Num};
 
 // ------------------------------------------------------------------ small public types
 
 /// Output size of [`convolve`] and [`correlate`], like NumPy's `mode="full" | "same" | "valid"`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![1.0, 2.0, 3.0];
+/// let v = np::array![1.0, 1.0];
+/// assert_eq!(np::convolve(&a, &v, np::ConvolveMode::Full).to_vec(), vec![1.0, 3.0, 5.0, 3.0]);
+/// assert_eq!(np::convolve(&a, &v, np::ConvolveMode::Valid).to_vec(), vec![3.0, 5.0]);
+/// assert_eq!(np::ConvolveMode::default(), np::ConvolveMode::Full);
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ConvolveMode {
     /// Every overlap, length `n + m - 1` (NumPy's default for `convolve`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let r = np::convolve(&np::array![1.0, 2.0], &np::array![1.0, 1.0], np::ConvolveMode::Full);
+    /// assert_eq!(r.to_vec(), vec![1.0, 3.0, 2.0]);
+    /// ```
     #[default]
     Full,
     /// Length `max(n, m)`, centred with respect to `Full`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let r = np::convolve(&np::array![1.0, 2.0, 3.0], &np::array![1.0, 1.0], np::ConvolveMode::Same);
+    /// assert_eq!(r.to_vec(), vec![1.0, 3.0, 5.0]);
+    /// ```
     Same,
     /// Only positions where the signals fully overlap, length `max(n, m) - min(n, m) + 1`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let r = np::convolve(&np::array![1.0, 2.0, 3.0], &np::array![1.0, 1.0], np::ConvolveMode::Valid);
+    /// assert_eq!(r.to_vec(), vec![3.0, 5.0]);
+    /// ```
     Valid,
 }
 
@@ -57,11 +68,30 @@ impl From<ConvolveMode> for Mode {
 ///
 /// Convert with `.into()`: `10usize`, `vec![0.0, 1.0, 5.0]` and `&Array<f64>` all work.
 /// (NumPy's string rules such as `"auto"` are not supported.)
+///
+/// ```
+/// use rustnum as np;
+/// assert_eq!(np::Bins::from(4usize), np::Bins::Count(4));
+/// assert_eq!(np::Bins::from(vec![0.0, 1.0]), np::Bins::Edges(vec![0.0, 1.0]));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum Bins {
     /// This many equal-width bins over the data range (or `range`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let (counts, _) = np::histogram(&np::array![0.0, 1.0, 3.0], np::Bins::Count(3), None, false, None);
+    /// assert_eq!(counts.to_vec(), vec![1.0, 1.0, 1.0]);
+    /// ```
     Count(usize),
     /// Monotonically increasing bin edges; bin `i` is `[edges[i], edges[i + 1])`, the last is closed.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let a = np::array![0.5, 1.5, 2.0];
+    /// let (counts, _) = np::histogram(&a, np::Bins::Edges(vec![0.0, 1.0, 2.0]), None, false, None);
+    /// assert_eq!(counts.to_vec(), vec![1.0, 2.0]);
+    /// ```
     Edges(Vec<f64>),
 }
 
@@ -89,11 +119,29 @@ impl From<&Array<f64>> for Bins {
 /// Sample spacing for [`gradient_axis`] and [`trapezoid`]: a constant step or the sample coordinates.
 ///
 /// Convert with `.into()`: `0.5f64`, `vec![0.0, 1.0, 3.0]` and `&Array<f64>` all work.
+///
+/// ```
+/// use rustnum as np;
+/// assert_eq!(np::Spacing::from(0.5), np::Spacing::Uniform(0.5));
+/// assert_eq!(np::Spacing::from(vec![0.0, 1.0]), np::Spacing::Coords(vec![0.0, 1.0]));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub enum Spacing {
     /// Constant distance between neighbouring samples (NumPy's scalar `dx` / `varargs`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let t = np::trapezoid(&np::array![1.0, 2.0, 3.0], np::Spacing::Uniform(2.0), 0);
+    /// assert_eq!(t.item(), 8.0);
+    /// ```
     Uniform(f64),
     /// Coordinates of the samples along the axis (NumPy's `x` / coordinate array).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let t = np::trapezoid(&np::array![1.0, 2.0, 3.0], np::Spacing::Coords(vec![0.0, 1.0, 3.0]), 0);
+    /// assert_eq!(t.item(), 6.5);
+    /// ```
     Coords(Vec<f64>),
 }
 
@@ -174,7 +222,11 @@ fn var_obs<T: Element>(m: &Array<T>) -> (usize, usize) {
 pub fn cov<T: Element>(m: &Array<T>, bias: bool, ddof: Option<usize>) -> Array<f64> {
     let (nvars, nobs) = var_obs(m);
     let out = stats::cov(&f64s(m), nvars, nobs, bias, ddof);
-    if m.ndim() < 2 { Array::from_vec(out, &[]) } else { Array::from_vec(out, &[nvars, nvars]) }
+    if m.ndim() < 2 {
+        Array::from_vec(out, &[])
+    } else {
+        Array::from_vec(out, &[nvars, nvars])
+    }
 }
 
 /// Pearson correlation matrix of the rows of `x`, like `np.corrcoef(x)`.
@@ -191,7 +243,11 @@ pub fn cov<T: Element>(m: &Array<T>, bias: bool, ddof: Option<usize>) -> Array<f
 pub fn corrcoef<T: Element>(x: &Array<T>) -> Array<f64> {
     let (nvars, nobs) = var_obs(x);
     let out = stats::corrcoef(&f64s(x), nvars, nobs);
-    if x.ndim() < 2 { Array::from_vec(out, &[]) } else { Array::from_vec(out, &[nvars, nvars]) }
+    if x.ndim() < 2 {
+        Array::from_vec(out, &[])
+    } else {
+        Array::from_vec(out, &[nvars, nvars])
+    }
 }
 
 /// Histogram of the flattened data, like `np.histogram(a, bins, range, density, weights)`.
@@ -220,7 +276,9 @@ pub fn histogram<T: Element>(
     let bins = bins.into();
     let x = f64s(a);
     let w = weights.map(|w| w.to_vec());
-    let (counts, edges) = with_bins(&bins, |b| stats::histogram(&x, b, range, density, w.as_deref()));
+    let (counts, edges) = with_bins(&bins, |b| {
+        stats::histogram(&x, b, range, density, w.as_deref())
+    });
     (vec1(counts), vec1(edges))
 }
 
@@ -231,10 +289,16 @@ pub fn histogram<T: Element>(
 /// let a = np::array![0.0, 4.0];
 /// assert_eq!(np::histogram_bin_edges(&a, 2usize, None).to_vec(), vec![0.0, 2.0, 4.0]);
 /// ```
-pub fn histogram_bin_edges<T: Element>(a: &Array<T>, bins: impl Into<Bins>, range: Option<(f64, f64)>) -> Array<f64> {
+pub fn histogram_bin_edges<T: Element>(
+    a: &Array<T>,
+    bins: impl Into<Bins>,
+    range: Option<(f64, f64)>,
+) -> Array<f64> {
     let bins = bins.into();
     let x = f64s(a);
-    vec1(with_bins(&bins, |b| stats::histogram_bin_edges(&x, b, range)))
+    vec1(with_bins(&bins, |b| {
+        stats::histogram_bin_edges(&x, b, range)
+    }))
 }
 
 /// Count occurrences of each non-negative integer, like `np.bincount(x, weights, minlength)`.
@@ -254,7 +318,10 @@ pub fn bincount(x: &Array<i64>, weights: Option<&Array<f64>>, minlength: usize) 
     let xs = x.to_vec();
     let out = match weights {
         Some(w) => stats::bincount_weighted(&xs, &w.to_vec(), minlength),
-        None => stats::bincount(&xs, minlength).into_iter().map(|c| c as f64).collect(),
+        None => stats::bincount(&xs, minlength)
+            .into_iter()
+            .map(|c| c as f64)
+            .collect(),
     };
     vec1(out)
 }
@@ -272,7 +339,11 @@ pub fn bincount(x: &Array<i64>, weights: Option<&Array<f64>>, minlength: usize) 
 /// let bins = np::array![0.0, 1.0, 2.5, 4.0, 10.0];
 /// assert_eq!(np::digitize(&x, &bins, false).to_vec(), vec![1, 4, 3, 2]);
 /// ```
-pub fn digitize<T: Element, B: Element>(x: &Array<T>, bins: &Array<B>, right: bool) -> Array<usize> {
+pub fn digitize<T: Element, B: Element>(
+    x: &Array<T>,
+    bins: &Array<B>,
+    right: bool,
+) -> Array<usize> {
     if bins.ndim() != 1 {
         panic!("object too deep for desired array");
     }
@@ -311,7 +382,11 @@ pub fn average<T: Element>(a: &Array<T>, weights: Option<&Array<f64>>) -> f64 {
 /// let w = np::array![1.0, 3.0];
 /// assert_eq!(np::average_axis(&a, Some(&w), 0).to_vec(), vec![2.5, 3.5]);
 /// ```
-pub fn average_axis<T: Element>(a: &Array<T>, weights: Option<&Array<f64>>, axis: isize) -> Array<f64> {
+pub fn average_axis<T: Element>(
+    a: &Array<T>,
+    weights: Option<&Array<f64>>,
+    axis: isize,
+) -> Array<f64> {
     let ax = normalize_axis(axis, a.ndim());
     let w = weights.map(|w| w.to_vec());
     let out = stats::average_axis(&f64s(a), a.shape(), ax, w.as_deref());
@@ -451,7 +526,9 @@ pub fn diff<T: Num>(a: &Array<T>, n: usize, axis: isize) -> Array<T> {
 /// assert_eq!(g[0].to_vec(), vec![1.0, 1.5, 2.5, 3.5, 4.5, 5.0]);
 /// ```
 pub fn gradient<F: Float>(f: &Array<F>, dx: F) -> Vec<Array<F>> {
-    (0..f.ndim() as isize).map(|ax| gradient_axis(f, dx.to_f64(), ax, 1)).collect()
+    (0..f.ndim() as isize)
+        .map(|ax| gradient_axis(f, dx.to_f64(), ax, 1))
+        .collect()
 }
 
 /// Gradient along one axis, like `np.gradient(f, spacing, axis=axis, edge_order=edge_order)`.
@@ -468,7 +545,12 @@ pub fn gradient<F: Float>(f: &Array<F>, dx: F) -> Vec<Array<F>> {
 /// let g2 = np::gradient_axis(&f, 1.0, 0, 2);
 /// assert_eq!(g2.to_vec(), vec![0.5, 1.5, 3.0, 5.0]);
 /// ```
-pub fn gradient_axis<F: Float>(f: &Array<F>, spacing: impl Into<Spacing>, axis: isize, edge_order: usize) -> Array<F> {
+pub fn gradient_axis<F: Float>(
+    f: &Array<F>,
+    spacing: impl Into<Spacing>,
+    axis: isize,
+    edge_order: usize,
+) -> Array<F> {
     let ax = normalize_axis(axis, f.ndim());
     let spacing = spacing.into();
     let data: Vec<f64> = f64s(f);
@@ -490,7 +572,13 @@ pub fn gradient_axis<F: Float>(f: &Array<F>, spacing: impl Into<Spacing>, axis: 
 /// assert_eq!(np::interp(&x, &xp, &fp, None, None).to_vec(), vec![3.0, 2.5, 0.0]);
 /// assert_eq!(np::interp(&x, &xp, &fp, Some(-1.0), Some(9.0)).to_vec(), vec![-1.0, 2.5, 9.0]);
 /// ```
-pub fn interp(x: &Array<f64>, xp: &Array<f64>, fp: &Array<f64>, left: Option<f64>, right: Option<f64>) -> Array<f64> {
+pub fn interp(
+    x: &Array<f64>,
+    xp: &Array<f64>,
+    fp: &Array<f64>,
+    left: Option<f64>,
+    right: Option<f64>,
+) -> Array<f64> {
     check_1d(xp, "xp");
     check_1d(fp, "fp");
     let out = sig::interp(&x.to_vec(), &xp.to_vec(), &fp.to_vec(), left, right);
@@ -512,7 +600,10 @@ pub fn trapezoid<F: Float>(y: &Array<F>, spacing: impl Into<Spacing>, axis: isiz
     let ax = normalize_axis(axis, y.ndim());
     let spacing = spacing.into();
     let out = sig::trapezoid(&f64s(y), y.shape(), ax, kernel_spacing(&spacing));
-    Array::from_vec(out.into_iter().map(F::from_f64).collect(), &without_axis(y.shape(), ax))
+    Array::from_vec(
+        out.into_iter().map(F::from_f64).collect(),
+        &without_axis(y.shape(), ax),
+    )
 }
 
 /// Cross product of 3-vectors (or 2-vectors) along the last axis, like `np.cross(a, b)`.
@@ -535,7 +626,11 @@ pub fn cross<T: Num>(a: &Array<T>, b: &Array<T>) -> Array<T> {
     let batch_a = &a.shape()[..a.ndim() - 1];
     let batch_b = &b.shape()[..b.ndim() - 1];
     let batch = crate::broadcast_shapes(batch_a, batch_b).unwrap_or_else(|| {
-        panic!("operands could not be broadcast together with shapes {:?} {:?}", a.shape(), b.shape())
+        panic!(
+            "operands could not be broadcast together with shapes {:?} {:?}",
+            a.shape(),
+            b.shape()
+        )
     });
     let with = |batch: &[usize], d: usize| {
         let mut s = batch.to_vec();
@@ -631,7 +726,10 @@ pub fn setxor1d<T: Element>(a: &Array<T>, b: &Array<T>) -> Array<T> {
 /// assert_eq!(np::isin(&element, &test).to_vec(), vec![true, false, true, false]);
 /// ```
 pub fn isin<T: Element>(element: &Array<T>, test_elements: &Array<T>) -> Array<bool> {
-    Array::from_vec(setk::isin(&element.to_vec(), &test_elements.to_vec()), element.shape())
+    Array::from_vec(
+        setk::isin(&element.to_vec(), &test_elements.to_vec()),
+        element.shape(),
+    )
 }
 
 // ------------------------------------------------------------------ einsum
@@ -655,12 +753,20 @@ pub fn isin<T: Element>(element: &Array<T>, test_elements: &Array<T>) -> Array<b
 /// ```
 pub fn einsum<T: Num>(subscripts: &str, operands: &[&Array<T>]) -> Array<T> {
     let owned: Vec<Array<T>> = operands.iter().map(|a| a.to_contiguous()).collect();
-    let slices: Vec<&[T]> = owned.iter().map(|a| a.as_slice().expect("contiguous after to_contiguous")).collect();
+    let slices: Vec<&[T]> = owned
+        .iter()
+        .map(|a| a.as_slice().expect("contiguous after to_contiguous"))
+        .collect();
     let strides: Vec<Vec<isize>> = owned.iter().map(|a| ek::c_strides(a.shape())).collect();
     let ops: Vec<Operand<'_, T>> = owned
         .iter()
         .enumerate()
-        .map(|(k, a)| Operand { data: slices[k], shape: a.shape(), strides: &strides[k], offset: 0 })
+        .map(|(k, a)| Operand {
+            data: slices[k],
+            shape: a.shape(),
+            strides: &strides[k],
+            offset: 0,
+        })
         .collect();
     let (data, shape) = ek::einsum(subscripts, &ops);
     Array::from_vec(data, &shape)
