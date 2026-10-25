@@ -1,27 +1,28 @@
 # rustnum misc: element-wise math, windows, complex numbers
 
 API section in the style of `docs/API.md`. Names follow NumPy. The code lives in
-`rustnum/src/misc/`: scalar kernels and `Complex<F>` are implemented and tested against NumPy 2.3
-today; the `Array` wrappers are written in `rustnum/src/misc/api.rs.pending` and switch on once the
-core `Array<T>` exists.
+`rustnum/src/misc/`: scalar kernels, window kernels, `Complex<F>` and the public `Array` wrappers
+(`api.rs`), all tested against NumPy 2.3 (kernel tables in `misc/tests_*.rs`, public-API tests in
+`rustnum/tests/misc.rs`).
 
 ## M0. Status and wiring
 
 | Part | File | State |
 |---|---|---|
-| Scalar kernels (`F = f32 \| f64`) | `misc/math_kernels.rs` | compiled, 58 NumPy parity tests |
-| Window kernels | `misc/window_kernels.rs` | compiled, 78 tests |
-| `Complex<F>` | `misc/complex.rs` | compiled, 54 tests |
-| `Array` wrappers | `misc/api.rs.pending` | written, not compiled (needs core `Array`) |
+| Scalar kernels (`F: Float`, `f32` or `f64`) | `misc/math_kernels.rs` | wired, NumPy parity tests |
+| Window kernels | `misc/window_kernels.rs` | wired, NumPy parity tests |
+| `Complex<F>` | `misc/complex.rs` | wired, `np::Complex` |
+| `Array` wrappers | `misc/api.rs` | wired, re-exported once from `lib.rs` |
 
-To enable the wrappers: rename `api.rs.pending` to `api.rs`, add `mod api; pub use api::{...};` to
-`misc/mod.rs` and `pub use misc::{...};` to `lib.rs` for the names in M1 and M2 (one path per item,
-rule 2 in `AGENTS.md`), then drop `#![allow(dead_code)]` from `misc/mod.rs`.
+Everything is bounded by the core `Float` trait, so generic user code over `F: rustnum::Float` can call
+all of it. The extra constants and bit helpers the kernels need (`TWO`, `HALF`, `LN_2`, `MANT_BITS`,
+`to_bits64`, `sign_bit`, `copy_sign`, ...) live in a hidden sealed supertrait of `Float`
+(`misc::FloatHooks`, unnameable outside the crate, implemented for `f32`/`f64` only). None of its
+names exist on `Float`/`Num`/`Element`, so lookups on a generic `F: Float` are never ambiguous.
 
-Wrapper bounds are `F: Element + KFloat`. `KFloat` is a private sealed trait implemented for `f32`
-and `f64` only, so the bound means the same as `Float`; it avoids method-name ambiguity with the core
-`Float` trait (`sqrt`, `from_f64`, `ZERO` exist on both). Generic user code over `F: Float` cannot
-call these methods yet; use concrete `Array<f64>` / `Array<f32>` (see M5 for the clean-up).
+Already in the core, not repeated: `rint` = `round` (ties to even), `fix` = `trunc`, `fabs` = `abs`,
+`negative` = unary `-`, `positive` = copy. The methods exist under the NumPy names and delegate to the
+core code; there are no second kernels. `float_power` is separate from `power` (always `f64` output).
 
 ## M1. Element-wise methods on `Array<F: Float>` (return a new array)
 
@@ -39,10 +40,8 @@ call these methods yet; use concrete `Array<f64>` / `Array<f32>` (see M5 for the
 | `frexp() -> (Array<F>, Array<i32>)` | `np.frexp` | mantissa in `[0.5, 1)`; zero/inf/nan give exponent 0 |
 | `nan_to_num()` | `np.nan_to_num(a)` | NaN to 0, +-inf to +-`F::MAX` |
 | `nan_to_num_with(nan, posinf: Option<F>, neginf: Option<F>)` | `np.nan_to_num(a, nan, posinf, neginf)` | `None` keeps the default |
-| `angle()`, `angle_deg()` | `np.angle(a)`, `np.angle(a, deg=True)` | real input: 0 or pi (`angle(-0.0) = pi`) |
 | `unwrap()` | `np.unwrap(a)` | last axis, period `2 pi` |
 | `unwrap_with(discont: Option<F>, axis: isize, period: F)` | `np.unwrap(a, discont, axis, period=period)` | floats only; panics on 0-d / bad axis |
-| `ediff1d()`, `ediff1d_with(to_end: &[T], to_begin: &[T])` (`T: Num`) | `np.ediff1d` | flattens first |
 
 ## M2. Free functions at the crate root (broadcasting, scalars allowed anywhere)
 
@@ -51,6 +50,10 @@ keyword so there is no alias), `np::floor_divide`, `np::divmod -> (q, r)`, `np::
 `np::heaviside(x, h0)`, `np::nextafter`, `np::ldexp(a, e: impl IntoArray<i32>)`,
 `np::float_power -> Array<f64>` (always float64, like NumPy), `np::gcd`, `np::lcm` (`Array<i64>`,
 non-negative results, `lcm` wraps on overflow like NumPy).
+
+`np::angle(a)`, `np::angle_deg(a)` (real input: 0 or pi, `angle(-0.0) = pi`) and `np::ediff1d(a)`,
+`np::ediff1d_with(a, to_end: &[T], to_begin: &[T])` (`T: Num`, flattens first, integers wrap) are free
+functions too, like NumPy.
 
 Windows (always `Array<f64>`): `np::hanning(m)`, `np::hamming(m)`, `np::blackman(m)`,
 `np::bartlett(m)`, `np::kaiser(m, beta)`. `m = 0` is empty, `m = 1` is `[1.0]`.
@@ -88,7 +91,7 @@ Checked value by value against NumPy 2.3.2 (f64 and f32 grids with NaN, +-inf, +
 | `(1e300+1e300j)**2` (`*`) | `-inf+infj` (FMA loop) | `nan+infj` | plain IEEE `ac - bd`; platform dependent in NumPy |
 | Sign of zero / inf for non-finite inputs of `exp ln sin cos tan sinh cosh tanh powc` | C library specific | C99 Annex G (msun) | tests compare only the magnitude there |
 
-## M4. `Complex<F>` (`misc/complex.rs`, `F = f32 | f64`)
+## M4. `Complex<F>` (`misc/complex.rs`, `F = f32 |`f32` or `f64`)
 
 ```rust
 pub struct Complex<F> { pub re: F, pub im: F }     // Clone Copy Debug Default PartialEq Display
@@ -147,8 +150,6 @@ number. What has to change, in order:
 8. **`linalg.rs`.** `matmul` / `dot` use the generic loop (`matrixmultiply` has no complex GEMM; a 4-real-GEMM
    split is the later optimisation). `det`, `inv`, `solve` become generic over `ComplexFloat` with pivoting on `norm()`;
    `eigh` (Hermitian) and `svd` follow after `.h()` (conjugate transpose) exists. Not part of the first complex release.
-9. **Unify `KFloat` and `Float`.** Rename the methods of `KFloat` that clash with `Float` (or fold the two traits) so
-   that `Float: KFloat` can be a supertrait without E0034 ambiguity. Then the wrappers in `api.rs` can bound on
-   `Float` alone and generic user code can call them.
+9. ~~Unify `KFloat` and `Float`~~ done: the kernels are written over `Float` plus a sealed supertrait (M0).
 
 Estimated size: items 1-3 and 5 are mechanical (about a day), 6-7 are small, 8 is the only real project.

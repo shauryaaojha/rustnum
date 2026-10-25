@@ -31,16 +31,16 @@ mod element;
 mod extra;
 mod layout;
 mod manip;
-mod npz;
 mod misc;
+mod npz;
 mod ops;
 mod reduce;
 mod slicing;
 mod ufunc;
 
+pub mod fft;
 pub mod io;
 pub mod linalg;
-pub mod fft;
 pub mod poly;
 pub mod random;
 
@@ -49,6 +49,11 @@ pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
 pub use creation::*;
 pub use element::{Element, Float, Num};
 pub use manip::*;
+pub use misc::{
+    Complex, angle, angle_deg, bartlett, blackman, copysign, divmod, ediff1d, ediff1d_with,
+    float_power, floor_divide, fmod, gcd, hamming, hanning, heaviside, kaiser, lcm, ldexp,
+    logaddexp, logaddexp2, nextafter, remainder,
+};
 pub use ops::*;
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use ufunc::*;

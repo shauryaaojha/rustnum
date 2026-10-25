@@ -8,6 +8,26 @@
 
 use super::math_kernels::*;
 use super::tests_util::{Report, check};
+use crate::{Array, Float};
+
+// `rint`, `fix`, `fabs`, `positive` and `negative` have no kernel of their own any more: the public
+// `Array` methods delegate to the core (`round`, `trunc`, `abs`, copy, `Neg`). The NumPy tables for
+// them now run through those array methods on 0-d arrays.
+fn rint<F: Float>(x: F) -> F {
+    Array::scalar(x).rint().item()
+}
+fn fix<F: Float>(x: F) -> F {
+    Array::scalar(x).fix().item()
+}
+fn fabs<F: Float>(x: F) -> F {
+    Array::scalar(x).fabs().item()
+}
+fn positive<F: Float>(x: F) -> F {
+    Array::scalar(x).positive().item()
+}
+fn negative<F: Float>(x: F) -> F {
+    Array::scalar(x).negative().item()
+}
 
 #[test]
 fn sinc_f64() {

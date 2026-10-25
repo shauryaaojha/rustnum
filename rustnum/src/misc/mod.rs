@@ -1,14 +1,19 @@
 //! NumPy's remaining element-wise math, window functions and a complex number type.
 //!
-//! Step A (this module today): scalar kernels, windows and `Complex<F>`, tested against NumPy.
-//! Step B (`api.rs.pending`): the public `Array` wrappers, enabled once the core `Array<T>` lands.
-//!
-//! Nothing here is re-exported yet, so the items are only used by the tests for now.
-#![allow(dead_code)]
+//! - `math_kernels`: scalar kernels written once over the core [`Float`](crate::Float) trait
+//!   (plus its sealed supertrait `FloatHooks`), tested against NumPy 2.3.
+//! - `window_kernels`: `hanning`, `hamming`, `blackman`, `bartlett`, `kaiser`.
+//! - `complex`: `Complex<F>`.
+//! - `api`: the public `Array` methods and free functions, re-exported from the crate root.
 
+mod api;
 mod complex;
 mod math_kernels;
 mod window_kernels;
+
+pub use api::*;
+pub use complex::Complex;
+pub use math_kernels::FloatHooks;
 
 #[cfg(test)]
 mod tests_complex;
