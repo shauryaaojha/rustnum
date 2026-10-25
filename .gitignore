@@ -8,3 +8,4 @@ __pycache__/
 !/rustnum/tests/fixtures/.gitkeep
 /tasks/*.log
 /.claude/
+/.cargo/
