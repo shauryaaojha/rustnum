@@ -83,12 +83,39 @@ The full NumPy to rustnum table is in [`docs/NUMPY_MAPPING.md`](docs/NUMPY_MAPPI
 | GEMM | OpenBLAS / MKL | `matrixmultiply` (pure Rust) |
 | File format | `.npy`, `.npz` | `.npy` and CSV (no `.npz`) |
 
-Not in v0.1: complex numbers, `float16`, structured and datetime dtypes, masked arrays, `fft`,
-polynomials, `.npz`, `einsum`, fancy indexing with index arrays on several axes.
+Not in v0.1: a complex dtype (`Complex<F>` exists as a scalar type; `np::fft` returns `(re, im)` pairs),
+`float16`, structured and datetime dtypes, masked arrays, fancy indexing with index arrays on several axes.
 
 ## Benchmarks
 
-<!-- BENCH TABLE -->
+Median times in milliseconds, lower is better. Windows 11, 18 hardware threads, Rust 1.99.1 (`--release`,
+`rayon` on), NumPy 2.3.2 with OpenBLAS 0.3.30. rustnum: `cargo bench -p rustnum --bench core`.
+NumPy: `python tools/bench_numpy.py`. Both were run on an idle machine.
+
+| Benchmark | NumPy | rustnum | Faster |
+|---|---:|---:|---|
+| add (1e6 f64, contiguous) | 3.04 | 2.67 | rustnum 1.1x |
+| add broadcast ([1000,1000] + [1000]) | 3.04 | 4.13 | NumPy 1.4x |
+| sum (1e7 f64) | 7.05 | 1.84 | rustnum 3.8x |
+| mean_axis(0) [1000,1000] | 0.42 | 4.30 | NumPy 10x |
+| transpose().to_contiguous() [1000,1000] | 3.26 | 6.50 | NumPy 2.0x |
+| exp (1e6 f64) | 5.76 | 3.25 | rustnum 1.8x |
+| sort (1e6 f64) | 12.02 | 32.29 | NumPy 2.7x |
+| inv (200x200) | 0.97 * | 6.12 | NumPy 6.3x |
+| svd (100x100) | 6.87 | 113.04 | NumPy 16x |
+| matmul (256x256 f64) | 0.69 | 0.66 | about equal |
+| matmul (512x512 f64) | 2.68 | 5.16 | NumPy 1.9x |
+| matmul (1024x1024 f64) | 17.43 | 35.81 | NumPy 2.1x |
+
+\* NumPy `inv` measured with `OPENBLAS_NUM_THREADS=1`. With default threading it took 85–102 ms on this machine
+(an OpenBLAS threading problem on Windows), which would make rustnum look 17x faster; that comparison is not fair.
+
+Where rustnum is slower, and why:
+- `mean_axis(0)`, `transpose().to_contiguous()`: reductions and copies across a strided axis walk memory in the
+  wrong order. Cache-blocked kernels are the next optimization.
+- `svd`, `inv`: pure-Rust one-sided Jacobi SVD and unblocked LU against LAPACK's blocked algorithms.
+- `sort`: single-threaded comparison sort with NaN handling, against NumPy's SIMD sort.
+- Large `matmul`: `matrixmultiply` is about half the speed of OpenBLAS at 512+.
 
 ## Tests
 

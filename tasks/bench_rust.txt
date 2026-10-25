@@ -1,0 +1,23 @@
+kernel_gemm_f64/256     time:   [1.2111 ms 1.2481 ms 1.2846 ms]
+kernel_gemm_f64/512     time:   [6.5876 ms 6.9779 ms 7.4742 ms]
+kernel_gemm_f64/1024    time:   [44.627 ms 46.374 ms 48.190 ms]
+kernel_inv_f64_200      time:   [5.0541 ms 5.1222 ms 5.1929 ms]
+kernel_svd_f64_100      time:   [10.939 ms 11.165 ms 11.407 ms]
+add (1e6 f64, contiguous)
+                        time:   [2.6456 ms 2.6656 ms 2.6857 ms]
+add broadcast ([1000,1000] + [1000])
+                        time:   [4.0943 ms 4.1309 ms 4.1690 ms]
+sum (1e7 f64)           time:   [1.8295 ms 1.8429 ms 1.8569 ms]
+mean_axis(0) [1000,1000]
+                        time:   [4.2133 ms 4.3013 ms 4.3988 ms]
+transpose().to_contiguous() [1000,1000]
+                        time:   [6.4004 ms 6.4957 ms 6.5949 ms]
+exp (1e6 f64)           time:   [3.2145 ms 3.2482 ms 3.2827 ms]
+sort (1e6 f64)          time:   [31.887 ms 32.290 ms 32.700 ms]
+inv (200x200)           time:   [6.0254 ms 6.1228 ms 6.2230 ms]
+svd (100x100)           time:   [111.96 ms 113.04 ms 114.13 ms]
+matmul (256x256 f64)    time:   [635.67 µs 657.04 µs 680.59 µs]
+matmul transposed view (256x256 f64)
+                        time:   [633.58 µs 650.86 µs 668.87 µs]
+matmul (512x512 f64)    time:   [5.0447 ms 5.1623 ms 5.2905 ms]
+matmul (1024x1024 f64)  time:   [35.034 ms 35.807 ms 36.668 ms]
