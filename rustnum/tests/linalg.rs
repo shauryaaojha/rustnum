@@ -350,3 +350,45 @@ fn norms_and_products() {
     assert_close(&linalg::tensordot_n(&x, &y, 1), &x.matmul(&y), 1e-12);
     assert_eq!(linalg::vdot(&x, &x), x.iter().map(|v| v * v).sum::<f64>());
 }
+
+/// Naive triple loop used as an independent oracle for the tiled parallel GEMM.
+fn naive_matmul(a: &np::Array<f64>, b: &np::Array<f64>) -> Vec<f64> {
+    let (m, k, n) = (a.shape()[0], a.shape()[1], b.shape()[1]);
+    let mut out = vec![0.0; m * n];
+    for i in 0..m {
+        for p in 0..k {
+            let x = a.get(&[i, p]);
+            for j in 0..n {
+                out[i * n + j] += x * b.get(&[p, j]);
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn tiled_parallel_matmul_matches_naive_on_views_and_edge_tiles() {
+    // 600 x 300 @ 300 x 530 spans several 256-wide tiles with ragged edges, so the
+    // parallel path runs; A is a transposed view and B a sliced view.
+    let a_base = np::Array::from_shape_fn(&[300, 600], |ix| {
+        ((ix[0] * 7 + ix[1] * 3) % 17) as f64 - 8.0
+    });
+    let b_base = np::Array::from_shape_fn(&[300, 540], |ix| {
+        ((ix[0] * 5 + ix[1] * 11) % 13) as f64 - 6.0
+    });
+    let a = a_base.t();
+    let b = b_base.slice(&np::s![.., 5..535]);
+    let got = a.matmul(&b);
+    assert_eq!(got.shape(), &[600, 530]);
+    assert_eq!(got.to_vec(), naive_matmul(&a, &b));
+}
+
+#[test]
+fn tiled_parallel_matmul_f32_matches_f64() {
+    let a = np::Array::from_shape_fn(&[520, 260], |ix| ((ix[0] + 2 * ix[1]) % 9) as f64 - 4.0);
+    let b = np::Array::from_shape_fn(&[260, 700], |ix| ((3 * ix[0] + ix[1]) % 7) as f64 - 3.0);
+    let exact = a.matmul(&b);
+    let single = a.astype::<f32>().matmul(&b.astype::<f32>());
+    // Small integers: every product and partial sum is exact in f32 too.
+    assert_eq!(single.astype::<f64>().to_vec(), exact.to_vec());
+}

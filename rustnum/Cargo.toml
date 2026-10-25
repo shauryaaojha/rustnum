@@ -11,7 +11,8 @@ repository.workspace = true
 
 [features]
 default = ["rayon"]
-rayon = ["dep:rayon", "matrixmultiply/threading"]
+# matrixmultiply's own threading is capped at 4 threads; rustnum tiles large GEMMs over rayon instead.
+rayon = ["dep:rayon"]
 
 [dependencies]
 matrixmultiply = "0.3"
