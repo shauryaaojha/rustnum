@@ -37,6 +37,8 @@ mod ufunc;
 
 pub mod io;
 pub mod linalg;
+pub mod fft;
+pub mod poly;
 pub mod random;
 
 pub use array::Array;
