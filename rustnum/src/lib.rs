@@ -28,6 +28,7 @@ mod broadcast;
 mod creation;
 mod display;
 mod element;
+mod extra;
 mod layout;
 mod manip;
 mod ops;
