@@ -8,3 +8,6 @@
 // wired, these callable internal kernels have no non-test call sites.
 #[allow(dead_code)]
 pub(crate) mod kernels;
+
+#[cfg(test)]
+mod tests;
