@@ -1,0 +1,294 @@
+//! PENDING: array-level `.npz` wrappers. Not compiled yet (the extension keeps it out of the build).
+//!
+//! To wire it up once `crate::io::{to_npy_bytes, from_npy_bytes}` and `crate::Error` exist:
+//! 1. `git mv rustnum/src/npz/api.rs.pending rustnum/src/npz/api.rs`
+//! 2. in `rustnum/src/npz/mod.rs` add `pub(crate) mod api;` and remove `#![allow(dead_code)]`
+//!    (keep `#[allow(dead_code)]` on any kernel you decide not to use, e.g. `write_npz_file`);
+//! 3. in `rustnum/src/io.rs` add `pub use crate::npz::api::{load_npz, savez, savez_compressed, NpzFile};`
+//!    so the public paths are `np::io::savez`, `np::io::savez_compressed`, `np::io::load_npz`
+//!    and `np::io::NpzFile`, each defined once.
+//!
+//! Assumptions about code that did not exist when this was written (adjust if they differ):
+//! - `crate::io::to_npy_bytes<T: Element>(a: &Array<T>) -> Vec<u8>` (infallible) and
+//!   `crate::io::from_npy_bytes<T: Element>(bytes: &[u8]) -> Result<Array<T>>`, which returns
+//!   `Error::DType` when the file's dtype is not `T`;
+//! - `Error` has the variants `Format(String)` and `Io(std::io::Error)` (a `From<std::io::Error>`
+//!   impl is also fine; then replace the explicit mapping below).
+
+use std::path::Path;
+
+use super::{NpzArchive, NpzError, npz_to_bytes};
+use crate::io::{from_npy_bytes, to_npy_bytes};
+use crate::{Array, Element, Error, Result};
+
+impl From<NpzError> for Error {
+    fn from(e: NpzError) -> Error {
+        match e {
+            NpzError::Io(io) => Error::Io(io),
+            other => Error::Format(other.to_string()),
+        }
+    }
+}
+
+fn savez_impl<T: Element>(
+    path: &Path,
+    arrays: &[(&str, &Array<T>)],
+    compress: bool,
+) -> Result<()> {
+    let members: Vec<(String, Vec<u8>)> = arrays
+        .iter()
+        .map(|(name, a)| ((*name).to_string(), to_npy_bytes(a)))
+        .collect();
+    let bytes = npz_to_bytes(&members, compress)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// Saves several named arrays into one uncompressed `.npz` file, like `np.savez(path, **arrays)`.
+///
+/// Every array is stored as `<name>.npy` inside a ZIP archive, so NumPy can read the file with
+/// `np.load`. All arrays in one call have the same element type `T`; names must be non-empty and
+/// unique, otherwise an `Err` is returned.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let a = np::array![1.0, 2.0, 3.0];
+/// let b = np::array![4.0, 5.0, 6.0];
+/// let path = std::env::temp_dir().join("rustnum_savez_doc.npz");
+/// np::io::savez(&path, &[("a", &a), ("b", &b)]).unwrap();
+///
+/// let loaded = np::io::load_npz::<f64>(&path).unwrap();
+/// assert_eq!(loaded[0].0, "a");
+/// assert_eq!(loaded[1].1, b);
+/// # std::fs::remove_file(&path).unwrap();
+/// ```
+pub fn savez<T: Element>(path: impl AsRef<Path>, arrays: &[(&str, &Array<T>)]) -> Result<()> {
+    savez_impl(path.as_ref(), arrays, false)
+}
+
+/// Saves several named arrays into one DEFLATE-compressed `.npz` file, like
+/// `np.savez_compressed(path, **arrays)`.
+///
+/// Same layout as [`savez`]; members that do not shrink are stored uncompressed. NumPy reads the
+/// result with `np.load`.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let zeros = np::zeros::<f64>(&[1000]);
+/// let path = std::env::temp_dir().join("rustnum_savez_compressed_doc.npz");
+/// np::io::savez_compressed(&path, &[("zeros", &zeros)]).unwrap();
+///
+/// // 8000 bytes of data shrink to a few hundred bytes on disk.
+/// assert!(std::fs::metadata(&path).unwrap().len() < 1000);
+/// let loaded = np::io::load_npz::<f64>(&path).unwrap();
+/// assert_eq!(loaded[0].1, zeros);
+/// # std::fs::remove_file(&path).unwrap();
+/// ```
+pub fn savez_compressed<T: Element>(
+    path: impl AsRef<Path>,
+    arrays: &[(&str, &Array<T>)],
+) -> Result<()> {
+    savez_impl(path.as_ref(), arrays, true)
+}
+
+/// Loads every array of an `.npz` file, like `dict(np.load(path))`.
+///
+/// Returns `(name, array)` pairs in file order, with the `.npy` suffix removed from the names.
+/// All members must have dtype `T`; otherwise the first mismatch returns `Error::DType`. Use
+/// [`NpzFile`] to read members of different dtypes one at a time.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let m = np::array![[1.0, 2.0], [3.0, 4.0]];
+/// let path = std::env::temp_dir().join("rustnum_load_npz_doc.npz");
+/// np::io::savez(&path, &[("m", &m)]).unwrap();
+///
+/// let loaded = np::io::load_npz::<f64>(&path).unwrap();
+/// assert_eq!(loaded.len(), 1);
+/// assert_eq!(loaded[0].0, "m");
+/// assert_eq!(loaded[0].1.shape(), &[2, 2]);
+/// // Asking for the wrong dtype is an error, not a silent cast.
+/// assert!(np::io::load_npz::<i64>(&path).is_err());
+/// # std::fs::remove_file(&path).unwrap();
+/// ```
+pub fn load_npz<T: Element>(path: impl AsRef<Path>) -> Result<Vec<(String, Array<T>)>> {
+    let archive = NpzArchive::open(path)?;
+    archive
+        .read_all()?
+        .into_iter()
+        .map(|(name, blob)| Ok((name, from_npy_bytes::<T>(&blob)?)))
+        .collect()
+}
+
+/// An opened `.npz` file whose arrays are decompressed only when requested, like `np.load(path)`
+/// on a `.npz` (`NpzFile` in NumPy).
+///
+/// Opening reads only the table of contents, so a large archive with many arrays costs almost
+/// nothing until you call [`NpzFile::get`]. Members may have different dtypes; pick the type per
+/// call.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let weights = np::array![0.5, 1.5];
+/// let path = std::env::temp_dir().join("rustnum_npzfile_doc.npz");
+/// np::io::savez_compressed(&path, &[("weights", &weights)]).unwrap();
+///
+/// let file = np::io::NpzFile::open(&path).unwrap();
+/// assert_eq!(file.keys(), ["weights"]);
+/// let w = file.get::<f64>("weights").unwrap();
+/// assert_eq!(w, weights);
+/// assert!(file.get::<f64>("missing").is_err());
+/// # std::fs::remove_file(&path).unwrap();
+/// ```
+#[derive(Debug)]
+pub struct NpzFile {
+    archive: NpzArchive,
+}
+
+impl NpzFile {
+    /// Opens an `.npz` file and reads its table of contents, like `np.load(path)`.
+    ///
+    /// # Examples
+    /// ```
+    /// use rustnum as np;
+    ///
+    /// let path = std::env::temp_dir().join("rustnum_npzfile_open_doc.npz");
+    /// np::io::savez(&path, &[("x", &np::array![1.0])]).unwrap();
+    /// assert!(np::io::NpzFile::open(&path).is_ok());
+    /// assert!(np::io::NpzFile::open("no/such/file.npz").is_err());
+    /// # std::fs::remove_file(&path).unwrap();
+    /// ```
+    pub fn open(path: impl AsRef<Path>) -> Result<NpzFile> {
+        Ok(NpzFile {
+            archive: NpzArchive::open(path)?,
+        })
+    }
+
+    /// Names of the stored arrays in file order, like `npzfile.files`.
+    ///
+    /// # Examples
+    /// ```
+    /// use rustnum as np;
+    ///
+    /// let path = std::env::temp_dir().join("rustnum_npzfile_keys_doc.npz");
+    /// let (a, b) = (np::array![1.0], np::array![2.0]);
+    /// np::io::savez(&path, &[("first", &a), ("second", &b)]).unwrap();
+    /// let file = np::io::NpzFile::open(&path).unwrap();
+    /// assert_eq!(file.keys(), ["first", "second"]);
+    /// # std::fs::remove_file(&path).unwrap();
+    /// ```
+    pub fn keys(&self) -> Vec<String> {
+        self.archive.keys()
+    }
+
+    /// Reads one array by name, like `npzfile[name]`.
+    ///
+    /// Returns `Error::DType` if the stored dtype is not `T`, and `Error::Format` if the name is
+    /// not in the file or the data is corrupt (bad CRC, bad compressed stream).
+    ///
+    /// # Examples
+    /// ```
+    /// use rustnum as np;
+    ///
+    /// let path = std::env::temp_dir().join("rustnum_npzfile_get_doc.npz");
+    /// let ids = np::array![1_i64, 2, 3];
+    /// let x = np::array![0.5];
+    /// np::io::savez(&path, &[("x", &x)]).unwrap();
+    /// np::io::savez(&path, &[("ids", &ids)]).unwrap();
+    /// let file = np::io::NpzFile::open(&path).unwrap();
+    /// assert_eq!(file.get::<i64>("ids").unwrap(), ids);
+    /// assert!(file.get::<f64>("ids").is_err()); // wrong dtype
+    /// # std::fs::remove_file(&path).unwrap();
+    /// ```
+    pub fn get<T: Element>(&self, name: &str) -> Result<Array<T>> {
+        let blob = self.archive.read(name)?;
+        from_npy_bytes::<T>(&blob)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::npz::testutil::{Python, TempDir};
+
+    #[test]
+    fn savez_load_roundtrip_f64() {
+        let dir = TempDir::new();
+        let a = Array::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let b = Array::from_vec(vec![0.25; 5], &[5]);
+        for (compress, name) in [(false, "p.npz"), (true, "c.npz")] {
+            let path = dir.path(name);
+            if compress {
+                savez_compressed(&path, &[("a", &a), ("b", &b)]).unwrap();
+            } else {
+                savez(&path, &[("a", &a), ("b", &b)]).unwrap();
+            }
+            let loaded = load_npz::<f64>(&path).unwrap();
+            assert_eq!(loaded.len(), 2);
+            assert_eq!(loaded[0], ("a".to_string(), a.clone()));
+            assert_eq!(loaded[1], ("b".to_string(), b.clone()));
+        }
+    }
+
+    #[test]
+    fn load_npz_rejects_wrong_dtype() {
+        let dir = TempDir::new();
+        let path = dir.path("i.npz");
+        let a = Array::from_vec(vec![1_i64, 2, 3], &[3]);
+        savez(&path, &[("a", &a)]).unwrap();
+        assert!(matches!(load_npz::<f64>(&path), Err(Error::DType { .. })));
+        assert_eq!(load_npz::<i64>(&path).unwrap()[0].1, a);
+    }
+
+    #[test]
+    fn savez_rejects_duplicate_and_empty_names() {
+        let dir = TempDir::new();
+        let a = Array::from_vec(vec![1.0], &[1]);
+        assert!(savez(dir.path("d.npz"), &[("a", &a), ("a", &a)]).is_err());
+        assert!(savez(dir.path("e.npz"), &[("", &a)]).is_err());
+    }
+
+    #[test]
+    fn npzfile_is_lazy_and_reports_missing_names() {
+        let dir = TempDir::new();
+        let path = dir.path("f.npz");
+        let a = Array::from_vec(vec![1.0, 2.0], &[2]);
+        savez_compressed(&path, &[("a", &a)]).unwrap();
+        let f = NpzFile::open(&path).unwrap();
+        assert_eq!(f.keys(), ["a"]);
+        assert_eq!(f.get::<f64>("a").unwrap(), a);
+        assert!(matches!(f.get::<f64>("nope"), Err(Error::Format(_))));
+        assert!(NpzFile::open(dir.path("missing.npz")).is_err());
+    }
+
+    #[test]
+    fn numpy_reads_and_writes_the_same_files() {
+        let Some(py) = Python::get() else { return };
+        let dir = TempDir::new();
+        let a = Array::from_vec((0..12).map(f64::from).collect(), &[3, 4]);
+        let ours = dir.path("ours.npz");
+        savez_compressed(&ours, &[("a", &a)]).unwrap();
+        let theirs = dir.path("theirs.npz");
+        let script = "import sys, numpy as np
+f = np.load(sys.argv[1])
+assert f['a'].shape == (3, 4) and f['a'].sum() == 66.0
+np.savez_compressed(sys.argv[2], z=np.arange(6, dtype=np.float64).reshape(2, 3))";
+        py.run(
+            script,
+            &[ours.to_str().unwrap(), theirs.to_str().unwrap()],
+            &[],
+        );
+        let loaded = load_npz::<f64>(&theirs).unwrap();
+        assert_eq!(loaded[0].0, "z");
+        assert_eq!(loaded[0].1.shape(), &[2, 3]);
+        assert_eq!(loaded[0].1[[1, 2]], 5.0);
+    }
+}

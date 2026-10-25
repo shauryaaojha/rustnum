@@ -31,6 +31,7 @@ mod element;
 mod extra;
 mod layout;
 mod manip;
+mod npz;
 mod ops;
 mod reduce;
 mod slicing;
