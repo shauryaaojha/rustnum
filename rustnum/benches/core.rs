@@ -1,6 +1,8 @@
-//! Benchmarks that are runnable before the Array-facing linalg adapters land.
+//! Criterion benchmarks. Array-level names match `tools/bench_numpy.py`; `kernel_*` benchmarks
+//! time the slice-level linear-algebra kernels directly.
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use rustnum as np;
 use std::hint::black_box;
 
 #[allow(dead_code)]
@@ -14,7 +16,7 @@ fn data(size: usize) -> Vec<f64> {
 }
 
 fn gemm_benches(c: &mut Criterion) {
-    let mut group = c.benchmark_group("gemm_f64");
+    let mut group = c.benchmark_group("kernel_gemm_f64");
     for dimension in [256_usize, 512, 1024] {
         let left = data(dimension * dimension);
         let right = data(dimension * dimension);
@@ -56,15 +58,68 @@ fn decomposition_benches(c: &mut Criterion) {
         }
         values
     };
-    c.bench_function("inv_f64_200", |bench| {
+    c.bench_function("kernel_inv_f64_200", |bench| {
         bench.iter(|| black_box(kernels::inv(black_box(&inverse_input), 200).unwrap()))
     });
 
     let svd_input = data(100 * 100);
-    c.bench_function("svd_f64_100", |bench| {
+    c.bench_function("kernel_svd_f64_100", |bench| {
         bench.iter(|| black_box(kernels::svd(black_box(&svd_input), 100, 100).unwrap()))
     });
 }
 
-criterion_group!(core, gemm_benches, decomposition_benches);
+fn array_data(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| ((i * 7919 % 10007) as f64) / 5003.5 - 1.0)
+        .collect()
+}
+
+fn array_benches(c: &mut Criterion) {
+    let million = np::Array::from_vec(array_data(1_000_000), &[1_000_000]);
+    let ten_million = np::Array::from_vec(array_data(10_000_000), &[10_000_000]);
+    let matrix = np::Array::from_vec(array_data(1_000_000), &[1_000, 1_000]);
+    let row = np::Array::from_vec(array_data(1_000), &[1_000]);
+    c.bench_function("add (1e6 f64, contiguous)", |b| {
+        b.iter(|| black_box(&million + &million))
+    });
+    c.bench_function("add broadcast ([1000,1000] + [1000])", |b| {
+        b.iter(|| black_box(&matrix + &row))
+    });
+    c.bench_function("sum (1e7 f64)", |b| b.iter(|| black_box(ten_million.sum())));
+    c.bench_function("mean_axis(0) [1000,1000]", |b| {
+        b.iter(|| black_box(matrix.mean_axis(0)))
+    });
+    c.bench_function("transpose().to_contiguous() [1000,1000]", |b| {
+        b.iter(|| black_box(matrix.t().to_contiguous()))
+    });
+    c.bench_function("exp (1e6 f64)", |b| b.iter(|| black_box(million.exp())));
+    c.bench_function("sort (1e6 f64)", |b| b.iter(|| black_box(million.sort())));
+
+    let mut inv_values = array_data(200 * 200);
+    for i in 0..200 {
+        inv_values[i * 200 + i] += 250.0;
+    }
+    let inv_input = np::Array::from_vec(inv_values, &[200, 200]);
+    c.bench_function("inv (200x200)", |b| {
+        b.iter(|| black_box(np::linalg::inv(&inv_input).unwrap()))
+    });
+    let svd_input = np::Array::from_vec(array_data(100 * 100), &[100, 100]);
+    c.bench_function("svd (100x100)", |b| {
+        b.iter(|| black_box(np::linalg::svd(&svd_input)))
+    });
+    for n in [256, 512, 1024] {
+        let left = np::Array::from_vec(array_data(n * n), &[n, n]);
+        let right = left.t();
+        c.bench_function(&format!("matmul ({n}x{n} f64)"), |b| {
+            b.iter(|| black_box(left.matmul(&left)))
+        });
+        if n == 256 {
+            c.bench_function("matmul transposed view (256x256 f64)", |b| {
+                b.iter(|| black_box(left.matmul(&right)))
+            });
+        }
+    }
+}
+
+criterion_group!(core, gemm_benches, decomposition_benches, array_benches);
 criterion_main!(core);

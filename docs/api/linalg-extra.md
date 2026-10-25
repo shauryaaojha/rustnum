@@ -2,7 +2,7 @@
 
 Additional `np::linalg` functions and behaviour changes. Same conventions as `docs/API.md`: names follow
 NumPy, misuse panics with NumPy-style wording, bad data returns `rustnum::Result`. Wrappers live in
-`rustnum/src/linalg/api.rs.pending` (not yet compiled); the numerical code is in `rustnum/src/linalg/kernels.rs`
+`rustnum/src/linalg/api.rs`; the numerical code is in `rustnum/src/linalg/kernels.rs`
 (slice-level, no `Array`). `F: Float` means `f32` or `f64`; `T: Num` also admits integers.
 
 v0.1 has **no complex dtype**. Functions whose NumPy result is complex return the real and imaginary parts as two
@@ -95,9 +95,10 @@ These were found by the NumPy parity tests and fixed in `kernels.rs`:
 ## Errors
 `Error::Singular`, `Error::NotPositiveDefinite` and `Error::Shape(String)` as in section 11. Non-convergence (NaN or
 infinite entries, or a QR iteration exceeding 300 steps per eigenvalue) is reported as
-`Error::Shape("Eigenvalues did not converge ...")` until the core `Error` gains a dedicated variant. Functions whose
-section 11 signature is not a `Result` (`eigh`, `svd`, `pinv`, `matrix_rank`, `eigvalsh`, `cond`, `slogdet`) panic with
-that message instead.
+`Error::NoConvergence(String)` with NumPy's wording: `"Eigenvalues did not converge"` for `eig`, `eigvals`, `eigh`,
+`eigvalsh`, and `"SVD did not converge"` for `svd`, `pinv`, `matrix_rank`, `cond`, `lstsq` and the SVD-based norms.
+Functions whose section 11 signature is not a `Result` (`eigh`, `svd`, `pinv`, `matrix_rank`, `eigvalsh`, `cond`,
+`slogdet`) panic with that message instead.
 
 ## Accuracy against NumPy 2.3.2 (float64)
 Measured by `rustnum/src/linalg/tests.rs`; entries are max abs error divided by `max(1, max|expected|)` on small
