@@ -77,5 +77,8 @@ fn main() {
 
     // Each centroid should be close to the center its blob was drawn around.
     let truth = np::array![[0.0, 0.0], [6.0, 6.0], [0.0, 7.0]];
-    assert!(centroids.allclose(&truth, 0.0, 0.3), "centroids are far from the true centers");
+    assert!(
+        centroids.allclose(&truth, 0.0, 0.3),
+        "centroids are far from the true centers"
+    );
 }

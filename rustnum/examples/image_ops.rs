@@ -38,7 +38,12 @@ fn main() -> np::Result<()> {
     let axis = np::linspace(0.0, 255.0, 64);
     let (xx, yy) = np::meshgrid(&axis, &axis);
     let img = ((&xx + &yy) * 0.5 + rng.normal(0.0, 20.0, &[64, 64])).clip(0.0, 255.0);
-    println!("image shape = {:?}, min = {:.1}, max = {:.1}", img.shape(), img.min(), img.max());
+    println!(
+        "image shape = {:?}, min = {:.1}, max = {:.1}",
+        img.shape(),
+        img.min(),
+        img.max()
+    );
 
     // Normalize to [0, 1].
     let lo = img.min();
@@ -50,7 +55,12 @@ fn main() -> np::Result<()> {
     let left_right = norm.flip(1);
     let up_down = norm.flip(0);
     let transposed = norm.t();
-    println!("flipped and transposed shapes: {:?} {:?} {:?}", left_right.shape(), up_down.shape(), transposed.shape());
+    println!(
+        "flipped and transposed shapes: {:?} {:?} {:?}",
+        left_right.shape(),
+        up_down.shape(),
+        transposed.shape()
+    );
     assert_eq!(left_right[[0, 0]], norm[[0, 63]]);
     assert_eq!(up_down[[0, 0]], norm[[63, 0]]);
     assert_eq!(transposed[[2, 5]], norm[[5, 2]]);
@@ -64,8 +74,15 @@ fn main() -> np::Result<()> {
     }
     let blurred = acc / 9.0;
     println!("blurred shape = {:?}", blurred.shape());
-    println!("std before = {:.4}, std after = {:.4}", norm.std(), blurred.std());
-    assert!(blurred.std() < norm.std(), "blur should reduce the spread of pixel values");
+    println!(
+        "std before = {:.4}, std after = {:.4}",
+        norm.std(),
+        blurred.std()
+    );
+    assert!(
+        blurred.std() < norm.std(),
+        "blur should reduce the spread of pixel values"
+    );
 
     // Check one pixel by hand: blurred[0, 0] is centered on pixel [1, 1], so it is
     // the mean of norm[0..3, 0..3].
