@@ -1,0 +1,388 @@
+//! Array-facing linalg adapters, intentionally not registered until Phase 1 is merged.
+//!
+//! This file uses only the documented Array surface.  On merge, move it to
+//! `api.rs`, declare it from `mod.rs`, and replace the temporary `NormOrd`
+//! import below with the project-wide spelling selected for `norm_axis`.
+
+use super::kernels::{self, KernelError, KernelFloat, NormOrd};
+use crate::{Array, Error, Float, Num, Result};
+
+fn shape_error(message: impl Into<String>) -> Error {
+    Error::Shape(message.into())
+}
+fn kernel_error(error: KernelError) -> Error {
+    match error {
+        KernelError::Singular => Error::Singular,
+        KernelError::NotPositiveDefinite => Error::NotPositiveDefinite,
+        KernelError::Shape => shape_error("Last 2 dimensions of the array must be square"),
+    }
+}
+fn matrix_shape<T>(a: &Array<T>) -> Result<(usize, usize)> {
+    if a.ndim() != 2 {
+        return Err(shape_error("expected a 2-dimensional array"));
+    }
+    Ok((a.shape()[0], a.shape()[1]))
+}
+fn square_shape<T>(a: &Array<T>) -> Result<usize> {
+    let (rows, cols) = matrix_shape(a)?;
+    if rows != cols {
+        return Err(shape_error("Last 2 dimensions of the array must be square"));
+    }
+    Ok(rows)
+}
+
+fn batch_offset(shape: &[usize], matrix_dims: usize, batch_shape: &[usize], batch: usize) -> usize {
+    let source_batch = &shape[..shape.len() - matrix_dims];
+    let mut source_index = 0;
+    let mut remaining = batch;
+    let mut coordinates = vec![0; batch_shape.len()];
+    for axis in (0..batch_shape.len()).rev() {
+        coordinates[axis] = remaining % batch_shape[axis];
+        remaining /= batch_shape[axis];
+    }
+    for source_axis in 0..source_batch.len() {
+        let output_axis = batch_shape.len() - source_batch.len() + source_axis;
+        let coordinate = if source_batch[source_axis] == 1 {
+            0
+        } else {
+            coordinates[output_axis]
+        };
+        source_index = source_index * source_batch[source_axis] + coordinate;
+    }
+    source_index * shape[shape.len() - matrix_dims..].iter().product::<usize>()
+}
+
+impl<T: Num> Array<T> {
+    /// Matrix product, like `np.matmul(a, b)`.
+    ///
+    /// ```ignore
+    /// let product = np::array![[1, 2]].matmul(&np::array![[3], [4]]);
+    /// assert_eq!(product.to_vec(), vec![11]);
+    /// ```
+    pub fn matmul(&self, other: &Array<T>) -> Array<T> {
+        assert!(
+            self.ndim() > 0 && other.ndim() > 0,
+            "matmul: Input operand 0 does not have enough dimensions"
+        );
+        let left_vector = self.ndim() == 1;
+        let right_vector = other.ndim() == 1;
+        let (m, k) = if left_vector {
+            (1, self.shape()[0])
+        } else {
+            (self.shape()[self.ndim() - 2], self.shape()[self.ndim() - 1])
+        };
+        let (other_k, n) = if right_vector {
+            (other.shape()[0], 1)
+        } else {
+            (
+                other.shape()[other.ndim() - 2],
+                other.shape()[other.ndim() - 1],
+            )
+        };
+        assert_eq!(
+            k, other_k,
+            "matmul: Input operand 1 has a mismatch in its core dimension 0"
+        );
+        let left_batch = if left_vector {
+            &[][..]
+        } else {
+            &self.shape()[..self.ndim() - 2]
+        };
+        let right_batch = if right_vector {
+            &[][..]
+        } else {
+            &other.shape()[..other.ndim() - 2]
+        };
+        let batch_dims = left_batch.len().max(right_batch.len());
+        let mut batch_shape = vec![1; batch_dims];
+        for axis in 0..batch_dims {
+            let left = if axis + left_batch.len() < batch_dims {
+                1
+            } else {
+                left_batch[axis + left_batch.len() - batch_dims]
+            };
+            let right = if axis + right_batch.len() < batch_dims {
+                1
+            } else {
+                right_batch[axis + right_batch.len() - batch_dims]
+            };
+            assert!(
+                left == right || left == 1 || right == 1,
+                "operands could not be broadcast together"
+            );
+            batch_shape[axis] = left.max(right);
+        }
+        let batches = batch_shape.iter().product::<usize>();
+        let left_data = self.to_vec();
+        let right_data = other.to_vec();
+        let mut result = Vec::with_capacity(batches * m * n);
+        let left_matrix_dims = if left_vector { 1 } else { 2 };
+        let right_matrix_dims = if right_vector { 1 } else { 2 };
+        for batch in 0..batches {
+            let left_start = batch_offset(self.shape(), left_matrix_dims, &batch_shape, batch);
+            let right_start = batch_offset(other.shape(), right_matrix_dims, &batch_shape, batch);
+            let block = kernels::gemm(
+                m,
+                n,
+                k,
+                &left_data[left_start..],
+                if left_vector { k as isize } else { k as isize },
+                1,
+                &right_data[right_start..],
+                if right_vector { 1 } else { n as isize },
+                1,
+            );
+            result.extend(block);
+        }
+        let mut output_shape = batch_shape;
+        if !left_vector {
+            output_shape.push(m);
+        }
+        if !right_vector {
+            output_shape.push(n);
+        }
+        Array::from_vec(result, &output_shape)
+    }
+
+    /// Dot product for vectors and matrices, like `np.dot(a, b)`.
+    pub fn dot(&self, other: &Array<T>) -> Array<T> {
+        assert!(
+            self.ndim() <= 2 && other.ndim() <= 2,
+            "dot only supports arrays with at most 2 dimensions"
+        );
+        self.matmul(other)
+    }
+
+    /// Sum along the main diagonal, like `np.trace(a)`.
+    pub fn trace(&self) -> T {
+        assert_eq!(
+            self.ndim(),
+            2,
+            "diag requires an array of at least two dimensions"
+        );
+        let data = self.to_vec();
+        let columns = self.shape()[1];
+        (0..self.shape()[0].min(columns)).fold(T::ZERO, |sum, i| sum + data[i * columns + i])
+    }
+}
+
+/// Linear-algebra functions, like `np.linalg`.
+pub mod linalg {
+    use super::*;
+
+    /// Outer product of two vectors, like `np.outer(a, b)`.
+    pub fn outer<F: Float + KernelFloat>(a: &Array<F>, b: &Array<F>) -> Array<F> {
+        let av = a.to_vec();
+        let bv = b.to_vec();
+        let mut output = Vec::with_capacity(av.len() * bv.len());
+        for &left in &av {
+            for &right in &bv {
+                output.push(left * right);
+            }
+        }
+        Array::from_vec(output, &[av.len(), bv.len()])
+    }
+
+    /// Inner product of two vectors, like `np.inner(a, b)`.
+    pub fn inner<F: Float + KernelFloat>(a: &Array<F>, b: &Array<F>) -> F {
+        assert_eq!(
+            a.size(),
+            b.size(),
+            "shapes are not aligned for inner product"
+        );
+        a.to_vec()
+            .into_iter()
+            .zip(b.to_vec())
+            .fold(F::ZERO, |sum, (x, y)| sum + x * y)
+    }
+
+    /// Determinant of a square matrix, like `np.linalg.det(a)`.
+    pub fn det<F: Float + KernelFloat>(a: &Array<F>) -> F {
+        let n = square_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        kernels::Lu::factor(&a.to_vec(), n)
+            .map(|factor| factor.det())
+            .unwrap_or(F::ZERO)
+    }
+
+    /// Inverse of a nonsingular square matrix, like `np.linalg.inv(a)`.
+    pub fn inv<F: Float + KernelFloat>(a: &Array<F>) -> Result<Array<F>> {
+        let n = square_shape(a)?;
+        kernels::inv(&a.to_vec(), n)
+            .map(|data| Array::from_vec(data, &[n, n]))
+            .map_err(kernel_error)
+    }
+
+    /// Solution of `a @ x = b`, like `np.linalg.solve(a, b)`.
+    pub fn solve<F: Float + KernelFloat>(a: &Array<F>, b: &Array<F>) -> Result<Array<F>> {
+        let n = square_shape(a)?;
+        assert!(
+            b.ndim() == 1 || b.ndim() == 2,
+            "solve: Input operand 1 must have one or two dimensions"
+        );
+        let rhs_cols = if b.ndim() == 1 { 1 } else { b.shape()[1] };
+        if b.shape()[0] != n {
+            return Err(shape_error(
+                "solve: Input operand 1 has a mismatch in its core dimension 0",
+            ));
+        }
+        kernels::Lu::factor(&a.to_vec(), n)
+            .and_then(|factor| factor.solve(&b.to_vec(), rhs_cols))
+            .map(|data| {
+                Array::from_vec(
+                    data,
+                    if b.ndim() == 1 {
+                        &[n][..]
+                    } else {
+                        &[n, rhs_cols][..]
+                    },
+                )
+            })
+            .map_err(kernel_error)
+    }
+
+    /// Least-squares solution, like `np.linalg.lstsq(a, b)`.
+    pub fn lstsq<F: Float + KernelFloat>(a: &Array<F>, b: &Array<F>) -> Result<Array<F>> {
+        let (rows, cols) = matrix_shape(a)?;
+        let rhs_cols = if b.ndim() == 1 {
+            1
+        } else if b.ndim() == 2 {
+            b.shape()[1]
+        } else {
+            return Err(shape_error("expected a vector or matrix right-hand side"));
+        };
+        if b.shape()[0] != rows {
+            return Err(shape_error("Incompatible dimensions"));
+        }
+        kernels::lstsq(&a.to_vec(), rows, cols, &b.to_vec(), rhs_cols)
+            .map(|data| {
+                Array::from_vec(
+                    data,
+                    if b.ndim() == 1 {
+                        &[cols][..]
+                    } else {
+                        &[cols, rhs_cols][..]
+                    },
+                )
+            })
+            .map_err(kernel_error)
+    }
+
+    /// Moore-Penrose pseudoinverse, like `np.linalg.pinv(a)`.
+    pub fn pinv<F: Float + KernelFloat>(a: &Array<F>) -> Array<F> {
+        let (rows, cols) = matrix_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        Array::from_vec(
+            kernels::pinv(&a.to_vec(), rows, cols).expect("valid matrix shape"),
+            &[cols, rows],
+        )
+    }
+
+    /// Frobenius or Euclidean norm, like `np.linalg.norm(a)`.
+    pub fn norm<F: Float + KernelFloat>(a: &Array<F>) -> F {
+        kernels::norm(&a.to_vec())
+    }
+
+    /// Per-axis norm, like `np.linalg.norm(a, ord=..., axis=...)`.
+    pub fn norm_axis<F: Float + KernelFloat>(a: &Array<F>, ord: NormOrd, axis: isize) -> Array<F> {
+        let (rows, cols) = matrix_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        let axis = if axis < 0 {
+            (2 + axis) as usize
+        } else {
+            axis as usize
+        };
+        Array::from_vec(
+            kernels::norm_axis(&a.to_vec(), rows, cols, axis, ord).expect("valid axis"),
+            &[if axis == 0 { cols } else { rows }],
+        )
+    }
+
+    /// Lower Cholesky factor, like `np.linalg.cholesky(a)`.
+    pub fn cholesky<F: Float + KernelFloat>(a: &Array<F>) -> Result<Array<F>> {
+        let n = square_shape(a)?;
+        kernels::cholesky(&a.to_vec(), n)
+            .map(|data| Array::from_vec(data, &[n, n]))
+            .map_err(kernel_error)
+    }
+
+    /// Reduced QR factorisation, like `np.linalg.qr(a, mode="reduced")`.
+    pub fn qr<F: Float + KernelFloat>(a: &Array<F>) -> (Array<F>, Array<F>) {
+        let (rows, cols) = matrix_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        let (q, r, reduced) = kernels::qr(&a.to_vec(), rows, cols).expect("valid matrix shape");
+        (
+            Array::from_vec(q, &[rows, reduced]),
+            Array::from_vec(r, &[reduced, cols]),
+        )
+    }
+
+    /// Symmetric eigendecomposition, like `np.linalg.eigh(a)`.
+    pub fn eigh<F: Float + KernelFloat>(a: &Array<F>) -> (Array<F>, Array<F>) {
+        let n = square_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        let (values, vectors) = kernels::eigh(&a.to_vec(), n).expect("valid matrix shape");
+        (
+            Array::from_vec(values, &[n]),
+            Array::from_vec(vectors, &[n, n]),
+        )
+    }
+
+    /// Reduced singular-value decomposition, like `np.linalg.svd(a, full_matrices=False)`.
+    pub fn svd<F: Float + KernelFloat>(a: &Array<F>) -> (Array<F>, Array<F>, Array<F>) {
+        let (rows, cols) = matrix_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        let (u, values, vt, reduced) =
+            kernels::svd(&a.to_vec(), rows, cols).expect("valid matrix shape");
+        (
+            Array::from_vec(u, &[rows, reduced]),
+            Array::from_vec(values, &[reduced]),
+            Array::from_vec(vt, &[reduced, cols]),
+        )
+    }
+
+    /// Numerical matrix rank, like `np.linalg.matrix_rank(a)`.
+    pub fn matrix_rank<F: Float + KernelFloat>(a: &Array<F>) -> usize {
+        let (rows, cols) = matrix_shape(a).unwrap_or_else(|error| panic!("{error}"));
+        kernels::matrix_rank(&a.to_vec(), rows, cols).expect("valid matrix shape")
+    }
+
+    /// Integer matrix power, like `np.linalg.matrix_power(a, n)`.
+    pub fn matrix_power<F: Float + KernelFloat>(a: &Array<F>, n: i32) -> Result<Array<F>> {
+        let size = square_shape(a)?;
+        let mut base = if n < 0 {
+            kernels::inv(&a.to_vec(), size).map_err(kernel_error)?
+        } else {
+            a.to_vec()
+        };
+        let mut exponent = n.unsigned_abs();
+        let mut output = vec![F::ZERO; size * size];
+        for i in 0..size {
+            output[i * size + i] = F::ONE;
+        }
+        while exponent != 0 {
+            if exponent & 1 == 1 {
+                output = kernels::gemm(
+                    size,
+                    size,
+                    size,
+                    &output,
+                    size as isize,
+                    1,
+                    &base,
+                    size as isize,
+                    1,
+                );
+            }
+            exponent >>= 1;
+            if exponent != 0 {
+                base = kernels::gemm(
+                    size,
+                    size,
+                    size,
+                    &base,
+                    size as isize,
+                    1,
+                    &base,
+                    size as isize,
+                    1,
+                );
+            }
+        }
+        Ok(Array::from_vec(output, &[size, size]))
+    }
+}

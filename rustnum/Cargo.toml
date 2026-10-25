@@ -11,7 +11,7 @@ repository.workspace = true
 
 [features]
 default = ["rayon"]
-rayon = ["dep:rayon"]
+rayon = ["dep:rayon", "matrixmultiply/threading"]
 
 [dependencies]
 matrixmultiply = "0.3"
