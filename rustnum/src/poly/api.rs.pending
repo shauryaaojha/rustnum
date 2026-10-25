@@ -1,0 +1,239 @@
+//! PENDING: public `np::poly` wrappers over `Array<T>`. Not compiled yet.
+//!
+//! To enable once the core `Array<T>` lands (docs/API.md section 2 and 3):
+//!   1. `git mv api.rs.pending api.rs`
+//!   2. in `poly/mod.rs` add `mod api;` and
+//!      `pub use api::{polyval, polyfit, polyadd, polysub, polymul, polydiv, polyder, polyint, roots};`
+//!      and drop the `#[allow(dead_code)]` on `mod kernels`.
+//!   3. fix the `use crate::...` line below if the core crate re-exports differ.
+//!   4. `cargo test -p rustnum --doc` (every example below is a doctest).
+//!
+//! Only these core items from docs/API.md are used: `Array::{from_vec, shape, ndim, iter, map}`,
+//! `IntoArray`, `Float` (`to_f64` / `from_f64` via `Element`). Coefficients are always highest
+//! power first and 1-d. Arithmetic is done in `f64` internally (also for `f32` arrays).
+//!
+//! v0.1 limitation: rustnum has no complex dtype, so `roots` returns `(re, im)`.
+
+use super::kernels;
+use crate::{Array, Float, IntoArray};
+
+/// Coefficients as `Vec<f64>`; panics unless the array is 1-d.
+fn coeffs<F: Float>(p: impl IntoArray<F>, name: &str) -> Vec<f64> {
+    let a = p.into_array();
+    assert!(
+        a.ndim() == 1,
+        "{name} must be a rank-1 array (got {} dimensions)",
+        a.ndim()
+    );
+    a.iter().map(|v| v.to_f64()).collect()
+}
+
+/// Build a 1-d `Array<F>` from `f64` data.
+fn vector<F: Float>(v: Vec<f64>) -> Array<F> {
+    let n = v.len();
+    Array::from_vec(v.into_iter().map(F::from_f64).collect(), &[n])
+}
+
+/// Evaluate a polynomial at `x`, like `np.polyval(p, x)`.
+///
+/// `p` holds the coefficients highest power first (`[1, 0, -1]` is `x^2 - 1`) and is evaluated
+/// with Horner's rule. `x` may be a scalar or an array of any shape; the result has the shape of
+/// `x`.
+///
+/// # Panics
+/// If `p` is not 1-d.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let p = np::array![3.0, 0.0, 1.0]; // 3x^2 + 1
+/// assert_eq!(np::poly::polyval(&p, 2.0).item(), 13.0);
+///
+/// let q = np::array![1.0, 0.0, -1.0]; // x^2 - 1
+/// let y = np::poly::polyval(&q, &np::array![1.0, 2.0, 3.0]);
+/// assert_eq!(y.to_vec(), vec![0.0, 3.0, 8.0]);
+/// ```
+pub fn polyval<F: Float>(p: impl IntoArray<F>, x: impl IntoArray<F>) -> Array<F> {
+    let pc = coeffs(p, "p");
+    x.into_array()
+        .map(|v| F::from_f64(kernels::polyval(&pc, v.to_f64())))
+}
+
+/// Least-squares polynomial fit of degree `deg`, like `np.polyfit(x, y, deg)`.
+///
+/// Returns the `deg + 1` coefficients, highest power first. `x` and `y` are 1-d and equally long.
+/// The Vandermonde columns are scaled to unit norm and solved by column-pivoted Householder QR.
+/// When the system is rank deficient (e.g. fewer points than `deg + 1`) NumPy warns and returns the
+/// minimum-norm solution; this returns a basic solution (free coefficients zero) that fits equally
+/// well. Weights (`w=`), `cov=` and 2-d `y` are not supported in v0.1.
+///
+/// # Panics
+/// If `x` or `y` is not 1-d, `x` is empty, or the lengths differ (`expected x and y to have same length`).
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let x = np::array![0.0, 1.0, 2.0, 3.0];
+/// let y = np::array![1.0, 3.0, 7.0, 13.0]; // 1 + x + x^2
+/// let c = np::poly::polyfit(&x, &y, 2);
+/// let c: Vec<f64> = c.to_vec();
+/// for (got, want) in c.iter().zip([1.0, 1.0, 1.0]) {
+///     assert!((got - want).abs() < 1e-10);
+/// }
+/// ```
+pub fn polyfit<F: Float>(x: impl IntoArray<F>, y: impl IntoArray<F>, deg: usize) -> Array<F> {
+    let (xc, yc) = (coeffs(x, "x"), coeffs(y, "y"));
+    vector(kernels::polyfit(&xc, &yc, deg))
+}
+
+/// Sum of two polynomials, like `np.polyadd(a, b)`.
+///
+/// The constant terms line up, so the shorter input is padded on the left. Leading zeros in the
+/// result are kept, as in NumPy.
+///
+/// # Panics
+/// If either input is not 1-d.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let s = np::poly::polyadd(&np::array![1.0, 2.0, 3.0], &np::array![1.0, 1.0]);
+/// assert_eq!(s.to_vec(), vec![1.0, 3.0, 4.0]);
+/// ```
+pub fn polyadd<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    vector(kernels::polyadd(&coeffs(a, "a"), &coeffs(b, "b")))
+}
+
+/// Difference of two polynomials, like `np.polysub(a, b)`.
+///
+/// # Panics
+/// If either input is not 1-d.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let d = np::poly::polysub(&np::array![1.0, 2.0, 3.0], &np::array![1.0, 1.0]);
+/// assert_eq!(d.to_vec(), vec![1.0, 1.0, 2.0]);
+/// ```
+pub fn polysub<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    vector(kernels::polysub(&coeffs(a, "a"), &coeffs(b, "b")))
+}
+
+/// Product of two polynomials, like `np.polymul(a, b)` (a convolution of the coefficients).
+///
+/// # Panics
+/// If either input is not 1-d or is empty.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// // (x + 1)(x - 1) = x^2 - 1
+/// let p = np::poly::polymul(&np::array![1.0, 1.0], &np::array![1.0, -1.0]);
+/// assert_eq!(p.to_vec(), vec![1.0, 0.0, -1.0]);
+/// ```
+pub fn polymul<F: Float>(a: impl IntoArray<F>, b: impl IntoArray<F>) -> Array<F> {
+    vector(kernels::polymul(&coeffs(a, "a"), &coeffs(b, "b")))
+}
+
+/// Polynomial division `u / v`, like `np.polydiv(u, v)`; returns `(quotient, remainder)`.
+///
+/// Follows NumPy exactly, including dropping leading remainder coefficients that are
+/// numerically zero (`|r[0]| <= 1e-8`).
+///
+/// # Panics
+/// If either input is not 1-d or empty, or the leading coefficient of `v` is zero.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// // (x^2 - 3x + 2) / (x - 1) = x - 2, remainder 0
+/// let (q, r) = np::poly::polydiv(&np::array![1.0, -3.0, 2.0], &np::array![1.0, -1.0]);
+/// assert_eq!(q.to_vec(), vec![1.0, -2.0]);
+/// assert_eq!(r.to_vec(), vec![0.0]);
+/// ```
+pub fn polydiv<F: Float>(u: impl IntoArray<F>, v: impl IntoArray<F>) -> (Array<F>, Array<F>) {
+    let (q, r) = kernels::polydiv(&coeffs(u, "u"), &coeffs(v, "v"));
+    (vector(q), vector(r))
+}
+
+/// `m`-th derivative of a polynomial, like `np.polyder(p, m)`.
+///
+/// `m = 0` returns `p` unchanged. Differentiating a constant gives an empty array, as in NumPy.
+///
+/// # Panics
+/// If `p` is not 1-d.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let p = np::array![3.0, 2.0, 1.0]; // 3x^2 + 2x + 1
+/// assert_eq!(np::poly::polyder(&p, 1).to_vec(), vec![6.0, 2.0]);
+/// assert_eq!(np::poly::polyder(&p, 2).to_vec(), vec![6.0]);
+/// ```
+pub fn polyder<F: Float>(p: impl IntoArray<F>, m: usize) -> Array<F> {
+    vector(kernels::polyder(&coeffs(p, "p"), m))
+}
+
+/// `m`-fold antiderivative of a polynomial, like `np.polyint(p, m, k)`.
+///
+/// `k` holds the integration constants, lowest integration first. An empty slice means all zeros,
+/// a single value is used for every integration, and otherwise `k.len()` must be at least `m`
+/// (extra values are ignored). The result has `m` more coefficients than `p`.
+///
+/// # Panics
+/// If `p` is not 1-d, or `k` has more than one value but fewer than `m`
+/// (`k must be a scalar or a rank-1 array of length 1 or >m.`).
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// let p = np::array![3.0, 2.0, 1.0];
+/// assert_eq!(np::poly::polyint(&p, 1, &[]).to_vec(), vec![1.0, 1.0, 1.0, 0.0]);
+/// assert_eq!(np::poly::polyint(&p, 1, &[5.0]).to_vec(), vec![1.0, 1.0, 1.0, 5.0]);
+/// ```
+pub fn polyint<F: Float>(p: impl IntoArray<F>, m: usize, k: &[F]) -> Array<F> {
+    let kc: Vec<f64> = k.iter().map(|v| v.to_f64()).collect();
+    vector(kernels::polyint(&coeffs(p, "p"), m, &kc))
+}
+
+/// Roots of a polynomial, like `np.roots(p)`; returns `(re, im)` arrays of length `degree`.
+///
+/// Computed as the eigenvalues of the companion matrix (Francis double-shift QR with balancing,
+/// with an Aberth-Ehrlich fallback). Leading zero coefficients are ignored and trailing zeros give
+/// zero roots at the end. Complex-conjugate pairs appear with the positive imaginary part first;
+/// the order otherwise follows NumPy/LAPACK in nearly all cases (not guaranteed in general).
+///
+/// **v0.1 limitation:** no complex dtype, so the roots are returned as two real arrays.
+/// NumPy returns a real array when every root is real; check `im` for that.
+///
+/// # Panics
+/// If `p` is not 1-d.
+///
+/// # Examples
+/// ```
+/// use rustnum as np;
+///
+/// // x^2 - 3x + 2 = (x - 2)(x - 1)
+/// let (re, im) = np::poly::roots(&np::array![1.0, -3.0, 2.0]);
+/// let re: Vec<f64> = re.to_vec();
+/// assert!((re[0] - 2.0).abs() < 1e-12 && (re[1] - 1.0).abs() < 1e-12);
+/// assert_eq!(im.to_vec(), vec![0.0, 0.0]);
+///
+/// // x^2 + 1 = 0 -> +i, -i
+/// let (_, im) = np::poly::roots(&np::array![1.0, 0.0, 1.0]);
+/// assert!(im.to_vec()[0] > 0.0);
+/// ```
+pub fn roots<F: Float>(p: impl IntoArray<F>) -> (Array<F>, Array<F>) {
+    let r = kernels::roots(&coeffs(p, "p"));
+    let re = r.iter().map(|c| c.0).collect();
+    let im = r.iter().map(|c| c.1).collect();
+    (vector(re), vector(im))
+}

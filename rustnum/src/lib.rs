@@ -17,3 +17,6 @@ mod ufunc;
 pub mod io;
 pub mod linalg;
 pub mod random;
+
+pub mod fft;
+pub mod poly;
