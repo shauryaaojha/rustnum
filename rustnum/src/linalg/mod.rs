@@ -1,13 +1,21 @@
-//! Linear-algebra implementation details.
+//! Linear algebra, like `numpy.linalg`.
 //!
-//! The public `Array` adapters live in `api.rs.pending` until the core array
-//! implementation is merged.  Keeping numerical kernels independent makes
-//! them directly testable and usable by those adapters without copies.
+//! `Array` methods `matmul`, `dot` and `trace` live in this module's implementation; the free
+//! functions here (`inv`, `solve`, `svd`, ...) accept `f32` and `f64` arrays. Numerical kernels
+//! work on plain slices in `kernels` and are covered by NumPy-verified tests.
+//!
+//! ```
+//! use rustnum as np;
+//! let a = np::array![[4.0, 7.0], [2.0, 6.0]];
+//! let ainv = np::linalg::inv(&a).unwrap();
+//! assert!(a.matmul(&ainv).allclose(np::eye::<f64>(2), 1e-12, 1e-12));
+//! ```
 
-// The Array adapter is intentionally pending the Phase 1 merge.  Until it is
-// wired, these callable internal kernels have no non-test call sites.
-#[allow(dead_code)]
+mod api;
 pub(crate) mod kernels;
+
+pub use api::*;
+pub use kernels::NormOrd;
 
 #[cfg(test)]
 mod tests;

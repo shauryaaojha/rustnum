@@ -8,7 +8,7 @@
 use core::ops::{Add, Div, Mul, Neg, Sub};
 
 /// The deliberately small floating-point surface needed by these kernels.
-pub(crate) trait KernelFloat:
+pub trait KernelFloat:
     Copy
     + Default
     + PartialOrd
@@ -82,12 +82,23 @@ pub(crate) enum KernelError {
     NoConvergence,
 }
 
-/// Norm orders supported by [`vector_norm`], [`matrix_norm`] and [`norm_axis`].
+/// Norm orders accepted by `norm_axis`, `vector_norm`, `matrix_norm` and `cond_ord`, like the
+/// `ord` argument of `np.linalg.norm`.
 ///
 /// Vectors accept every order except `Nuc`; matrices accept every order except `Zero`.
 /// `Fro` and `Two` coincide for vectors.
+///
+/// ```
+/// use rustnum as np;
+/// use np::linalg::NormOrd;
+/// let x = np::array![3.0, -4.0];
+/// assert_eq!(np::linalg::vector_norm(&x, NormOrd::One), 7.0);
+/// assert_eq!(np::linalg::vector_norm(&x, NormOrd::Inf), 4.0);
+/// let a = np::array![[1.0, -2.0], [3.0, -4.0]];
+/// assert_eq!(np::linalg::matrix_norm(&a, NormOrd::Inf), 7.0);
+/// ```
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NormOrd {
+pub enum NormOrd {
     /// Frobenius norm (`'fro'`).
     Fro,
     /// `ord=2`: Euclidean norm of a vector, largest singular value of a matrix.

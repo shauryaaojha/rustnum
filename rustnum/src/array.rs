@@ -155,6 +155,13 @@ impl<T: Element> Array<T> {
     pub fn is_contiguous(&self) -> bool {
         contiguous(&self.shape, &self.strides)
     }
+    /// Storage, element offset of the first element and element strides, for zero-copy kernels.
+    ///
+    /// Element `index` lives at `data[offset + sum(index[i] * strides[i])]`; strides may be
+    /// zero (broadcast) or negative (flipped views).
+    pub(crate) fn raw_parts(&self) -> (&[T], usize, &[isize]) {
+        (&self.data, self.offset, &self.strides)
+    }
     pub(crate) fn offset_of(&self, index: &[usize]) -> usize {
         assert!(
             index.len() == self.ndim(),

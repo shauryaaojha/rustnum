@@ -127,11 +127,26 @@ pub enum Error {
     /// assert_eq!(np::Error::Format("bad format".into()).to_string(),"bad format");
     /// ```
     Format(String),
+    /// An iterative linear-algebra solver did not converge, like NumPy's `LinAlgError`.
+    ///
+    /// The message follows NumPy: `"Eigenvalues did not converge"` for `eig`/`eigh` and
+    /// `"SVD did not converge"` for `svd` and the functions built on it. Non-finite input is
+    /// the usual cause.
+    /// ```
+    /// use rustnum as np;
+    /// let e=np::Error::NoConvergence("SVD did not converge".into());
+    /// assert_eq!(e.to_string(),"SVD did not converge");
+    /// let a=np::array![[1.0,2.0],[f64::NAN,4.0]];
+    /// assert_eq!(np::linalg::eig(&a).unwrap_err().to_string(),"Eigenvalues did not converge");
+    /// ```
+    NoConvergence(String),
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Shape(s) | Self::Parse(s) | Self::Format(s) => write!(f, "{s}"),
+            Self::Shape(s) | Self::Parse(s) | Self::Format(s) | Self::NoConvergence(s) => {
+                write!(f, "{s}")
+            }
             Self::DType { expected, found } => {
                 write!(f, "expected dtype {expected}, found {found}")
             }
