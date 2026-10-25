@@ -21,9 +21,13 @@ pub(crate) trait KernelFloat:
     const ZERO: Self;
     const ONE: Self;
     const EPSILON: Self;
+    const INFINITY: Self;
 
     fn abs(self) -> Self;
     fn sqrt(self) -> Self;
+    fn ln(self) -> Self;
+    fn max_of(self, other: Self) -> Self;
+    fn is_finite(self) -> bool;
     fn sin_cos(self) -> (Self, Self);
     fn atan2(self, other: Self) -> Self;
     fn from_usize(value: usize) -> Self;
@@ -35,12 +39,22 @@ macro_rules! impl_kernel_float {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
             const EPSILON: Self = <$type>::EPSILON;
+            const INFINITY: Self = <$type>::INFINITY;
 
             fn abs(self) -> Self {
                 self.abs()
             }
             fn sqrt(self) -> Self {
                 self.sqrt()
+            }
+            fn ln(self) -> Self {
+                self.ln()
+            }
+            fn max_of(self, other: Self) -> Self {
+                self.max(other)
+            }
+            fn is_finite(self) -> bool {
+                self.is_finite()
             }
             fn sin_cos(self) -> (Self, Self) {
                 self.sin_cos()
@@ -64,15 +78,34 @@ pub(crate) enum KernelError {
     Singular,
     NotPositiveDefinite,
     Shape,
+    /// An iterative eigen/singular-value solver did not converge (e.g. NaN input).
+    NoConvergence,
 }
 
-/// Matrix norm choices supported by [`matrix_norm`] and [`norm_axis`].
+/// Norm orders supported by [`vector_norm`], [`matrix_norm`] and [`norm_axis`].
+///
+/// Vectors accept every order except `Nuc`; matrices accept every order except `Zero`.
+/// `Fro` and `Two` coincide for vectors.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NormOrd {
+    /// Frobenius norm (`'fro'`).
     Fro,
+    /// `ord=2`: Euclidean norm of a vector, largest singular value of a matrix.
     Two,
+    /// `ord=1`: sum of magnitudes, or maximum absolute column sum.
     One,
+    /// `ord=inf`: largest magnitude, or maximum absolute row sum.
     Inf,
+    /// `ord=-1`: harmonic-type norm of a vector, or minimum absolute column sum.
+    NegOne,
+    /// `ord=-2`: vector `(sum |x|^-2)^(-1/2)`, or smallest singular value of a matrix.
+    NegTwo,
+    /// `ord=-inf`: smallest magnitude, or minimum absolute row sum.
+    NegInf,
+    /// `ord=0` (vectors only): number of non-zero entries.
+    Zero,
+    /// `ord='nuc'` (matrices only): sum of singular values.
+    Nuc,
 }
 
 fn matrix_fits<T>(
@@ -105,26 +138,40 @@ fn assert_matrix_fits<T>(
     );
 }
 
+/// True when no two distinct `(row, col)` positions map to the same element offset.
+///
+/// A broadcast (zero) stride or a layout whose strides overlap would alias.  The common
+/// layouts (row- or column-major, possibly with padding) are accepted in O(1); only
+/// unusual interleaved strides pay for an O(m n log(m n)) sort.
 fn output_is_non_aliasing(rows: usize, cols: usize, row_stride: isize, col_stride: isize) -> bool {
-    for first_row in 0..rows {
-        for first_col in 0..cols {
-            let first = first_row as isize * row_stride + first_col as isize * col_stride;
-            for second_row in first_row..rows {
-                let start_col = if second_row == first_row {
-                    first_col + 1
-                } else {
-                    0
-                };
-                for second_col in start_col..cols {
-                    if first == second_row as isize * row_stride + second_col as isize * col_stride
-                    {
-                        return false;
-                    }
-                }
-            }
+    if rows <= 1 && cols <= 1 {
+        return true;
+    }
+    if rows <= 1 {
+        return col_stride != 0;
+    }
+    if cols <= 1 {
+        return row_stride != 0;
+    }
+    let (row_step, col_step) = (row_stride.unsigned_abs(), col_stride.unsigned_abs());
+    if row_step == 0 || col_step == 0 {
+        return false;
+    }
+    // The faster-varying axis must fit entirely inside one step of the slower axis.
+    if col_step <= row_step && col_step * cols <= row_step {
+        return true;
+    }
+    if row_step <= col_step && row_step * rows <= col_step {
+        return true;
+    }
+    let mut offsets = Vec::with_capacity(rows * cols);
+    for row in 0..rows {
+        for col in 0..cols {
+            offsets.push(row as isize * row_stride + col as isize * col_stride);
         }
     }
-    true
+    offsets.sort_unstable();
+    offsets.windows(2).all(|pair| pair[0] != pair[1])
 }
 
 /// Generic, allocation-owning matrix product for element types without a BLAS path.
@@ -413,14 +460,30 @@ pub(crate) fn qr<T: KernelFloat>(
         q_full[i * rows + i] = T::ONE;
     }
     for k in 0..reduced {
-        let mut norm_sq = T::ZERO;
+        // Like LAPACK's dlarfg: when everything below the diagonal is already zero the
+        // reflector is the identity (this also covers zero columns and the last column of a
+        // square matrix), so R keeps its sign and Q is untouched.
+        let mut scale = T::ZERO;
+        let mut below = T::ZERO;
         for row in k..rows {
-            norm_sq = norm_sq + r[row * cols + k] * r[row * cols + k];
+            let magnitude = r[row * cols + k].abs();
+            if magnitude > scale {
+                scale = magnitude;
+            }
+            if row > k && magnitude > below {
+                below = magnitude;
+            }
         }
-        let norm = norm_sq.sqrt();
-        if norm <= T::EPSILON {
+        if below == T::ZERO {
             continue;
         }
+        // Scaled 2-norm so tiny or huge columns neither underflow nor overflow.
+        let mut norm_sq = T::ZERO;
+        for row in k..rows {
+            let scaled = r[row * cols + k] / scale;
+            norm_sq = norm_sq + scaled * scaled;
+        }
+        let norm = norm_sq.sqrt() * scale;
         let leading = r[k * cols + k];
         let signed_norm = if leading >= T::ZERO { norm } else { -norm };
         let mut v = vec![T::ZERO; rows - k];
@@ -461,7 +524,32 @@ pub(crate) fn qr<T: KernelFloat>(
     Ok((q, reduced_r, reduced))
 }
 
-/// Least-squares solution using the reduced QR factorisation for tall systems.
+/// Minimum-norm least-squares solution `pinv(A) B` (what NumPy's SVD-based `lstsq` returns).
+fn lstsq_min_norm<T: KernelFloat>(
+    a: &[T],
+    rows: usize,
+    cols: usize,
+    b: &[T],
+    rhs_cols: usize,
+) -> Result<Vec<T>, KernelError> {
+    let inverse = pinv(a, rows, cols)?;
+    Ok(gemm(
+        cols,
+        rhs_cols,
+        rows,
+        &inverse,
+        rows as isize,
+        1,
+        b,
+        rhs_cols as isize,
+        1,
+    ))
+}
+
+/// Least-squares solution, like `np.linalg.lstsq(a, b, rcond=None)[0]`.
+///
+/// Full-column-rank tall systems use Householder QR; under-determined or rank-deficient systems
+/// return the minimum-norm solution through the SVD, exactly as NumPy does.
 pub(crate) fn lstsq<T: KernelFloat>(
     a: &[T],
     rows: usize,
@@ -473,20 +561,26 @@ pub(crate) fn lstsq<T: KernelFloat>(
         return Err(KernelError::Shape);
     }
     if rows < cols {
-        let inverse = pinv(a, rows, cols)?;
-        return Ok(gemm(
-            cols,
-            rhs_cols,
-            rows,
-            &inverse,
-            rows as isize,
-            1,
-            b,
-            rhs_cols as isize,
-            1,
-        ));
+        return lstsq_min_norm(a, rows, cols, b, rhs_cols);
     }
     let (q, r, _) = qr(a, rows, cols)?;
+    // QR without pivoting is only trusted when R is comfortably non-singular; otherwise NumPy's
+    // answer is the minimum-norm solution, which the SVD route below reproduces.
+    let mut largest = T::ZERO;
+    let mut smallest = T::INFINITY;
+    for i in 0..cols {
+        let d = r[i * cols + i].abs();
+        if d > largest {
+            largest = d;
+        }
+        if d < smallest {
+            smallest = d;
+        }
+    }
+    let hundred = T::from_usize(100);
+    if cols > 0 && smallest <= largest * T::EPSILON * T::from_usize(rows) * hundred {
+        return lstsq_min_norm(a, rows, cols, b, rhs_cols);
+    }
     let mut y = vec![T::ZERO; cols * rhs_cols];
     for i in 0..cols {
         for j in 0..rhs_cols {
@@ -497,9 +591,6 @@ pub(crate) fn lstsq<T: KernelFloat>(
         }
     }
     for row in (0..cols).rev() {
-        if r[row * cols + row].abs() <= T::EPSILON {
-            return Err(KernelError::Singular);
-        }
         for j in 0..rhs_cols {
             let mut value = y[row * rhs_cols + j];
             for k in row + 1..cols {
@@ -528,11 +619,22 @@ pub(crate) fn eigh<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>)
     if a.len() != n * n {
         return Err(KernelError::Shape);
     }
+    if !a.iter().all(|value| value.is_finite()) {
+        return Err(KernelError::NoConvergence);
+    }
     let mut work = a.to_vec();
     let mut vectors = vec![T::ZERO; n * n];
     for i in 0..n {
         vectors[i * n + i] = T::ONE;
     }
+    // Convergence is relative to the size of the matrix, so 1e-20 * A and 1e20 * A behave like A.
+    let mut scale = T::ZERO;
+    for &value in a {
+        if value.abs() > scale {
+            scale = value.abs();
+        }
+    }
+    let threshold = T::EPSILON * scale;
     let max_sweeps = (n.max(1) * n.max(1) * 32).max(32);
     for _ in 0..max_sweeps {
         let mut largest = T::ZERO;
@@ -543,17 +645,13 @@ pub(crate) fn eigh<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>)
                 }
             }
         }
-        let mut diagonal = T::ZERO;
-        for i in 0..n {
-            diagonal = diagonal + work[i * n + i].abs();
-        }
-        if largest <= T::EPSILON * (diagonal + T::ONE) {
+        if largest <= threshold {
             break;
         }
         for p in 0..n {
             for q in p + 1..n {
                 let off = work[p * n + q];
-                if off.abs() <= T::EPSILON {
+                if off.abs() <= threshold {
                     continue;
                 }
                 let half = T::ONE / (T::ONE + T::ONE);
@@ -623,6 +721,9 @@ pub(crate) fn svd<T: KernelFloat>(
     if a.len() != rows * cols {
         return Err(KernelError::Shape);
     }
+    if !a.iter().all(|value| value.is_finite()) {
+        return Err(KernelError::NoConvergence);
+    }
     let reduced = rows.min(cols);
     let mut columns = a.to_vec();
     let mut right = vec![T::ZERO; cols * cols];
@@ -644,7 +745,7 @@ pub(crate) fn svd<T: KernelFloat>(
                 }
                 if alpha == T::ZERO
                     || beta == T::ZERO
-                    || gamma.abs() <= T::EPSILON * (alpha * beta).sqrt()
+                    || gamma.abs() <= T::EPSILON * alpha.sqrt() * beta.sqrt()
                 {
                     continue;
                 }
@@ -692,17 +793,27 @@ pub(crate) fn svd<T: KernelFloat>(
     let mut u = vec![T::ZERO; rows * reduced];
     let mut s = vec![T::ZERO; reduced];
     let mut vt = vec![T::ZERO; reduced * cols];
+    // Singular values at or below NumPy's rank tolerance have no meaningful direction: their U
+    // columns are completed to an orthonormal basis below instead of dividing rounding noise.
+    let largest_singular = ordering.first().map_or(T::ZERO, |&i| singular_all[i]);
+    let tolerance = T::EPSILON * T::from_usize(rows.max(cols)) * largest_singular;
+    let mut deficient = Vec::new();
     for new_col in 0..reduced {
         let old_col = ordering[new_col];
         s[new_col] = singular_all[old_col];
-        if s[new_col] > T::EPSILON {
+        if s[new_col] > tolerance {
             for row in 0..rows {
                 u[row * reduced + new_col] = columns[row * cols + old_col] / s[new_col];
             }
+        } else {
+            deficient.push(new_col);
         }
         for col in 0..cols {
             vt[new_col * cols + col] = right[col * cols + old_col];
         }
+    }
+    complete_orthonormal_columns(&mut u, rows, reduced, &deficient);
+    for new_col in 0..reduced {
         let sign = largest_component(
             &(0..rows)
                 .map(|row| u[row * reduced + new_col])
@@ -718,6 +829,49 @@ pub(crate) fn svd<T: KernelFloat>(
         }
     }
     Ok((u, s, vt, reduced))
+}
+
+/// Fills the listed (all-zero) columns of the `rows x cols` matrix `u` so that every column is
+/// unit length and orthogonal to the others (Gram-Schmidt against the standard basis).
+fn complete_orthonormal_columns<T: KernelFloat>(
+    u: &mut [T],
+    rows: usize,
+    cols: usize,
+    missing: &[usize],
+) {
+    for &target in missing {
+        let mut best_residual: Vec<T> = Vec::new();
+        let mut best_norm = T::ZERO;
+        for axis in 0..rows {
+            let mut candidate = vec![T::ZERO; rows];
+            candidate[axis] = T::ONE;
+            // Two passes keep the result orthogonal to working precision.
+            for _ in 0..2 {
+                for other in 0..cols {
+                    if other == target || (missing.contains(&other) && other > target) {
+                        continue;
+                    }
+                    let mut dot = T::ZERO;
+                    for row in 0..rows {
+                        dot = dot + candidate[row] * u[row * cols + other];
+                    }
+                    for row in 0..rows {
+                        candidate[row] = candidate[row] - dot * u[row * cols + other];
+                    }
+                }
+            }
+            let length = norm(&candidate);
+            if length > best_norm {
+                best_norm = length;
+                best_residual = candidate;
+            }
+        }
+        if best_norm > T::ZERO {
+            for row in 0..rows {
+                u[row * cols + target] = best_residual[row] / best_norm;
+            }
+        }
+    }
 }
 
 /// Moore-Penrose pseudoinverse computed from the reduced SVD.
@@ -767,7 +921,40 @@ pub(crate) fn norm<T: KernelFloat>(data: &[T]) -> T {
         .sqrt()
 }
 
-/// Matrix norm: Frobenius, spectral (2), maximum column sum (1), or maximum row sum (∞).
+/// Vector norm of contiguous data for every order except [`NormOrd::Nuc`], like `np.linalg.norm(x, ord)`.
+pub(crate) fn vector_norm<T: KernelFloat>(data: &[T], order: NormOrd) -> Result<T, KernelError> {
+    match order {
+        NormOrd::Fro | NormOrd::Two => Ok(norm(data)),
+        NormOrd::One => Ok(data.iter().fold(T::ZERO, |sum, &value| sum + value.abs())),
+        NormOrd::Inf => Ok(data.iter().fold(T::ZERO, |best, &value| {
+            if value.abs() > best {
+                value.abs()
+            } else {
+                best
+            }
+        })),
+        NormOrd::NegInf => {
+            let mut values = data.iter().map(|value| value.abs());
+            let first = values.next().ok_or(KernelError::Shape)?;
+            Ok(values.fold(first, |best, value| if value < best { value } else { best }))
+        }
+        NormOrd::Zero => Ok(T::from_usize(
+            data.iter().filter(|&&value| value != T::ZERO).count(),
+        )),
+        NormOrd::NegOne => Ok(T::ONE
+            / data
+                .iter()
+                .fold(T::ZERO, |sum, &value| sum + T::ONE / value.abs())),
+        NormOrd::NegTwo => Ok(T::ONE
+            / data
+                .iter()
+                .fold(T::ZERO, |sum, &value| sum + T::ONE / (value * value))
+                .sqrt()),
+        NormOrd::Nuc => Err(KernelError::Shape),
+    }
+}
+
+/// Matrix norm for every order except [`NormOrd::Zero`], like `np.linalg.norm(A, ord)`.
 pub(crate) fn matrix_norm<T: KernelFloat>(
     a: &[T],
     rows: usize,
@@ -777,39 +964,58 @@ pub(crate) fn matrix_norm<T: KernelFloat>(
     if a.len() != rows * cols {
         return Err(KernelError::Shape);
     }
+    let sums = |by_column: bool| -> Vec<T> {
+        let (outer, inner) = if by_column {
+            (cols, rows)
+        } else {
+            (rows, cols)
+        };
+        (0..outer)
+            .map(|o| {
+                (0..inner).fold(T::ZERO, |sum, i| {
+                    let index = if by_column {
+                        i * cols + o
+                    } else {
+                        o * cols + i
+                    };
+                    sum + a[index].abs()
+                })
+            })
+            .collect()
+    };
+    let largest = |values: &[T]| {
+        values
+            .iter()
+            .fold(T::ZERO, |best, &v| if v > best { v } else { best })
+    };
+    let smallest = |values: &[T]| -> Result<T, KernelError> {
+        let (&first, rest) = values.split_first().ok_or(KernelError::Shape)?;
+        Ok(rest
+            .iter()
+            .fold(first, |best, &v| if v < best { v } else { best }))
+    };
     match order {
         NormOrd::Fro => Ok(norm(a)),
         NormOrd::Two => Ok(svd(a, rows, cols)?.1.first().copied().unwrap_or(T::ZERO)),
-        NormOrd::One => {
-            let mut best = T::ZERO;
-            for col in 0..cols {
-                let mut sum = T::ZERO;
-                for row in 0..rows {
-                    sum = sum + a[row * cols + col].abs();
-                }
-                if sum > best {
-                    best = sum;
-                }
-            }
-            Ok(best)
+        NormOrd::NegTwo => {
+            let (_, s, _, _) = svd(a, rows, cols)?;
+            s.last().copied().ok_or(KernelError::Shape)
         }
-        NormOrd::Inf => {
-            let mut best = T::ZERO;
-            for row in 0..rows {
-                let mut sum = T::ZERO;
-                for col in 0..cols {
-                    sum = sum + a[row * cols + col].abs();
-                }
-                if sum > best {
-                    best = sum;
-                }
-            }
-            Ok(best)
-        }
+        NormOrd::Nuc => Ok(svd(a, rows, cols)?
+            .1
+            .into_iter()
+            .fold(T::ZERO, |sum, value| sum + value)),
+        NormOrd::One => Ok(largest(&sums(true))),
+        NormOrd::NegOne => smallest(&sums(true)),
+        NormOrd::Inf => Ok(largest(&sums(false))),
+        NormOrd::NegInf => smallest(&sums(false)),
+        NormOrd::Zero => Err(KernelError::Shape),
     }
 }
 
-/// Norm along one axis of a contiguous two-dimensional matrix.
+/// Vector norm along one axis of a contiguous two-dimensional matrix.
+///
+/// `axis=0` reduces over rows (one result per column), `axis=1` over columns.
 pub(crate) fn norm_axis<T: KernelFloat>(
     a: &[T],
     rows: usize,
@@ -820,41 +1026,901 @@ pub(crate) fn norm_axis<T: KernelFloat>(
     if a.len() != rows * cols || axis > 1 {
         return Err(KernelError::Shape);
     }
-    let len = if axis == 0 { cols } else { rows };
-    let mut output = vec![T::ZERO; len];
+    let (len, count) = if axis == 0 {
+        (cols, rows)
+    } else {
+        (rows, cols)
+    };
+    let mut slice = vec![T::ZERO; count];
+    let mut output = Vec::with_capacity(len);
     for out in 0..len {
-        let mut sum = T::ZERO;
-        let mut max = T::ZERO;
-        let count = if axis == 0 { rows } else { cols };
-        for index in 0..count {
-            let value = if axis == 0 {
-                a[index * cols + out].abs()
+        for (index, slot) in slice.iter_mut().enumerate() {
+            *slot = if axis == 0 {
+                a[index * cols + out]
             } else {
-                a[out * cols + index].abs()
+                a[out * cols + index]
             };
-            sum = sum + value;
-            if value > max {
-                max = value;
-            }
         }
-        output[out] = match order {
-            NormOrd::Fro | NormOrd::Two => {
-                let mut squares = T::ZERO;
-                for index in 0..count {
-                    let value = if axis == 0 {
-                        a[index * cols + out]
-                    } else {
-                        a[out * cols + index]
-                    };
-                    squares = squares + value * value;
-                }
-                squares.sqrt()
-            }
-            NormOrd::One => sum,
-            NormOrd::Inf => max,
-        };
+        output.push(vector_norm(&slice, order)?);
     }
     Ok(output)
+}
+
+// ---------------------------------------------------------------------------
+// Additional kernels: general eigenproblem, slogdet, cond, multi_dot, tensordot, ...
+// ---------------------------------------------------------------------------
+
+/// `(eigenvalue_re, eigenvalue_im, eigenvector_re, eigenvector_im)` of [`eig`].
+///
+/// Eigenvectors are the columns of the row-major `n x n` buffers: column `j` belongs to
+/// eigenvalue `j`.
+pub(crate) type Eig<T> = (Vec<T>, Vec<T>, Vec<T>, Vec<T>);
+
+/// Reduces `h` to upper Hessenberg form with Householder reflections (EISPACK `orthes`),
+/// accumulating the orthogonal similarity transform in `v`.
+fn hessenberg<T: KernelFloat>(h: &mut [T], v: &mut [T], n: usize) {
+    let high = n - 1;
+    let mut ort = vec![T::ZERO; n];
+    for m in 1..high {
+        let mut scale = T::ZERO;
+        for i in m..=high {
+            scale = scale + h[i * n + m - 1].abs();
+        }
+        if scale == T::ZERO {
+            continue;
+        }
+        let mut sum = T::ZERO;
+        for i in (m..=high).rev() {
+            ort[i] = h[i * n + m - 1] / scale;
+            sum = sum + ort[i] * ort[i];
+        }
+        let mut g = sum.sqrt();
+        if ort[m] > T::ZERO {
+            g = -g;
+        }
+        sum = sum - ort[m] * g;
+        ort[m] = ort[m] - g;
+        // H = (I - u u' / sum) H (I - u u' / sum)
+        for j in m..n {
+            let mut f = T::ZERO;
+            for i in (m..=high).rev() {
+                f = f + ort[i] * h[i * n + j];
+            }
+            f = f / sum;
+            for i in m..=high {
+                h[i * n + j] = h[i * n + j] - f * ort[i];
+            }
+        }
+        for i in 0..=high {
+            let mut f = T::ZERO;
+            for j in (m..=high).rev() {
+                f = f + ort[j] * h[i * n + j];
+            }
+            f = f / sum;
+            for j in m..=high {
+                h[i * n + j] = h[i * n + j] - f * ort[j];
+            }
+        }
+        ort[m] = scale * ort[m];
+        h[m * n + m - 1] = scale * g;
+    }
+    for i in 0..n {
+        for j in 0..n {
+            v[i * n + j] = if i == j { T::ONE } else { T::ZERO };
+        }
+    }
+    for m in (1..high).rev() {
+        if h[m * n + m - 1] == T::ZERO {
+            continue;
+        }
+        for i in m + 1..=high {
+            ort[i] = h[i * n + m - 1];
+        }
+        for j in m..=high {
+            let mut g = T::ZERO;
+            for i in m..=high {
+                g = g + ort[i] * v[i * n + j];
+            }
+            // Double division avoids possible underflow.
+            g = (g / ort[m]) / h[m * n + m - 1];
+            for i in m..=high {
+                v[i * n + j] = v[i * n + j] + g * ort[i];
+            }
+        }
+    }
+    // Entries below the subdiagonal only held the Householder vectors; clear them.
+    for i in 2..n {
+        for j in 0..i - 1 {
+            h[i * n + j] = T::ZERO;
+        }
+    }
+}
+
+/// Complex division `(xr + i xi) / (yr + i yi)`.
+fn complex_div<T: KernelFloat>(xr: T, xi: T, yr: T, yi: T) -> (T, T) {
+    if yr.abs() > yi.abs() {
+        let r = yi / yr;
+        let d = yr + r * yi;
+        ((xr + r * xi) / d, (xi - r * xr) / d)
+    } else {
+        let r = yr / yi;
+        let d = yi + r * yr;
+        ((r * xr + xi) / d, (r * xi - xr) / d)
+    }
+}
+
+/// Francis double-shift QR on the Hessenberg matrix `h` followed by back-substitution for the
+/// eigenvectors of the quasi-triangular form (EISPACK `hqr2`, as in JAMA).
+///
+/// On return `d`/`e` hold the real/imaginary parts of the eigenvalues, and `v` holds the real
+/// eigenvectors: for a complex pair `(j, j + 1)` with `e[j] > 0`, column `j` is the real part and
+/// column `j + 1` the imaginary part of the eigenvector for `d[j] + i e[j]`.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
+fn francis_qr<T: KernelFloat>(
+    h: &mut [T],
+    v: &mut [T],
+    d: &mut [T],
+    e: &mut [T],
+    nn: usize,
+) -> Result<(), KernelError> {
+    macro_rules! hm {
+        ($i:expr, $j:expr) => {
+            h[($i) as usize * nn + ($j) as usize]
+        };
+    }
+    macro_rules! vm {
+        ($i:expr, $j:expr) => {
+            v[($i) as usize * nn + ($j) as usize]
+        };
+    }
+    macro_rules! dd {
+        ($i:expr) => {
+            d[($i) as usize]
+        };
+    }
+    macro_rules! ee {
+        ($i:expr) => {
+            e[($i) as usize]
+        };
+    }
+    let zero = T::ZERO;
+    let one = T::ONE;
+    let two = one + one;
+    let eps = T::EPSILON;
+    let size = nn as isize;
+    let low = 0_isize;
+    let high = size - 1;
+    let mut n = size - 1;
+    let mut exshift = zero;
+    let (mut p, mut q, mut r, mut s, mut z) = (zero, zero, zero, zero, zero);
+    let (mut t, mut w, mut x, mut y);
+
+    let mut norm = zero;
+    for i in 0..size {
+        for j in (i - 1).max(0)..size {
+            norm = norm + hm!(i, j).abs();
+        }
+    }
+
+    let mut iter = 0_usize;
+    while n >= low {
+        // Look for a single small sub-diagonal element.
+        let mut l = n;
+        while l > low {
+            s = hm!(l - 1, l - 1).abs() + hm!(l, l).abs();
+            if s == zero {
+                s = norm;
+            }
+            if hm!(l, l - 1).abs() <= eps * s {
+                break;
+            }
+            l -= 1;
+        }
+
+        if l == n {
+            // One root found.
+            hm!(n, n) = hm!(n, n) + exshift;
+            dd!(n) = hm!(n, n);
+            ee!(n) = zero;
+            n -= 1;
+            iter = 0;
+        } else if l == n - 1 {
+            // Two roots found.
+            w = hm!(n, n - 1) * hm!(n - 1, n);
+            p = (hm!(n - 1, n - 1) - hm!(n, n)) / two;
+            q = p * p + w;
+            z = q.abs().sqrt();
+            hm!(n, n) = hm!(n, n) + exshift;
+            hm!(n - 1, n - 1) = hm!(n - 1, n - 1) + exshift;
+            x = hm!(n, n);
+            if q >= zero {
+                // Real pair.
+                z = if p >= zero { p + z } else { p - z };
+                dd!(n - 1) = x + z;
+                dd!(n) = dd!(n - 1);
+                if z != zero {
+                    dd!(n) = x - w / z;
+                }
+                ee!(n - 1) = zero;
+                ee!(n) = zero;
+                x = hm!(n, n - 1);
+                s = x.abs() + z.abs();
+                p = x / s;
+                q = z / s;
+                r = (p * p + q * q).sqrt();
+                p = p / r;
+                q = q / r;
+                for j in n - 1..size {
+                    z = hm!(n - 1, j);
+                    hm!(n - 1, j) = q * z + p * hm!(n, j);
+                    hm!(n, j) = q * hm!(n, j) - p * z;
+                }
+                for i in 0..=n {
+                    z = hm!(i, n - 1);
+                    hm!(i, n - 1) = q * z + p * hm!(i, n);
+                    hm!(i, n) = q * hm!(i, n) - p * z;
+                }
+                for i in low..=high {
+                    z = vm!(i, n - 1);
+                    vm!(i, n - 1) = q * z + p * vm!(i, n);
+                    vm!(i, n) = q * vm!(i, n) - p * z;
+                }
+            } else {
+                // Complex pair.
+                dd!(n - 1) = x + p;
+                dd!(n) = x + p;
+                ee!(n - 1) = z;
+                ee!(n) = -z;
+            }
+            n -= 2;
+            iter = 0;
+        } else {
+            // No convergence yet: form shift.
+            x = hm!(n, n);
+            y = zero;
+            w = zero;
+            if l < n {
+                y = hm!(n - 1, n - 1);
+                w = hm!(n, n - 1) * hm!(n - 1, n);
+            }
+            if iter == 10 {
+                // Wilkinson's original ad hoc shift.
+                exshift = exshift + x;
+                for i in low..=n {
+                    hm!(i, i) = hm!(i, i) - x;
+                }
+                s = hm!(n, n - 1).abs() + hm!(n - 1, n - 2).abs();
+                x = T::from_usize(3) / T::from_usize(4) * s;
+                y = x;
+                w = -(T::from_usize(7) / T::from_usize(16)) * s * s;
+            }
+            if iter == 30 {
+                // MATLAB's ad hoc shift.
+                s = (y - x) / two;
+                s = s * s + w;
+                if s > zero {
+                    s = s.sqrt();
+                    if y < x {
+                        s = -s;
+                    }
+                    s = x - w / ((y - x) / two + s);
+                    for i in low..=n {
+                        hm!(i, i) = hm!(i, i) - s;
+                    }
+                    exshift = exshift + s;
+                    x = T::from_usize(964) / T::from_usize(1000);
+                    y = x;
+                    w = x;
+                }
+            }
+            iter += 1;
+            if iter > 300 {
+                return Err(KernelError::NoConvergence);
+            }
+
+            // Look for two consecutive small sub-diagonal elements.
+            let mut m = n - 2;
+            while m >= l {
+                z = hm!(m, m);
+                r = x - z;
+                s = y - z;
+                p = (r * s - w) / hm!(m + 1, m) + hm!(m, m + 1);
+                q = hm!(m + 1, m + 1) - z - r - s;
+                r = hm!(m + 2, m + 1);
+                s = p.abs() + q.abs() + r.abs();
+                p = p / s;
+                q = q / s;
+                r = r / s;
+                if m == l {
+                    break;
+                }
+                if hm!(m, m - 1).abs() * (q.abs() + r.abs())
+                    < eps
+                        * (p.abs() * (hm!(m - 1, m - 1).abs() + z.abs() + hm!(m + 1, m + 1).abs()))
+                {
+                    break;
+                }
+                m -= 1;
+            }
+            for i in m + 2..=n {
+                hm!(i, i - 2) = zero;
+                if i > m + 2 {
+                    hm!(i, i - 3) = zero;
+                }
+            }
+
+            // Double QR step involving rows l:n and columns m:n.
+            for k in m..n {
+                let not_last = k != n - 1;
+                if k != m {
+                    p = hm!(k, k - 1);
+                    q = hm!(k + 1, k - 1);
+                    r = if not_last { hm!(k + 2, k - 1) } else { zero };
+                    x = p.abs() + q.abs() + r.abs();
+                    if x == zero {
+                        continue;
+                    }
+                    p = p / x;
+                    q = q / x;
+                    r = r / x;
+                }
+                s = (p * p + q * q + r * r).sqrt();
+                if p < zero {
+                    s = -s;
+                }
+                if s != zero {
+                    if k != m {
+                        hm!(k, k - 1) = -s * x;
+                    } else if l != m {
+                        hm!(k, k - 1) = -hm!(k, k - 1);
+                    }
+                    p = p + s;
+                    x = p / s;
+                    y = q / s;
+                    z = r / s;
+                    q = q / p;
+                    r = r / p;
+                    for j in k..size {
+                        p = hm!(k, j) + q * hm!(k + 1, j);
+                        if not_last {
+                            p = p + r * hm!(k + 2, j);
+                            hm!(k + 2, j) = hm!(k + 2, j) - p * z;
+                        }
+                        hm!(k, j) = hm!(k, j) - p * x;
+                        hm!(k + 1, j) = hm!(k + 1, j) - p * y;
+                    }
+                    for i in 0..=n.min(k + 3) {
+                        p = x * hm!(i, k) + y * hm!(i, k + 1);
+                        if not_last {
+                            p = p + z * hm!(i, k + 2);
+                            hm!(i, k + 2) = hm!(i, k + 2) - p * r;
+                        }
+                        hm!(i, k) = hm!(i, k) - p;
+                        hm!(i, k + 1) = hm!(i, k + 1) - p * q;
+                    }
+                    for i in low..=high {
+                        p = x * vm!(i, k) + y * vm!(i, k + 1);
+                        if not_last {
+                            p = p + z * vm!(i, k + 2);
+                            vm!(i, k + 2) = vm!(i, k + 2) - p * r;
+                        }
+                        vm!(i, k) = vm!(i, k) - p;
+                        vm!(i, k + 1) = vm!(i, k + 1) - p * q;
+                    }
+                }
+            }
+        }
+    }
+
+    // Back-substitute to find vectors of the upper quasi-triangular form.
+    if norm == zero {
+        return Ok(());
+    }
+    n = size - 1;
+    while n >= 0 {
+        p = dd!(n);
+        q = ee!(n);
+        if q == zero {
+            // Real vector.
+            let mut l = n;
+            hm!(n, n) = one;
+            let mut i = n - 1;
+            while i >= 0 {
+                w = hm!(i, i) - p;
+                r = zero;
+                for j in l..=n {
+                    r = r + hm!(i, j) * hm!(j, n);
+                }
+                if ee!(i) < zero {
+                    z = w;
+                    s = r;
+                } else {
+                    l = i;
+                    if ee!(i) == zero {
+                        hm!(i, n) = if w == zero { -r / (eps * norm) } else { -r / w };
+                    } else {
+                        // Solve real equations.
+                        x = hm!(i, i + 1);
+                        y = hm!(i + 1, i);
+                        q = (dd!(i) - p) * (dd!(i) - p) + ee!(i) * ee!(i);
+                        t = (x * s - z * r) / q;
+                        hm!(i, n) = t;
+                        hm!(i + 1, n) = if x.abs() > z.abs() {
+                            (-r - w * t) / x
+                        } else {
+                            (-s - y * t) / z
+                        };
+                    }
+                    // Overflow control.
+                    t = hm!(i, n).abs();
+                    if (eps * t) * t > one {
+                        for j in i..=n {
+                            hm!(j, n) = hm!(j, n) / t;
+                        }
+                    }
+                }
+                i -= 1;
+            }
+        } else if q < zero {
+            // Complex vector (processed once per pair, at its second member).
+            let mut l = n - 1;
+            if hm!(n, n - 1).abs() > hm!(n - 1, n).abs() {
+                hm!(n - 1, n - 1) = q / hm!(n, n - 1);
+                hm!(n - 1, n) = -(hm!(n, n) - p) / hm!(n, n - 1);
+            } else {
+                let (re, im) = complex_div(zero, -hm!(n - 1, n), hm!(n - 1, n - 1) - p, q);
+                hm!(n - 1, n - 1) = re;
+                hm!(n - 1, n) = im;
+            }
+            hm!(n, n - 1) = zero;
+            hm!(n, n) = one;
+            let mut i = n - 2;
+            while i >= 0 {
+                let (mut ra, mut sa) = (zero, zero);
+                for j in l..=n {
+                    ra = ra + hm!(i, j) * hm!(j, n - 1);
+                    sa = sa + hm!(i, j) * hm!(j, n);
+                }
+                w = hm!(i, i) - p;
+                if ee!(i) < zero {
+                    z = w;
+                    r = ra;
+                    s = sa;
+                } else {
+                    l = i;
+                    if ee!(i) == zero {
+                        let (re, im) = complex_div(-ra, -sa, w, q);
+                        hm!(i, n - 1) = re;
+                        hm!(i, n) = im;
+                    } else {
+                        // Solve complex equations.
+                        x = hm!(i, i + 1);
+                        y = hm!(i + 1, i);
+                        let mut vr = (dd!(i) - p) * (dd!(i) - p) + ee!(i) * ee!(i) - q * q;
+                        let vi = (dd!(i) - p) * two * q;
+                        if vr == zero && vi == zero {
+                            vr = eps * norm * (w.abs() + q.abs() + x.abs() + y.abs() + z.abs());
+                        }
+                        let (re, im) =
+                            complex_div(x * r - z * ra + q * sa, x * s - z * sa - q * ra, vr, vi);
+                        hm!(i, n - 1) = re;
+                        hm!(i, n) = im;
+                        if x.abs() > z.abs() + q.abs() {
+                            hm!(i + 1, n - 1) = (-ra - w * hm!(i, n - 1) + q * hm!(i, n)) / x;
+                            hm!(i + 1, n) = (-sa - w * hm!(i, n) - q * hm!(i, n - 1)) / x;
+                        } else {
+                            let (re, im) =
+                                complex_div(-r - y * hm!(i, n - 1), -s - y * hm!(i, n), z, q);
+                            hm!(i + 1, n - 1) = re;
+                            hm!(i + 1, n) = im;
+                        }
+                    }
+                    // Overflow control.
+                    t = hm!(i, n - 1).abs().max_of(hm!(i, n).abs());
+                    if (eps * t) * t > one {
+                        for j in i..=n {
+                            hm!(j, n - 1) = hm!(j, n - 1) / t;
+                            hm!(j, n) = hm!(j, n) / t;
+                        }
+                    }
+                }
+                i -= 1;
+            }
+        }
+        n -= 1;
+    }
+
+    // Back transformation to get the eigenvectors of the original matrix.
+    for j in (low..size).rev() {
+        for i in low..=high {
+            z = zero;
+            for k in low..=j.min(high) {
+                z = z + vm!(i, k) * hm!(k, j);
+            }
+            vm!(i, j) = z;
+        }
+    }
+    Ok(())
+}
+
+/// Eigenvalues and right eigenvectors of a general real square matrix, like `np.linalg.eig`.
+///
+/// The matrix is reduced to Hessenberg form and iterated with Francis' double-shift QR; the
+/// eigenvectors come from back-substitution on the quasi-triangular Schur form.  Eigenvalues are
+/// returned in the order they appear on the diagonal of the Schur form (complex conjugate pairs
+/// adjacent, positive imaginary part first).  Each eigenvector has unit 2-norm and its component
+/// of largest magnitude is real and positive.  No balancing is applied.
+pub(crate) fn eig<T: KernelFloat>(a: &[T], n: usize) -> Result<Eig<T>, KernelError> {
+    if a.len() != n * n {
+        return Err(KernelError::Shape);
+    }
+    if !a.iter().all(|value| value.is_finite()) {
+        return Err(KernelError::NoConvergence);
+    }
+    if n == 0 {
+        return Ok((Vec::new(), Vec::new(), Vec::new(), Vec::new()));
+    }
+    let mut h = a.to_vec();
+    let mut v = vec![T::ZERO; n * n];
+    let mut re = vec![T::ZERO; n];
+    let mut im = vec![T::ZERO; n];
+    hessenberg(&mut h, &mut v, n);
+    francis_qr(&mut h, &mut v, &mut re, &mut im, n)?;
+
+    let mut vec_re = vec![T::ZERO; n * n];
+    let mut vec_im = vec![T::ZERO; n * n];
+    let mut j = 0;
+    while j < n {
+        let pair = im[j] != T::ZERO && j + 1 < n;
+        for row in 0..n {
+            vec_re[row * n + j] = v[row * n + j];
+            if pair {
+                vec_im[row * n + j] = v[row * n + j + 1];
+                vec_re[row * n + j + 1] = v[row * n + j];
+                vec_im[row * n + j + 1] = -v[row * n + j + 1];
+            }
+        }
+        j += if pair { 2 } else { 1 };
+    }
+    for col in 0..n {
+        normalize_eigenvector(&mut vec_re, &mut vec_im, n, col);
+    }
+    Ok((re, im, vec_re, vec_im))
+}
+
+/// Scales column `col` to unit 2-norm and rotates its phase so the largest component is real and positive.
+fn normalize_eigenvector<T: KernelFloat>(re: &mut [T], im: &mut [T], n: usize, col: usize) {
+    let mut largest = 0;
+    let mut largest_magnitude = T::ZERO;
+    for row in 0..n {
+        let (x, y) = (re[row * n + col], im[row * n + col]);
+        let magnitude = x * x + y * y;
+        if magnitude > largest_magnitude {
+            largest_magnitude = magnitude;
+            largest = row;
+        }
+    }
+    if largest_magnitude == T::ZERO {
+        return;
+    }
+    // Multiply by conj(v_largest) / |v_largest| so that v_largest becomes |v_largest|.
+    let (pr, pi) = (re[largest * n + col], im[largest * n + col]);
+    let length = largest_magnitude.sqrt();
+    let (cr, ci) = (pr / length, -pi / length);
+    let mut total = T::ZERO;
+    for row in 0..n {
+        let (x, y) = (re[row * n + col], im[row * n + col]);
+        let (nx, ny) = (x * cr - y * ci, x * ci + y * cr);
+        re[row * n + col] = nx;
+        im[row * n + col] = ny;
+        total = total + nx * nx + ny * ny;
+    }
+    im[largest * n + col] = T::ZERO;
+    let length = total.sqrt();
+    for row in 0..n {
+        re[row * n + col] = re[row * n + col] / length;
+        im[row * n + col] = im[row * n + col] / length;
+    }
+}
+
+/// Eigenvalues `(re, im)` of a general real square matrix, like `np.linalg.eigvals`.
+pub(crate) fn eigvals<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>), KernelError> {
+    let (re, im, _, _) = eig(a, n)?;
+    Ok((re, im))
+}
+
+/// Ascending eigenvalues of a real symmetric matrix, like `np.linalg.eigvalsh`.
+pub(crate) fn eigvalsh<T: KernelFloat>(a: &[T], n: usize) -> Result<Vec<T>, KernelError> {
+    Ok(eigh(a, n)?.0)
+}
+
+/// Sign and natural log of the absolute determinant, like `np.linalg.slogdet`.
+///
+/// An exactly singular matrix gives `(0, -inf)`.
+pub(crate) fn slogdet<T: KernelFloat>(a: &[T], n: usize) -> Result<(T, T), KernelError> {
+    let lu = match Lu::factor(a, n) {
+        Ok(lu) => lu,
+        Err(KernelError::Singular) => return Ok((T::ZERO, -T::INFINITY)),
+        Err(error) => return Err(error),
+    };
+    let mut sign = if lu.swaps.is_multiple_of(2) {
+        T::ONE
+    } else {
+        -T::ONE
+    };
+    let mut log_abs = T::ZERO;
+    for i in 0..n {
+        let diagonal = lu.lu[i * n + i];
+        if diagonal < T::ZERO {
+            sign = -sign;
+        }
+        log_abs = log_abs + diagonal.abs().ln();
+    }
+    Ok((sign, log_abs))
+}
+
+/// 2-norm condition number `s_max / s_min`, like `np.linalg.cond(a)`; `inf` for a singular matrix.
+pub(crate) fn cond<T: KernelFloat>(a: &[T], rows: usize, cols: usize) -> Result<T, KernelError> {
+    let (_, s, _, _) = svd(a, rows, cols)?;
+    let (Some(&largest), Some(&smallest)) = (s.first(), s.last()) else {
+        return Err(KernelError::Shape);
+    };
+    Ok(if smallest == T::ZERO {
+        T::INFINITY
+    } else {
+        largest / smallest
+    })
+}
+
+/// Condition number in the norm `order`, like `np.linalg.cond(a, p)`.
+///
+/// `Two` and `NegTwo` use the SVD (any shape); the other orders need a square matrix and are
+/// `norm(a) * norm(inv(a))`, with `inf` when `a` is singular.
+pub(crate) fn cond_ord<T: KernelFloat>(
+    a: &[T],
+    rows: usize,
+    cols: usize,
+    order: NormOrd,
+) -> Result<T, KernelError> {
+    match order {
+        NormOrd::Two => cond(a, rows, cols),
+        NormOrd::NegTwo => Ok(T::ONE / cond(a, rows, cols)?),
+        NormOrd::Zero => Err(KernelError::Shape),
+        _ => {
+            if rows != cols {
+                return Err(KernelError::Shape);
+            }
+            let forward = matrix_norm(a, rows, cols, order)?;
+            match inv(a, rows) {
+                Ok(inverse) => Ok(forward * matrix_norm(&inverse, rows, cols, order)?),
+                Err(KernelError::Singular) => Ok(T::INFINITY),
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+/// Dynamic-programming matrix-chain ordering for matrices with dimensions
+/// `dims[i] x dims[i + 1]`.
+///
+/// Returns the minimal number of scalar multiplications and the split table:
+/// `splits[i * count + j]` is the index `k` such that the optimal product of matrices `i..=j` is
+/// `(i..=k) @ (k + 1..=j)`.
+pub(crate) fn matrix_chain_order(dims: &[usize]) -> (u128, Vec<usize>) {
+    let count = dims.len().saturating_sub(1);
+    let mut cost = vec![0_u128; count * count];
+    let mut splits = vec![0_usize; count * count];
+    for length in 2..=count {
+        for i in 0..=count - length {
+            let j = i + length - 1;
+            cost[i * count + j] = u128::MAX;
+            for k in i..j {
+                let candidate = cost[i * count + k]
+                    + cost[(k + 1) * count + j]
+                    + dims[i] as u128 * dims[k + 1] as u128 * dims[j + 1] as u128;
+                if candidate < cost[i * count + j] {
+                    cost[i * count + j] = candidate;
+                    splits[i * count + j] = k;
+                }
+            }
+        }
+    }
+    let total = if count == 0 { 0 } else { cost[count - 1] };
+    (total, splits)
+}
+
+/// Product of a chain of row-major matrices `(data, rows, cols)` using the cheapest
+/// parenthesisation, like `np.linalg.multi_dot`.  Returns `(data, rows, cols)` of the product.
+pub(crate) fn multi_dot<T>(
+    matrices: &[(&[T], usize, usize)],
+) -> Result<(Vec<T>, usize, usize), KernelError>
+where
+    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+{
+    fn product<T>(matrices: &[(&[T], usize, usize)], splits: &[usize], i: usize, j: usize) -> Vec<T>
+    where
+        T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+    {
+        if i == j {
+            return matrices[i].0.to_vec();
+        }
+        let k = splits[i * matrices.len() + j];
+        let left = product(matrices, splits, i, k);
+        let right = product(matrices, splits, k + 1, j);
+        let (m, inner, n) = (matrices[i].1, matrices[k].2, matrices[j].2);
+        gemm(m, n, inner, &left, inner as isize, 1, &right, n as isize, 1)
+    }
+    if matrices.len() < 2 {
+        return Err(KernelError::Shape);
+    }
+    for (index, &(data, rows, cols)) in matrices.iter().enumerate() {
+        if data.len() != rows * cols || (index > 0 && matrices[index - 1].2 != rows) {
+            return Err(KernelError::Shape);
+        }
+    }
+    let mut dims = vec![matrices[0].1];
+    dims.extend(matrices.iter().map(|&(_, _, cols)| cols));
+    let (_, splits) = matrix_chain_order(&dims);
+    let result = product(matrices, &splits, 0, matrices.len() - 1);
+    Ok((result, matrices[0].1, matrices[matrices.len() - 1].2))
+}
+
+/// Permutes the axes of a C-order buffer (`out.shape[i] = shape[perm[i]]`), like
+/// `np.transpose(a, perm)` followed by a copy to C order.
+pub(crate) fn permute_axes<T: Copy>(
+    data: &[T],
+    shape: &[usize],
+    perm: &[usize],
+) -> Result<Vec<T>, KernelError> {
+    let ndim = shape.len();
+    let mut seen = vec![false; ndim];
+    if perm.len() != ndim
+        || data.len() != shape.iter().product::<usize>()
+        || perm
+            .iter()
+            .any(|&axis| axis >= ndim || core::mem::replace(&mut seen[axis], true))
+    {
+        return Err(KernelError::Shape);
+    }
+    let mut source_strides = vec![1_usize; ndim];
+    for axis in (0..ndim.saturating_sub(1)).rev() {
+        source_strides[axis] = source_strides[axis + 1] * shape[axis + 1];
+    }
+    let out_shape: Vec<usize> = perm.iter().map(|&axis| shape[axis]).collect();
+    let out_strides: Vec<usize> = perm.iter().map(|&axis| source_strides[axis]).collect();
+    let total = data.len();
+    let mut out = Vec::with_capacity(total);
+    if total == 0 {
+        return Ok(out);
+    }
+    let mut index = vec![0_usize; ndim];
+    let mut offset = 0;
+    for _ in 0..total {
+        out.push(data[offset]);
+        // Odometer step, last axis fastest.
+        for axis in (0..ndim).rev() {
+            index[axis] += 1;
+            offset += out_strides[axis];
+            if index[axis] < out_shape[axis] {
+                break;
+            }
+            offset -= out_strides[axis] * out_shape[axis];
+            index[axis] = 0;
+        }
+    }
+    Ok(out)
+}
+
+/// Tensor contraction over the paired axes `axes_a[i]` of `a` and `axes_b[i]` of `b`, like
+/// `np.tensordot(a, b, axes=(axes_a, axes_b))`.
+///
+/// Both operands are permuted so the contracted axes are contiguous, viewed as matrices and
+/// multiplied with [`gemm`].  The result shape is the free axes of `a` followed by those of `b`.
+pub(crate) fn tensordot<T>(
+    a: &[T],
+    a_shape: &[usize],
+    b: &[T],
+    b_shape: &[usize],
+    axes_a: &[usize],
+    axes_b: &[usize],
+) -> Result<(Vec<T>, Vec<usize>), KernelError>
+where
+    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+{
+    if axes_a.len() != axes_b.len()
+        || a.len() != a_shape.iter().product::<usize>()
+        || b.len() != b_shape.iter().product::<usize>()
+    {
+        return Err(KernelError::Shape);
+    }
+    let mut used_a = vec![false; a_shape.len()];
+    let mut used_b = vec![false; b_shape.len()];
+    for (&ia, &ib) in axes_a.iter().zip(axes_b) {
+        if ia >= a_shape.len()
+            || ib >= b_shape.len()
+            || a_shape[ia] != b_shape[ib]
+            || core::mem::replace(&mut used_a[ia], true)
+            || core::mem::replace(&mut used_b[ib], true)
+        {
+            return Err(KernelError::Shape);
+        }
+    }
+    let free_a: Vec<usize> = (0..a_shape.len()).filter(|&axis| !used_a[axis]).collect();
+    let free_b: Vec<usize> = (0..b_shape.len()).filter(|&axis| !used_b[axis]).collect();
+    let m: usize = free_a.iter().map(|&axis| a_shape[axis]).product();
+    let n: usize = free_b.iter().map(|&axis| b_shape[axis]).product();
+    let k: usize = axes_a.iter().map(|&axis| a_shape[axis]).product();
+    let perm_a: Vec<usize> = free_a.iter().chain(axes_a).copied().collect();
+    let perm_b: Vec<usize> = axes_b.iter().chain(&free_b).copied().collect();
+    let is_identity = |perm: &[usize]| perm.iter().enumerate().all(|(i, &axis)| i == axis);
+    let a_owned;
+    let a_matrix: &[T] = if is_identity(&perm_a) {
+        a
+    } else {
+        a_owned = permute_axes(a, a_shape, &perm_a)?;
+        &a_owned
+    };
+    let b_owned;
+    let b_matrix: &[T] = if is_identity(&perm_b) {
+        b
+    } else {
+        b_owned = permute_axes(b, b_shape, &perm_b)?;
+        &b_owned
+    };
+    let result = gemm(m, n, k, a_matrix, k as isize, 1, b_matrix, n as isize, 1);
+    let shape = free_a
+        .iter()
+        .map(|&axis| a_shape[axis])
+        .chain(free_b.iter().map(|&axis| b_shape[axis]))
+        .collect();
+    Ok((result, shape))
+}
+
+/// Dot product of the flattened operands, like `np.vdot(a, b)` for real data.
+pub(crate) fn vdot<T>(a: &[T], b: &[T]) -> Result<T, KernelError>
+where
+    T: Copy + Add<Output = T> + Mul<Output = T> + Default,
+{
+    if a.len() != b.len() {
+        return Err(KernelError::Shape);
+    }
+    Ok(a.iter()
+        .zip(b)
+        .fold(T::default(), |sum, (&x, &y)| sum + x * y))
+}
+
+/// Integer power of a square matrix, like `np.linalg.matrix_power(a, power)`.
+///
+/// `power == 0` gives the identity (even for singular input); negative powers invert `a` first
+/// and fail with [`KernelError::Singular`] when it has no inverse.
+pub(crate) fn matrix_power<T: KernelFloat>(
+    a: &[T],
+    n: usize,
+    power: i64,
+) -> Result<Vec<T>, KernelError> {
+    if a.len() != n * n {
+        return Err(KernelError::Shape);
+    }
+    let mut result = vec![T::ZERO; n * n];
+    for i in 0..n {
+        result[i * n + i] = T::ONE;
+    }
+    if power == 0 {
+        return Ok(result);
+    }
+    let mut base = if power < 0 { inv(a, n)? } else { a.to_vec() };
+    let mut exponent = power.unsigned_abs();
+    let stride = n as isize;
+    loop {
+        if exponent & 1 == 1 {
+            result = gemm(n, n, n, &result, stride, 1, &base, stride, 1);
+        }
+        exponent >>= 1;
+        if exponent == 0 {
+            return Ok(result);
+        }
+        base = gemm(n, n, n, &base, stride, 1, &base, stride, 1);
+    }
 }
 
 #[cfg(test)]
