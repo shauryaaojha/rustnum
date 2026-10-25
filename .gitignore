@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 .venv/
 /rustnum/tests/fixtures/*.npy
+/rustnum/tests/fixtures/manifest.json
 !/rustnum/tests/fixtures/.gitkeep
 /tasks/*.log
-/rustnum/tests/fixtures/manifest.json
+/.claude/
