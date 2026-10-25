@@ -121,6 +121,7 @@ pub(super) struct ZipEntry {
 
 impl ZipEntry {
     /// Uncompressed size from the central directory.
+    #[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
     pub fn uncompressed_size(&self) -> u64 {
         self.size
     }

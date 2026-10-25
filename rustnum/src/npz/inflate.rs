@@ -390,6 +390,7 @@ fn inflate_block(
 }
 
 /// Decompress a raw DEFLATE stream with no size limit.
+#[allow(dead_code)] // byte-level API exercised by the unit tests; not used by the array layer
 pub fn inflate(input: &[u8]) -> Result<Vec<u8>, InflateError> {
     inflate_with_limit(input, usize::MAX).map(|(v, _)| v)
 }

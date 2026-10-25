@@ -4,7 +4,8 @@
 //!
 //! Format reference: <https://numpy.org/doc/stable/reference/generated/numpy.lib.format.html>
 
-use super::{IoError, IoResult};
+use crate::{Element, Error, Result};
+use std::any::{Any, TypeId};
 
 // ---------------------------------------------------------------------------
 // NpyHeader
@@ -117,13 +118,13 @@ impl NpyElement for usize {
 
 /// Parse a .npy header from the beginning of a byte slice.
 /// Returns `(header, data_offset)`.
-pub(crate) fn parse_npy_header(bytes: &[u8]) -> IoResult<(NpyHeader, usize)> {
+pub(crate) fn parse_npy_header(bytes: &[u8]) -> Result<(NpyHeader, usize)> {
     // Magic number: \x93NUMPY
     if bytes.len() < 10 {
-        return Err(IoError::Format("file too short for .npy header".into()));
+        return Err(Error::Format("file too short for .npy header".into()));
     }
     if &bytes[0..6] != b"\x93NUMPY" {
-        return Err(IoError::Format("not a .npy file (bad magic)".into()));
+        return Err(Error::Format("not a .npy file (bad magic)".into()));
     }
 
     let major = bytes[6];
@@ -136,13 +137,13 @@ pub(crate) fn parse_npy_header(bytes: &[u8]) -> IoResult<(NpyHeader, usize)> {
         }
         (2, 0) => {
             if bytes.len() < 12 {
-                return Err(IoError::Format("file too short for v2.0 header".into()));
+                return Err(Error::Format("file too short for v2.0 header".into()));
             }
             let len = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
             (len, 12)
         }
         _ => {
-            return Err(IoError::Format(format!(
+            return Err(Error::Format(format!(
                 "unsupported .npy version {major}.{minor}"
             )));
         }
@@ -150,18 +151,18 @@ pub(crate) fn parse_npy_header(bytes: &[u8]) -> IoResult<(NpyHeader, usize)> {
 
     let header_end = header_start + header_len;
     if bytes.len() < header_end {
-        return Err(IoError::Format("header truncated".into()));
+        return Err(Error::Format("header truncated".into()));
     }
 
     let header_str = std::str::from_utf8(&bytes[header_start..header_end])
-        .map_err(|e| IoError::Format(format!("invalid header UTF-8: {e}")))?;
+        .map_err(|e| Error::Format(format!("invalid header UTF-8: {e}")))?;
 
     let header = parse_python_dict(header_str)?;
     Ok((header, header_end))
 }
 
 /// Parse a Python dict string like `{'descr': '<f8', 'fortran_order': False, 'shape': (3, 4), }`.
-fn parse_python_dict(s: &str) -> IoResult<NpyHeader> {
+fn parse_python_dict(s: &str) -> Result<NpyHeader> {
     let s = s.trim();
 
     // Extract descr
@@ -180,50 +181,50 @@ fn parse_python_dict(s: &str) -> IoResult<NpyHeader> {
     })
 }
 
-fn extract_string_value(s: &str, key: &str) -> IoResult<String> {
+fn extract_string_value(s: &str, key: &str) -> Result<String> {
     // Look for 'key': 'value' or "key": "value"
     let pattern = format!("'{key}'");
     let pos = s
         .find(&pattern)
         .or_else(|| s.find(&format!("\"{key}\"")))
-        .ok_or_else(|| IoError::Format(format!("missing key '{key}' in header")))?;
+        .ok_or_else(|| Error::Format(format!("missing key '{key}' in header")))?;
 
     let after_key = &s[pos + pattern.len()..];
     let after_colon = after_key
         .find(':')
         .map(|i| &after_key[i + 1..])
-        .ok_or_else(|| IoError::Format(format!("missing ':' after key '{key}'")))?;
+        .ok_or_else(|| Error::Format(format!("missing ':' after key '{key}'")))?;
     let after_colon = after_colon.trim_start();
 
     // Find the quoted value
     let quote = after_colon
         .chars()
         .next()
-        .ok_or_else(|| IoError::Format(format!("empty value for key '{key}'")))?;
+        .ok_or_else(|| Error::Format(format!("empty value for key '{key}'")))?;
     if quote != '\'' && quote != '"' {
-        return Err(IoError::Format(format!(
+        return Err(Error::Format(format!(
             "expected quote for key '{key}', got '{quote}'"
         )));
     }
     let rest = &after_colon[1..];
     let end = rest
         .find(quote)
-        .ok_or_else(|| IoError::Format(format!("unterminated string for key '{key}'")))?;
+        .ok_or_else(|| Error::Format(format!("unterminated string for key '{key}'")))?;
     Ok(rest[..end].to_string())
 }
 
-fn extract_bool_value(s: &str, key: &str) -> IoResult<bool> {
+fn extract_bool_value(s: &str, key: &str) -> Result<bool> {
     let pattern = format!("'{key}'");
     let pos = s
         .find(&pattern)
         .or_else(|| s.find(&format!("\"{key}\"")))
-        .ok_or_else(|| IoError::Format(format!("missing key '{key}' in header")))?;
+        .ok_or_else(|| Error::Format(format!("missing key '{key}' in header")))?;
 
     let after_key = &s[pos + pattern.len()..];
     let after_colon = after_key
         .find(':')
         .map(|i| &after_key[i + 1..])
-        .ok_or_else(|| IoError::Format(format!("missing ':' after key '{key}'")))?;
+        .ok_or_else(|| Error::Format(format!("missing ':' after key '{key}'")))?;
     let after_colon = after_colon.trim_start();
 
     if after_colon.starts_with("True") {
@@ -231,33 +232,33 @@ fn extract_bool_value(s: &str, key: &str) -> IoResult<bool> {
     } else if after_colon.starts_with("False") {
         Ok(false)
     } else {
-        Err(IoError::Format(format!(
+        Err(Error::Format(format!(
             "expected True/False for key '{key}'"
         )))
     }
 }
 
-fn extract_shape(s: &str) -> IoResult<Vec<usize>> {
+fn extract_shape(s: &str) -> Result<Vec<usize>> {
     let pattern = "'shape'";
     let pos = s
         .find(pattern)
         .or_else(|| s.find("\"shape\""))
-        .ok_or_else(|| IoError::Format("missing key 'shape' in header".into()))?;
+        .ok_or_else(|| Error::Format("missing key 'shape' in header".into()))?;
 
     let after_key = &s[pos + pattern.len()..];
     let after_colon = after_key
         .find(':')
         .map(|i| &after_key[i + 1..])
-        .ok_or_else(|| IoError::Format("missing ':' after key 'shape'".into()))?;
+        .ok_or_else(|| Error::Format("missing ':' after key 'shape'".into()))?;
     let after_colon = after_colon.trim_start();
 
     // Find the tuple
     let paren_start = after_colon
         .find('(')
-        .ok_or_else(|| IoError::Format("missing '(' in shape".into()))?;
+        .ok_or_else(|| Error::Format("missing '(' in shape".into()))?;
     let paren_end = after_colon
         .find(')')
-        .ok_or_else(|| IoError::Format("missing ')' in shape".into()))?;
+        .ok_or_else(|| Error::Format("missing ')' in shape".into()))?;
 
     let inner = &after_colon[paren_start + 1..paren_end];
     let inner = inner.trim();
@@ -274,7 +275,7 @@ fn extract_shape(s: &str) -> IoResult<Vec<usize>> {
         }
         let dim: usize = part
             .parse()
-            .map_err(|e| IoError::Format(format!("invalid shape dimension '{part}': {e}")))?;
+            .map_err(|e| Error::Format(format!("invalid shape dimension '{part}': {e}")))?;
         dims.push(dim);
     }
     Ok(dims)
@@ -356,29 +357,46 @@ pub(crate) fn encode_npy<T: NpyElement>(data: &[T], shape: &[usize]) -> Vec<u8> 
     buf
 }
 
+/// NumPy dtype name for a `descr` string such as `"<f8"`; unknown descriptors are returned as is.
+fn descr_to_dtype(descr: &str) -> String {
+    match descr {
+        "<f8" | "=f8" => "float64",
+        "<f4" | "=f4" => "float32",
+        "<i8" | "=i8" => "int64",
+        "<i4" | "=i4" => "int32",
+        "|u1" | "<u1" => "uint8",
+        "<u8" | "=u8" => "uint64",
+        "|b1" => "bool",
+        other => other,
+    }
+    .to_string()
+}
+
 /// Decode .npy bytes into (Vec<T>, shape).
-pub(crate) fn decode_npy<T: NpyElement>(bytes: &[u8]) -> IoResult<(Vec<T>, Vec<usize>)> {
+pub(crate) fn decode_npy<T: NpyElement>(bytes: &[u8]) -> Result<(Vec<T>, Vec<usize>)> {
     let (header, data_offset) = parse_npy_header(bytes)?;
 
     // Check dtype
     if header.descr != T::DESCR {
-        return Err(IoError::DType(format!(
-            "file has dtype '{}', expected '{}'",
-            header.descr,
-            T::DESCR
-        )));
+        return Err(Error::DType {
+            expected: descr_to_dtype(T::DESCR),
+            found: descr_to_dtype(&header.descr),
+        });
     }
 
-    let n_elements: usize = if header.shape.is_empty() {
-        1 // 0-d
-    } else {
-        header.shape.iter().product()
-    };
+    // An empty product is 1, which is the element count of a 0-d array.
+    let n_elements = header
+        .shape
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(|| Error::Format("shape in .npy header is too large".into()))?;
 
     let data_bytes = &bytes[data_offset..];
-    let expected_bytes = n_elements * T::BYTE_SIZE;
+    let expected_bytes = n_elements
+        .checked_mul(T::BYTE_SIZE)
+        .ok_or_else(|| Error::Format("shape in .npy header is too large".into()))?;
     if data_bytes.len() < expected_bytes {
-        return Err(IoError::Format(format!(
+        return Err(Error::Format(format!(
             "data truncated: need {expected_bytes} bytes, have {}",
             data_bytes.len()
         )));
@@ -396,6 +414,46 @@ pub(crate) fn decode_npy<T: NpyElement>(bytes: &[u8]) -> IoResult<(Vec<T>, Vec<u
     }
 
     Ok((data, header.shape))
+}
+
+/// Encode elements of any [`Element`] type, choosing the `.npy` descriptor from the type.
+///
+/// `Element` is open to downstream implementors, so a type that is not one of the seven
+/// built-in dtypes is a [`Error::DType`] instead of a compile error.
+pub(crate) fn encode_elements<T: Element>(data: Vec<T>, shape: &[usize]) -> Result<Vec<u8>> {
+    macro_rules! arm {
+        ($($t:ty),*) => {$(
+            if TypeId::of::<T>() == TypeId::of::<$t>() {
+                let boxed: Box<dyn Any> = Box::new(data);
+                let d = boxed.downcast::<Vec<$t>>().expect("type id was checked");
+                return Ok(encode_npy(&d, shape));
+            }
+        )*};
+    }
+    arm!(f64, f32, i64, i32, u8, bool, usize);
+    Err(Error::DType {
+        expected: "a built-in rustnum dtype".into(),
+        found: T::DTYPE.into(),
+    })
+}
+
+/// Decode `.npy` bytes into any [`Element`] type (see [`encode_elements`]).
+pub(crate) fn decode_elements<T: Element>(bytes: &[u8]) -> Result<(Vec<T>, Vec<usize>)> {
+    macro_rules! arm {
+        ($($t:ty),*) => {$(
+            if TypeId::of::<T>() == TypeId::of::<$t>() {
+                let (v, shape) = decode_npy::<$t>(bytes)?;
+                let boxed: Box<dyn Any> = Box::new(v);
+                let v = boxed.downcast::<Vec<T>>().expect("type id was checked");
+                return Ok((*v, shape));
+            }
+        )*};
+    }
+    arm!(f64, f32, i64, i32, u8, bool, usize);
+    Err(Error::DType {
+        expected: "a built-in rustnum dtype".into(),
+        found: T::DTYPE.into(),
+    })
 }
 
 /// Reorder data from Fortran (column-major) to C (row-major) order.
@@ -579,7 +637,7 @@ mod tests {
         let result = decode_npy::<i64>(&bytes);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(matches!(err, IoError::DType(_)));
+        assert!(matches!(err, Error::DType { .. }));
     }
 
     #[test]

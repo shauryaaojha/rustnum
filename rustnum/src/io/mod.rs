@@ -1,46 +1,30 @@
-//! I/O for arrays: .npy and CSV formats, like `np.save`/`np.load`/`np.savetxt`/`np.loadtxt`.
+//! I/O for arrays: `.npy`, `.npz` and CSV files, like `np.save`, `np.load`, `np.savez`,
+//! `np.savetxt` and `np.loadtxt`.
+//!
+//! Every function returns [`crate::Result`]: file problems are [`crate::Error::Io`], a file
+//! whose dtype differs from the requested element type is [`crate::Error::DType`], and malformed
+//! content is [`crate::Error::Format`] or [`crate::Error::Parse`].
+//!
+//! ```
+//! use rustnum as np;
+//! let a = np::array![[1.5, 2.5], [3.5, 4.5]];
+//! let bytes = np::io::to_npy_bytes(&a);
+//! let b: np::Array<f64> = np::io::from_npy_bytes(&bytes).unwrap();
+//! assert_eq!(a, b);
+//! ```
 //!
 //! # Architecture
 //!
-//! - `npy` (private): .npy format v1.0/v2.0 read/write on `(Vec<T>, shape)`.
-//! - `csv` (private): CSV parse/format on `(Vec<T>, shape)`.
-//! - The public API (in `api.rs.pending`) wraps these and returns `Array`
-//!   — it will be wired after Phase 1 merges.
-#![allow(dead_code)]
+//! - `npy` (private): `.npy` format v1.0/v2.0 on `(Vec<T>, shape)`.
+//! - `csv` (private): CSV parse and format on `(Vec<T>, shape)`.
+//! - `api`: the public functions, which wrap those kernels and return `Array`.
+//! - `npz` (private module): ZIP/DEFLATE layer behind [`savez`], [`savez_compressed`],
+//!   [`load_npz`] and [`NpzFile`], which are re-exported here.
 
+mod api;
 pub(crate) mod csv;
 pub(crate) mod npy;
 
-/// Errors produced by I/O operations.
-#[derive(Debug)]
-pub(crate) enum IoError {
-    /// File or I/O error.
-    Io(std::io::Error),
-    /// Dtype mismatch between file and requested type.
-    DType(String),
-    /// Invalid format (bad .npy header, etc.).
-    Format(String),
-    /// CSV parse error.
-    Parse(String),
-}
-
-impl std::fmt::Display for IoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IoError::Io(e) => write!(f, "io error: {e}"),
-            IoError::DType(s) => write!(f, "dtype mismatch: {s}"),
-            IoError::Format(s) => write!(f, "format error: {s}"),
-            IoError::Parse(s) => write!(f, "parse error: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for IoError {}
-
-impl From<std::io::Error> for IoError {
-    fn from(e: std::io::Error) -> Self {
-        IoError::Io(e)
-    }
-}
-
-pub(crate) type IoResult<T> = std::result::Result<T, IoError>;
+pub use crate::npz::api::{NpzFile, load_npz, savez, savez_compressed};
+pub(crate) use api::try_npy_bytes;
+pub use api::{from_npy_bytes, load_csv, load_npy, save_csv, save_npy, to_npy_bytes};

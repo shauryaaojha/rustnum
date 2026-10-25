@@ -1,47 +1,27 @@
-//! PENDING: array-level `.npz` wrappers. Not compiled yet (the extension keeps it out of the build).
-//!
-//! To wire it up once `crate::io::{to_npy_bytes, from_npy_bytes}` and `crate::Error` exist:
-//! 1. `git mv rustnum/src/npz/api.rs.pending rustnum/src/npz/api.rs`
-//! 2. in `rustnum/src/npz/mod.rs` add `pub(crate) mod api;` and remove `#![allow(dead_code)]`
-//!    (keep `#[allow(dead_code)]` on any kernel you decide not to use, e.g. `write_npz_file`);
-//! 3. in `rustnum/src/io.rs` add `pub use crate::npz::api::{load_npz, savez, savez_compressed, NpzFile};`
-//!    so the public paths are `np::io::savez`, `np::io::savez_compressed`, `np::io::load_npz`
-//!    and `np::io::NpzFile`, each defined once.
-//!
-//! Assumptions about code that did not exist when this was written (adjust if they differ):
-//! - `crate::io::to_npy_bytes<T: Element>(a: &Array<T>) -> Vec<u8>` (infallible) and
-//!   `crate::io::from_npy_bytes<T: Element>(bytes: &[u8]) -> Result<Array<T>>`, which returns
-//!   `Error::DType` when the file's dtype is not `T`;
-//! - `Error` has the variants `Format(String)` and `Io(std::io::Error)` (a `From<std::io::Error>`
-//!   impl is also fine; then replace the explicit mapping below).
+//! Array-level `.npz` functions (`np::io::savez` and friends), built on the byte-level archive
+//! layer in the parent module and the `.npy` codec in [`crate::io`].
 
 use std::path::Path;
 
-use super::{NpzArchive, NpzError, npz_to_bytes};
-use crate::io::{from_npy_bytes, to_npy_bytes};
+use super::{NpzArchive, NpzError, read_npz_file, write_npz_file};
+use crate::io::{from_npy_bytes, try_npy_bytes};
 use crate::{Array, Element, Error, Result};
 
-impl From<NpzError> for Error {
-    fn from(e: NpzError) -> Error {
-        match e {
-            NpzError::Io(io) => Error::Io(io),
-            other => Error::Format(other.to_string()),
-        }
+/// Maps the archive layer's error onto the crate error: OS errors stay `Io`, everything else is
+/// a `Format` error carrying the archive layer's message.
+fn npz_err(e: NpzError) -> Error {
+    match e {
+        NpzError::Io(io) => Error::Io(io),
+        other => Error::Format(other.to_string()),
     }
 }
 
-fn savez_impl<T: Element>(
-    path: &Path,
-    arrays: &[(&str, &Array<T>)],
-    compress: bool,
-) -> Result<()> {
+fn savez_impl<T: Element>(path: &Path, arrays: &[(&str, &Array<T>)], compress: bool) -> Result<()> {
     let members: Vec<(String, Vec<u8>)> = arrays
         .iter()
-        .map(|(name, a)| ((*name).to_string(), to_npy_bytes(a)))
-        .collect();
-    let bytes = npz_to_bytes(&members, compress)?;
-    std::fs::write(path, bytes)?;
-    Ok(())
+        .map(|(name, a)| Ok(((*name).to_string(), try_npy_bytes(a)?)))
+        .collect::<Result<_>>()?;
+    write_npz_file(path, &members, compress).map_err(npz_err)
 }
 
 /// Saves several named arrays into one uncompressed `.npz` file, like `np.savez(path, **arrays)`.
@@ -118,9 +98,8 @@ pub fn savez_compressed<T: Element>(
 /// # std::fs::remove_file(&path).unwrap();
 /// ```
 pub fn load_npz<T: Element>(path: impl AsRef<Path>) -> Result<Vec<(String, Array<T>)>> {
-    let archive = NpzArchive::open(path)?;
-    archive
-        .read_all()?
+    read_npz_file(path)
+        .map_err(npz_err)?
         .into_iter()
         .map(|(name, blob)| Ok((name, from_npy_bytes::<T>(&blob)?)))
         .collect()
@@ -168,7 +147,7 @@ impl NpzFile {
     /// ```
     pub fn open(path: impl AsRef<Path>) -> Result<NpzFile> {
         Ok(NpzFile {
-            archive: NpzArchive::open(path)?,
+            archive: NpzArchive::open(path).map_err(npz_err)?,
         })
     }
 
@@ -200,8 +179,6 @@ impl NpzFile {
     ///
     /// let path = std::env::temp_dir().join("rustnum_npzfile_get_doc.npz");
     /// let ids = np::array![1_i64, 2, 3];
-    /// let x = np::array![0.5];
-    /// np::io::savez(&path, &[("x", &x)]).unwrap();
     /// np::io::savez(&path, &[("ids", &ids)]).unwrap();
     /// let file = np::io::NpzFile::open(&path).unwrap();
     /// assert_eq!(file.get::<i64>("ids").unwrap(), ids);
@@ -209,7 +186,7 @@ impl NpzFile {
     /// # std::fs::remove_file(&path).unwrap();
     /// ```
     pub fn get<T: Element>(&self, name: &str) -> Result<Array<T>> {
-        let blob = self.archive.read(name)?;
+        let blob = self.archive.read(name).map_err(npz_err)?;
         from_npy_bytes::<T>(&blob)
     }
 }

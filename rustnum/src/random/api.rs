@@ -1,15 +1,16 @@
-//! Public random number generator API — `np::random::Rng`.
-//!
-//! This file is `.pending` and will be renamed to `api.rs` after the core
-//! Array type is merged from the Phase 1 worktree.
+//! Public random number generator API: `np::random::Rng`.
 
-use crate::Array;
 use super::engine::{self, Xoshiro256StarStar};
+use crate::{Array, Element};
 
 /// Random number generator using xoshiro256** seeded by SplitMix64, like
 /// `np.random.default_rng`.
 ///
-/// Same seed produces the same sequence on every platform.
+/// Same seed produces the same sequence on every platform. The streams differ from NumPy's
+/// PCG64, so numbers match NumPy in distribution, not value.
+///
+/// Methods panic, with NumPy's wording, on invalid parameters (negative scale, `p` outside
+/// `[0, 1]`, ...). The generator is cheap to clone; a clone continues the same stream.
 ///
 /// # Examples
 ///
@@ -23,6 +24,7 @@ use super::engine::{self, Xoshiro256StarStar};
 /// let n = rng.normal(0.0, 1.0, &[1000]);
 /// assert!(n.mean().abs() < 0.1);
 /// ```
+#[derive(Clone)]
 pub struct Rng {
     inner: Xoshiro256StarStar,
 }
@@ -69,7 +71,7 @@ impl Rng {
     /// let mut rng = np::random::Rng::seed(0);
     /// let a = rng.random(&[2, 3]);
     /// assert_eq!(a.shape(), &[2, 3]);
-    /// for &v in a.iter() {
+    /// for v in a.iter() {
     ///     assert!((0.0..1.0).contains(&v));
     /// }
     /// ```
@@ -108,7 +110,12 @@ impl Rng {
     /// let mean = a.mean();
     /// assert!((mean).abs() < 0.05, "mean={mean}");
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `std < 0` (`scale < 0`).
     pub fn normal(&mut self, mean: f64, std: f64, shape: &[usize]) -> Array<f64> {
+        assert!(std >= 0.0, "scale < 0");
         let len: usize = shape.iter().product();
         let data = engine::normal_vec(&mut self.inner, mean, std, len);
         Array::from_vec(data, shape)
@@ -142,13 +149,22 @@ impl Rng {
     ///     assert!(v >= 0 && v < 10);
     /// }
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics with `low >= high` if the range is empty.
     pub fn integers(&mut self, low: i64, high: i64, shape: &[usize]) -> Array<i64> {
+        assert!(low < high, "low >= high");
         let len: usize = shape.iter().product();
         let data = engine::integers_vec(&mut self.inner, low, high, len);
         Array::from_vec(data, shape)
     }
 
-    /// Random choice from array elements, like `rng.choice(a, n, replace)`.
+    /// Draws `n` items along the first axis of `a`, like `rng.choice(a, n, replace)`.
+    ///
+    /// For a 1-d array the result has shape `[n]`; for higher dimensions whole sub-arrays
+    /// are drawn and the result has shape `[n, ...]`. Without replacement every item is drawn at
+    /// most once.
     ///
     /// # Examples
     ///
@@ -158,15 +174,33 @@ impl Rng {
     /// let a = np::arange(0.0, 10.0, 1.0);
     /// let chosen = rng.choice(&a, 5, false);
     /// assert_eq!(chosen.shape(), &[5]);
+    /// let mut v = chosen.to_vec();
+    /// v.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    /// v.dedup();
+    /// assert_eq!(v.len(), 5); // no repeats
     /// ```
-    pub fn choice<T: crate::Element>(&mut self, a: &Array<T>, n: usize, replace: bool) -> Array<T> {
-        let indices = engine::choice_indices(&mut self.inner, a.size(), n, replace);
-        let src = a.to_vec();
-        let data: Vec<T> = indices.into_iter().map(|i| src[i]).collect();
-        Array::from_vec(data, &[n])
+    ///
+    /// # Panics
+    ///
+    /// Panics if `a` is 0-d or empty while `n > 0`, or if `replace` is false and `n` exceeds
+    /// the length of the first axis (`Cannot take a larger sample than population when
+    /// replace is False`).
+    pub fn choice<T: Element>(&mut self, a: &Array<T>, n: usize, replace: bool) -> Array<T> {
+        assert!(a.ndim() >= 1, "a must be 1-dimensional or an integer");
+        let pop = a.shape()[0];
+        assert!(
+            pop > 0 || n == 0,
+            "a cannot be empty unless no samples are taken"
+        );
+        assert!(
+            replace || n <= pop,
+            "Cannot take a larger sample than population when replace is False"
+        );
+        let indices = engine::choice_indices(&mut self.inner, pop, n, replace);
+        a.take(&indices, 0)
     }
 
-    /// Shuffle array along first axis in place, like `rng.shuffle(a)`.
+    /// Shuffles `a` in place along its first axis, like `rng.shuffle(a)`.
     ///
     /// # Examples
     ///
@@ -175,26 +209,24 @@ impl Rng {
     /// let mut rng = np::random::Rng::seed(42);
     /// let mut a = np::arange(0.0, 10.0, 1.0);
     /// rng.shuffle(&mut a);
-    /// assert_eq!(a.size(), 10);
+    /// let mut v = a.to_vec();
+    /// v.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    /// assert_eq!(v, np::arange(0.0, 10.0, 1.0).to_vec());
     /// ```
-    pub fn shuffle<T: crate::Element>(&mut self, a: &mut Array<T>) {
-        // Shuffle along first axis: swap rows (or elements for 1-d).
-        if a.ndim() <= 1 {
-            let mut data = a.to_vec();
-            engine::shuffle(&mut self.inner, &mut data);
-            *a = Array::from_vec(data, a.shape());
-        } else {
-            let n = a.shape()[0];
-            // For n-d, shuffle indices and rebuild
-            let mut indices: Vec<usize> = (0..n).collect();
-            engine::shuffle(&mut self.inner, &mut indices);
-            let rows: Vec<Array<T>> = indices.iter().map(|&i| a.index_axis(0, i)).collect();
-            let refs: Vec<&Array<T>> = rows.iter().collect();
-            *a = crate::stack(&refs, 0);
-        }
+    ///
+    /// # Panics
+    ///
+    /// Panics if `a` is 0-d.
+    pub fn shuffle<T: Element>(&mut self, a: &mut Array<T>) {
+        assert!(
+            a.ndim() >= 1,
+            "shuffle requires an array with at least 1 dimension"
+        );
+        let order = engine::permutation_vec(&mut self.inner, a.shape()[0]);
+        *a = a.take(&order, 0);
     }
 
-    /// Random permutation of 0..n, like `rng.permutation(n)`.
+    /// Random permutation of `0..n`, like `rng.permutation(n)`.
     ///
     /// # Examples
     ///
@@ -202,17 +234,15 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let p = rng.permutation(10);
-    /// assert_eq!(p.size(), 10);
     /// let mut sorted = p.to_vec();
     /// sorted.sort();
     /// assert_eq!(sorted, (0..10).collect::<Vec<_>>());
     /// ```
     pub fn permutation(&mut self, n: usize) -> Array<usize> {
-        let data = engine::permutation_vec(&mut self.inner, n);
-        Array::from_vec(data, &[n])
+        Array::from_vec(engine::permutation_vec(&mut self.inner, n), &[n])
     }
 
-    /// Binomial distribution, like `rng.binomial(n, p, shape)`.
+    /// Binomial distribution, like `rng.binomial(n, p, shape)`; counts are `i64` as in NumPy.
     ///
     /// # Examples
     ///
@@ -220,16 +250,22 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let a = rng.binomial(10, 0.5, &[1000]);
-    /// let mean: f64 = a.to_vec().iter().map(|&x| x as f64).sum::<f64>() / 1000.0;
+    /// assert!(a.iter().all(|k| (0..=10).contains(&k)));
+    /// let mean = a.astype::<f64>().mean();
     /// assert!((mean - 5.0).abs() < 0.5);
     /// ```
-    pub fn binomial(&mut self, n: u64, p: f64, shape: &[usize]) -> Array<u64> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `p` is outside `[0, 1]` or NaN, or if `n` does not fit an `i64`.
+    pub fn binomial(&mut self, n: u64, p: f64, shape: &[usize]) -> Array<i64> {
+        assert!((0.0..=1.0).contains(&p), "p < 0, p > 1 or p is NaN");
+        assert!(i64::try_from(n).is_ok(), "n is too large");
         let len: usize = shape.iter().product();
-        let data = engine::binomial_vec(&mut self.inner, n, p, len);
-        Array::from_vec(data, shape)
+        Array::from_vec(engine::binomial_vec(&mut self.inner, n, p, len), shape)
     }
 
-    /// Poisson distribution, like `rng.poisson(lam, shape)`.
+    /// Poisson distribution, like `rng.poisson(lam, shape)`; counts are `i64` as in NumPy.
     ///
     /// # Examples
     ///
@@ -237,16 +273,21 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let a = rng.poisson(5.0, &[1000]);
-    /// let mean: f64 = a.to_vec().iter().map(|&x| x as f64).sum::<f64>() / 1000.0;
+    /// let mean = a.astype::<f64>().mean();
     /// assert!((mean - 5.0).abs() < 0.5);
     /// ```
-    pub fn poisson(&mut self, lam: f64, shape: &[usize]) -> Array<u64> {
+    ///
+    /// # Panics
+    ///
+    /// Panics if `lam` is negative, NaN or not finite.
+    pub fn poisson(&mut self, lam: f64, shape: &[usize]) -> Array<i64> {
+        assert!(lam >= 0.0, "lam < 0 or lam is NaN");
+        assert!(lam.is_finite(), "lam value too large");
         let len: usize = shape.iter().product();
-        let data = engine::poisson_vec(&mut self.inner, lam, len);
-        Array::from_vec(data, shape)
+        Array::from_vec(engine::poisson_vec(&mut self.inner, lam, len), shape)
     }
 
-    /// Exponential distribution, like `rng.exponential(scale, shape)`.
+    /// Exponential distribution with mean `scale`, like `rng.exponential(scale, shape)`.
     ///
     /// # Examples
     ///
@@ -254,13 +295,16 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let a = rng.exponential(2.0, &[10000]);
-    /// let mean = a.mean();
-    /// assert!((mean - 2.0).abs() < 0.1);
+    /// assert!((a.mean() - 2.0).abs() < 0.1);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `scale < 0`.
     pub fn exponential(&mut self, scale: f64, shape: &[usize]) -> Array<f64> {
+        assert!(scale >= 0.0, "scale < 0");
         let len: usize = shape.iter().product();
-        let data = engine::exponential_vec(&mut self.inner, scale, len);
-        Array::from_vec(data, shape)
+        Array::from_vec(engine::exponential_vec(&mut self.inner, scale, len), shape)
     }
 
     /// Beta distribution, like `rng.beta(a, b, shape)`.
@@ -271,14 +315,18 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let arr = rng.beta(2.0, 5.0, &[10000]);
-    /// let mean = arr.mean();
-    /// // Expected mean = a/(a+b) = 2/7 ≈ 0.2857
-    /// assert!((mean - 2.0/7.0).abs() < 0.02);
+    /// // Expected mean = a / (a + b) = 2/7.
+    /// assert!((arr.mean() - 2.0 / 7.0).abs() < 0.02);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `a > 0` and `b > 0`.
     pub fn beta(&mut self, a: f64, b: f64, shape: &[usize]) -> Array<f64> {
+        assert!(a > 0.0, "a <= 0");
+        assert!(b > 0.0, "b <= 0");
         let len: usize = shape.iter().product();
-        let data = engine::beta_vec(&mut self.inner, a, b, len);
-        Array::from_vec(data, shape)
+        Array::from_vec(engine::beta_vec(&mut self.inner, a, b, len), shape)
     }
 
     /// Gamma distribution, like `rng.gamma(shape_param, scale, shape)`.
@@ -289,11 +337,16 @@ impl Rng {
     /// use rustnum as np;
     /// let mut rng = np::random::Rng::seed(42);
     /// let arr = rng.gamma(2.0, 1.0, &[10000]);
-    /// let mean = arr.mean();
-    /// // Expected mean = shape * scale = 2.0
-    /// assert!((mean - 2.0).abs() < 0.1);
+    /// // Expected mean = shape * scale = 2.
+    /// assert!((arr.mean() - 2.0).abs() < 0.1);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `shape_param < 0` or `scale < 0`.
     pub fn gamma(&mut self, shape_param: f64, scale: f64, shape: &[usize]) -> Array<f64> {
+        assert!(shape_param >= 0.0, "shape < 0");
+        assert!(scale >= 0.0, "scale < 0");
         let len: usize = shape.iter().product();
         let data = engine::gamma_vec(&mut self.inner, shape_param, scale, len);
         Array::from_vec(data, shape)

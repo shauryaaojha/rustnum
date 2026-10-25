@@ -3,7 +3,7 @@
 //! Operates on `(Vec<T>, Vec<usize>)` pairs — no `Array` dependency.
 //! Matches `np.loadtxt` and `np.savetxt` behavior.
 
-use super::{IoError, IoResult};
+use crate::{Error, Result};
 
 /// Format 1-d or 2-d numeric data as CSV text, like `np.savetxt`.
 ///
@@ -15,12 +15,12 @@ pub(crate) fn format_csv<T: std::fmt::Display>(
     data: &[T],
     shape: &[usize],
     delimiter: char,
-) -> IoResult<String> {
+) -> Result<String> {
     match shape.len() {
         1 => {
             let n = shape[0];
             if data.len() != n {
-                return Err(IoError::Format(format!(
+                return Err(Error::Format(format!(
                     "data length {} does not match shape [{n}]",
                     data.len()
                 )));
@@ -36,7 +36,7 @@ pub(crate) fn format_csv<T: std::fmt::Display>(
             let rows = shape[0];
             let cols = shape[1];
             if data.len() != rows * cols {
-                return Err(IoError::Format(format!(
+                return Err(Error::Format(format!(
                     "data length {} does not match shape [{rows}, {cols}]",
                     data.len()
                 )));
@@ -54,7 +54,7 @@ pub(crate) fn format_csv<T: std::fmt::Display>(
             }
             Ok(out)
         }
-        ndim => Err(IoError::Format(format!(
+        ndim => Err(Error::Format(format!(
             "Expected 1D or 2D array, got {ndim}D array instead"
         ))),
     }
@@ -67,13 +67,13 @@ pub(crate) fn format_csv<T: std::fmt::Display>(
 ///
 /// # Errors
 ///
-/// Returns `Err(IoError::Parse(...))` with line numbers on parse failures
+/// Returns `Err(Error::Parse(...))` with line numbers on parse failures
 /// or ragged rows.
 pub(crate) fn parse_csv<T>(
     text: &str,
     delimiter: char,
     skip_header: usize,
-) -> IoResult<(Vec<T>, Vec<usize>)>
+) -> Result<(Vec<T>, Vec<usize>)>
 where
     T: std::str::FromStr,
     <T as std::str::FromStr>::Err: std::fmt::Display,
@@ -111,7 +111,7 @@ where
         let cols = tokens.len();
         if let Some(exp) = expected_cols {
             if cols != exp {
-                return Err(IoError::Parse(format!(
+                return Err(Error::Parse(format!(
                     "line {line_num}: expected {exp} columns, got {cols} (ragged CSV)"
                 )));
             }
@@ -121,7 +121,7 @@ where
 
         for (col_idx, token) in tokens.into_iter().enumerate() {
             let val = token.parse::<T>().map_err(|e| {
-                IoError::Parse(format!(
+                Error::Parse(format!(
                     "line {line_num}: could not parse '{token}' at column {}: {e}",
                     col_idx + 1
                 ))
@@ -228,7 +228,7 @@ mod tests {
         let text = "1.0, 2.0\n3.0, not_a_number\n5.0, 6.0\n";
         let err = parse_csv::<f64>(text, ',', 0).unwrap_err();
         match err {
-            IoError::Parse(msg) => {
+            Error::Parse(msg) => {
                 assert!(
                     msg.contains("line 2"),
                     "error message should contain line 2: {msg}"
@@ -238,7 +238,7 @@ mod tests {
                     "error message should contain bad token: {msg}"
                 );
             }
-            _ => panic!("expected IoError::Parse, got {err:?}"),
+            _ => panic!("expected Error::Parse, got {err:?}"),
         }
     }
 
@@ -247,21 +247,21 @@ mod tests {
         let text = "1.0, 2.0, 3.0\n4.0, 5.0\n";
         let err = parse_csv::<f64>(text, ',', 0).unwrap_err();
         match err {
-            IoError::Parse(msg) => {
+            Error::Parse(msg) => {
                 assert!(msg.contains("line 2"), "error should specify line 2: {msg}");
                 assert!(msg.contains("ragged"), "error should mention ragged: {msg}");
             }
-            _ => panic!("expected IoError::Parse, got {err:?}"),
+            _ => panic!("expected Error::Parse, got {err:?}"),
         }
     }
 
     #[test]
     fn format_csv_unsupported_ndim() {
         let err = format_csv(&[1.0], &[], ',').unwrap_err();
-        assert!(matches!(err, IoError::Format(_)));
+        assert!(matches!(err, Error::Format(_)));
 
         let err3d = format_csv(&[1.0; 8], &[2, 2, 2], ',').unwrap_err();
-        assert!(matches!(err3d, IoError::Format(_)));
+        assert!(matches!(err3d, Error::Format(_)));
     }
 
     #[test]

@@ -1,8 +1,7 @@
 //! Random number generation engine: xoshiro256** seeded by SplitMix64.
 //!
 //! All functions produce plain `Vec`s or operate on slices — no `Array`
-//! dependency. The public `Rng` wrapper (in `api.rs`) will call these
-//! and return `Array` once the core type is merged.
+//! dependency. The public `Rng` wrapper in `api.rs` calls these and returns `Array`.
 
 // ---------------------------------------------------------------------------
 // SplitMix64 — used only to seed xoshiro256**
@@ -30,6 +29,7 @@ impl SplitMix64 {
 // xoshiro256** — the main generator
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 pub(crate) struct Xoshiro256StarStar {
     s: [u64; 4],
 }
@@ -175,7 +175,29 @@ pub(crate) fn beta(rng: &mut Xoshiro256StarStar, a: f64, b: f64) -> f64 {
     x / (x + y)
 }
 
-/// Binomial(n, p) variate.
+/// Binomial(n, p) by CDF inversion; only efficient (and accurate) when `n * p < 30`, `p <= 0.5`.
+fn binomial_inversion(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
+    let q = 1.0 - p;
+    let s = p / q;
+    let a = (n + 1) as f64 * s;
+    let mut r = q.powf(n as f64);
+    let mut u = rng.next_f64();
+    let mut x = 0u64;
+    while u > r {
+        u -= r;
+        x += 1;
+        if x > n {
+            return n;
+        }
+        r *= a / x as f64 - s;
+    }
+    x
+}
+
+/// Binomial(n, p) variate, exact for every `n` and `p`.
+///
+/// Small `n * min(p, 1 - p)` uses inversion; larger cases split the problem with a Beta variate
+/// (the order-statistic recursion from Knuth, TAOCP vol. 2) until inversion applies.
 pub(crate) fn binomial(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
     if n == 0 || p <= 0.0 {
         return 0;
@@ -183,60 +205,59 @@ pub(crate) fn binomial(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
     if p >= 1.0 {
         return n;
     }
-
-    // For small n, use direct Bernoulli trials
-    if n < 25 {
-        let mut count = 0u64;
-        for _ in 0..n {
-            if rng.next_f64() < p {
-                count += 1;
-            }
-        }
-        return count;
+    if p > 0.5 {
+        return n - binomial(rng, n, 1.0 - p);
     }
-
-    // For larger n, use BTPE (Binomial, Triangle, Parallelogram, Exponential)
-    // Simplified version: use normal approximation + correction
-    let np = n as f64 * p;
-    let npq = np * (1.0 - p);
-    let sigma = npq.sqrt();
-
-    loop {
-        let (z, _) = normal_pair(rng);
-        let x = (np + sigma * z + 0.5).floor();
-        if x >= 0.0 && x <= n as f64 {
-            return x as u64;
+    let (mut n, mut p, mut acc) = (n, p, 0u64);
+    while n as f64 * p >= 30.0 {
+        let a = 1 + n / 2;
+        let b = n + 1 - a;
+        let x = beta(rng, a as f64, b as f64);
+        if x >= p {
+            n = a - 1;
+            p /= x;
+        } else {
+            acc += a;
+            n = b - 1;
+            p = (p - x) / (1.0 - x);
         }
     }
+    if n == 0 || p <= 0.0 {
+        return acc;
+    }
+    if p > 0.5 {
+        return acc + n - binomial_inversion(rng, n, 1.0 - p);
+    }
+    acc + binomial_inversion(rng, n, p)
 }
 
-/// Poisson(lam) variate.
+/// Poisson(lam) variate, exact for every `lam`.
+///
+/// Knuth's multiplication method below 30; above that the mean is split with a Gamma variate
+/// (Ahrens and Dieter) so the cost grows with `ln(lam)` rather than `lam`.
 pub(crate) fn poisson(rng: &mut Xoshiro256StarStar, lam: f64) -> u64 {
-    if lam <= 0.0 {
+    let (mut lam, mut acc) = (lam, 0u64);
+    if lam.is_nan() || lam <= 0.0 {
         return 0;
     }
-
-    if lam < 30.0 {
-        // Knuth's algorithm for small lambda
-        let l = (-lam).exp();
-        let mut k = 0u64;
-        let mut p = 1.0;
-        loop {
-            k += 1;
-            p *= rng.next_f64();
-            if p <= l {
-                return k - 1;
-            }
+    while lam >= 30.0 {
+        let m = (lam * 0.875).floor();
+        let x = gamma(rng, m, 1.0);
+        if x < lam {
+            acc += m as u64;
+            lam -= x;
+        } else {
+            return acc + binomial(rng, m as u64 - 1, lam / x);
         }
     }
-
-    // For large lambda, use normal approximation
-    let sigma = lam.sqrt();
+    let l = (-lam).exp();
+    let mut k = 0u64;
+    let mut p = 1.0;
     loop {
-        let (z, _) = normal_pair(rng);
-        let x = (lam + sigma * z + 0.5).floor();
-        if x >= 0.0 {
-            return x as u64;
+        k += 1;
+        p *= rng.next_f64();
+        if p <= l {
+            return acc + k - 1;
         }
     }
 }
@@ -294,9 +315,9 @@ pub(crate) fn integers_vec(
         high > low,
         "high must be greater than low, got low={low}, high={high}"
     );
-    let range = (high - low) as u64;
+    let range = high.wrapping_sub(low) as u64;
     (0..len)
-        .map(|_| low + bounded_u64(rng, range) as i64)
+        .map(|_| low.wrapping_add(bounded_u64(rng, range) as i64))
         .collect()
 }
 
@@ -306,13 +327,13 @@ pub(crate) fn exponential_vec(rng: &mut Xoshiro256StarStar, scale: f64, len: usi
 }
 
 /// Fill a Vec with binomial(n, p) values.
-pub(crate) fn binomial_vec(rng: &mut Xoshiro256StarStar, n: u64, p: f64, len: usize) -> Vec<u64> {
-    (0..len).map(|_| binomial(rng, n, p)).collect()
+pub(crate) fn binomial_vec(rng: &mut Xoshiro256StarStar, n: u64, p: f64, len: usize) -> Vec<i64> {
+    (0..len).map(|_| binomial(rng, n, p) as i64).collect()
 }
 
 /// Fill a Vec with poisson(lam) values.
-pub(crate) fn poisson_vec(rng: &mut Xoshiro256StarStar, lam: f64, len: usize) -> Vec<u64> {
-    (0..len).map(|_| poisson(rng, lam)).collect()
+pub(crate) fn poisson_vec(rng: &mut Xoshiro256StarStar, lam: f64, len: usize) -> Vec<i64> {
+    (0..len).map(|_| poisson(rng, lam) as i64).collect()
 }
 
 /// Fill a Vec with gamma(shape, scale) values.
@@ -507,7 +528,7 @@ mod tests {
         let mut rng = Xoshiro256StarStar::seed(42);
         let vals = binomial_vec(&mut rng, 10, 0.3, 100_000);
 
-        let mean = vals.iter().sum::<u64>() as f64 / vals.len() as f64;
+        let mean = vals.iter().sum::<i64>() as f64 / vals.len() as f64;
         assert!(
             (mean - 3.0).abs() < 0.1,
             "binomial(10,0.3) mean too far from 3: {mean}"
@@ -520,11 +541,51 @@ mod tests {
         let lam = 5.0;
         let vals = poisson_vec(&mut rng, lam, 100_000);
 
-        let mean = vals.iter().sum::<u64>() as f64 / vals.len() as f64;
+        let mean = vals.iter().sum::<i64>() as f64 / vals.len() as f64;
         assert!(
             (mean - lam).abs() < 0.1,
             "poisson(5) mean too far from 5: {mean}"
         );
+    }
+
+    fn mean_var(vals: &[i64]) -> (f64, f64) {
+        let n = vals.len() as f64;
+        let mean = vals.iter().sum::<i64>() as f64 / n;
+        let var = vals.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n;
+        (mean, var)
+    }
+
+    #[test]
+    fn binomial_large_parameters_have_exact_moments() {
+        let mut rng = Xoshiro256StarStar::seed(5);
+        for &(n, p) in &[(1000u64, 0.3), (40, 0.01), (100_000, 0.9), (60, 0.5)] {
+            let vals = binomial_vec(&mut rng, n, p, 40_000);
+            assert!(vals.iter().all(|&v| v >= 0 && v as u64 <= n));
+            let (mean, var) = mean_var(&vals);
+            let (em, ev) = (n as f64 * p, n as f64 * p * (1.0 - p));
+            assert!(
+                (mean - em).abs() < 5.0 * (ev / 40_000.0).sqrt(),
+                "n={n} p={p} mean={mean}"
+            );
+            assert!(
+                (var / ev - 1.0).abs() < 0.06,
+                "n={n} p={p} var={var} expected {ev}"
+            );
+        }
+    }
+
+    #[test]
+    fn poisson_large_lambda_has_exact_moments() {
+        let mut rng = Xoshiro256StarStar::seed(6);
+        for &lam in &[29.0, 30.0, 100.0, 5000.0] {
+            let vals = poisson_vec(&mut rng, lam, 40_000);
+            let (mean, var) = mean_var(&vals);
+            assert!(
+                (mean - lam).abs() < 5.0 * (lam / 40_000.0).sqrt(),
+                "lam={lam} mean={mean}"
+            );
+            assert!((var / lam - 1.0).abs() < 0.06, "lam={lam} var={var}");
+        }
     }
 
     #[test]
