@@ -5,3 +5,5 @@ __pycache__/
 .venv/
 /rustnum/tests/fixtures/*.npy
 !/rustnum/tests/fixtures/.gitkeep
+/tasks/*.log
+/rustnum/tests/fixtures/manifest.json
