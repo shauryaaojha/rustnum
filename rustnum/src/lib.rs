@@ -31,8 +31,8 @@ mod element;
 mod extra;
 mod layout;
 mod manip;
-mod npz;
 mod misc;
+mod npz;
 mod ops;
 mod reduce;
 mod slicing;
@@ -55,6 +55,11 @@ pub use extra::api::{
     setdiff1d, setxor1d, trapezoid, union1d,
 };
 pub use manip::*;
+pub use misc::{
+    Complex, angle, angle_deg, bartlett, blackman, copysign, divmod, ediff1d, ediff1d_with,
+    float_power, floor_divide, fmod, gcd, hamming, hanning, heaviside, kaiser, lcm, ldexp,
+    logaddexp, logaddexp2, nextafter, remainder,
+};
 pub use ops::*;
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use ufunc::*;

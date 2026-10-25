@@ -9,14 +9,19 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::ops::{Add, AddAssign, Div, DivAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 
-use super::math_kernels::KFloat;
+use crate::Float;
 
-/// A complex number `re + im*j` (NumPy `complex64` for `f32`, `complex128` for `f64`).
+/// A complex number `re + im*j`, like NumPy `complex128` (`complex64` for `f32`).
 ///
-/// ```ignore
-/// let z = Complex::new(1.0, 2.0) * Complex::new(3.0, -1.0);
-/// assert_eq!(z, Complex::new(5.0, 5.0));
+/// Supports `+ - * /` and unary `-` between complex numbers and with a real scalar on either
+/// side, and `Display` prints like `str(np.complex128(...))`. It is not an array element type yet.
+///
+/// ```
+/// use rustnum as np;
+/// let z = np::Complex::new(1.0, 2.0) * np::Complex::new(3.0, -1.0);
+/// assert_eq!(z, np::Complex::new(5.0, 5.0));
 /// assert_eq!(z.to_string(), "(5+5j)");
+/// assert_eq!((2.0f64 / np::Complex::new(0.0, 1.0)).to_string(), "-2j");
 /// ```
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct Complex<F> {
@@ -26,18 +31,34 @@ pub struct Complex<F> {
     pub im: F,
 }
 
-impl<F: KFloat> Complex<F> {
-    /// Builds `re + im*j`.
+impl<F: Float> Complex<F> {
+    /// Builds `re + im*j`, like `np.complex128(re, im)` (`np.complex64` for `f32`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::new(1.0, 2.0);
+    /// assert_eq!((z.re, z.im), (1.0, 2.0));
+    /// ```
     pub fn new(re: F, im: F) -> Self {
         Complex { re, im }
     }
 
-    /// Builds `re + 0j`.
+    /// Builds `re + 0j`, like `np.complex128(re)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::from_real(3.0), np::Complex::new(3.0, 0.0));
+    /// ```
     pub fn from_real(re: F) -> Self {
         Complex { re, im: F::ZERO }
     }
 
-    /// The imaginary unit `0 + 1j`.
+    /// The imaginary unit `0 + 1j`, like NumPy's `1j`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::<f64>::i() * np::Complex::i(), np::Complex::new(-1.0, 0.0));
+    /// ```
     pub fn i() -> Self {
         Complex {
             re: F::ZERO,
@@ -45,47 +66,97 @@ impl<F: KFloat> Complex<F> {
         }
     }
 
-    /// `np.conj(z)`.
+    /// Complex conjugate, like `np.conj(z)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(1.0, 2.0).conj(), np::Complex::new(1.0, -2.0));
+    /// ```
     pub fn conj(self) -> Self {
         Complex::new(self.re, -self.im)
     }
 
-    /// `np.abs(z)`: the modulus, computed with `hypot` (no overflow, `inf` beats NaN).
+    /// Modulus, like `np.abs(z)`, computed with `hypot` (no overflow, `inf` beats NaN).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(3.0, 4.0).norm(), 5.0);
+    /// ```
     pub fn norm(self) -> F {
         self.re.hypot(self.im)
     }
 
-    /// `re*re + im*im`.
+    /// Squared modulus `re*re + im*im`, like `np.abs(z)**2` without the root.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(3.0, 4.0).norm_sqr(), 25.0);
+    /// ```
     pub fn norm_sqr(self) -> F {
         self.re * self.re + self.im * self.im
     }
 
-    /// `np.angle(z)`: `atan2(im, re)`, in `[-pi, pi]`.
+    /// Argument in `[-pi, pi]`, like `np.angle(z)`: `atan2(im, re)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 1.0).arg(), std::f64::consts::FRAC_PI_2);
+    /// ```
     pub fn arg(self) -> F {
         self.im.atan2(self.re)
     }
 
-    /// Builds `r * (cos(theta) + j sin(theta))`.
+    /// Builds `r * (cos(theta) + j sin(theta))`, like `r * np.exp(1j * theta)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::from_polar(2.0, 0.0);
+    /// assert_eq!(z, np::Complex::new(2.0, 0.0));
+    /// ```
     pub fn from_polar(r: F, theta: F) -> Self {
         Complex::new(r * theta.cos(), r * theta.sin())
     }
 
-    /// True when either part is NaN (`np.isnan`).
+    /// True when either part is NaN, like `np.isnan(z)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert!(np::Complex::new(f64::NAN, 0.0).is_nan());
+    /// assert!(!np::Complex::new(1.0, 0.0).is_nan());
+    /// ```
     pub fn is_nan(self) -> bool {
         self.re.is_nan() || self.im.is_nan()
     }
 
-    /// True when either part is infinite (`np.isinf`).
+    /// True when either part is infinite, like `np.isinf(z)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert!(np::Complex::new(0.0, f64::INFINITY).is_infinite());
+    /// ```
     pub fn is_infinite(self) -> bool {
         self.re.is_infinite() || self.im.is_infinite()
     }
 
-    /// True when both parts are finite (`np.isfinite`).
+    /// True when both parts are finite, like `np.isfinite(z)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert!(np::Complex::new(1.0, 2.0).is_finite());
+    /// assert!(!np::Complex::new(1.0, f64::NAN).is_finite());
+    /// ```
     pub fn is_finite(self) -> bool {
         self.re.is_finite() && self.im.is_finite()
     }
 
-    /// `np.exp(z)` (C99 `cexp`).
+    /// Complex exponential, like `np.exp(z)` (C99 `cexp`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::new(0.0, std::f64::consts::PI).exp();
+    /// assert_eq!(z.re, -1.0);
+    /// assert!(z.im.abs() < 1e-15);
+    /// ```
     pub fn exp(self) -> Self {
         let (x, y) = (self.re, self.im);
         if y == F::ZERO {
@@ -103,7 +174,7 @@ impl<F: KFloat> Complex<F> {
                 Complex::new(x, F::NAN)
             };
         }
-        if x > F::MAX.ln() {
+        if x > F::MAX_VALUE.ln() {
             // exp(x) would overflow; split it so a tiny cos/sin can still give a finite part.
             let t = (x * F::HALF).exp();
             return Complex::new((t * y.cos()) * t, (t * y.sin()) * t);
@@ -112,7 +183,13 @@ impl<F: KFloat> Complex<F> {
         Complex::new(e * y.cos(), e * y.sin())
     }
 
-    /// `np.log(z)`: principal branch, `log(-1 + 0j) = pi j`, `log(-1 - 0j) = -pi j`.
+    /// Principal natural logarithm, like `np.log(z)`: `log(-1 + 0j) = pi j`, `log(-1 - 0j) = -pi j`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::new(-1.0, 0.0).ln();
+    /// assert_eq!(z, np::Complex::new(0.0, std::f64::consts::PI));
+    /// ```
     pub fn ln(self) -> Self {
         let (x, y) = (self.re, self.im);
         let (mut ax, mut ay) = (x.abs(), y.abs());
@@ -138,7 +215,13 @@ impl<F: KFloat> Complex<F> {
         Complex::new(re, y.atan2(x))
     }
 
-    /// `np.sqrt(z)`: principal square root (C99 `csqrt`, scaled against overflow).
+    /// Principal square root, like `np.sqrt(z)` (C99 `csqrt`, scaled against overflow).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(-4.0, 0.0).sqrt(), np::Complex::new(0.0, 2.0));
+    /// assert_eq!(np::Complex::new(-4.0, -0.0).sqrt(), np::Complex::new(0.0, -2.0));
+    /// ```
     pub fn sqrt(self) -> Self {
         let (mut a, mut b) = (self.re, self.im);
         if a == F::ZERO && b == F::ZERO {
@@ -151,10 +234,10 @@ impl<F: KFloat> Complex<F> {
             return Complex::new(a, F::NAN);
         }
         if a.is_infinite() {
-            return if a.is_sign_negative() {
-                Complex::new(zero_or_nan(b), a.copysign(b))
+            return if a.sign_bit() {
+                Complex::new(zero_or_nan(b), a.copy_sign(b))
             } else {
-                Complex::new(a, zero_or_nan(b).copysign(b))
+                Complex::new(a, zero_or_nan(b).copy_sign(b))
             };
         }
         let scale = a.abs() >= F::SQRT_THRESH || b.abs() >= F::SQRT_THRESH;
@@ -168,7 +251,7 @@ impl<F: KFloat> Complex<F> {
             Complex::new(t, b / (t + t))
         } else {
             let t = ((-a + a.hypot(b)) * F::HALF).sqrt();
-            Complex::new(b.abs() / (t + t), t.copysign(b))
+            Complex::new(b.abs() / (t + t), t.copy_sign(b))
         };
         if scale {
             Complex::new(r.re * F::TWO, r.im * F::TWO)
@@ -177,8 +260,14 @@ impl<F: KFloat> Complex<F> {
         }
     }
 
-    /// `z ** w` for complex `w`, like NumPy (`z ** 0 = 1`, `0 ** w` is `0` for `Re(w) > 0` and
-    /// NaN otherwise, small integer powers by repeated squaring, else `exp(w * log z)`).
+    /// Complex power, like `z ** w` / `np.power(z, w)`.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::new(1.0, 2.0);
+    /// assert_eq!(z.powc(np::Complex::new(2.0, 0.0)), z * z);
+    /// assert_eq!(z.powc(np::Complex::new(0.0, 0.0)), np::Complex::new(1.0, 0.0));
+    /// ```
     pub fn powc(self, w: Self) -> Self {
         let one = Complex::from_real(F::ONE);
         if w.re == F::ZERO && w.im == F::ZERO {
@@ -217,45 +306,88 @@ impl<F: KFloat> Complex<F> {
         (w * self.ln()).exp()
     }
 
-    /// `z ** p` for a real exponent (NumPy promotes `p` to `p + 0j`).
+    /// Complex raised to a real power, like `z ** p` (NumPy promotes `p` to `p + 0j`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let z = np::Complex::new(3.0, 4.0);
+    /// assert_eq!(z.powf(2.0), np::Complex::new(-7.0, 24.0));
+    /// ```
     pub fn powf(self, p: F) -> Self {
         self.powc(Complex::from_real(p))
     }
 
-    /// `np.sin(z)` (C99 `csin`).
+    /// Complex sine, like `np.sin(z)` (C99 `csin`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).sin(), np::Complex::new(0.0, 0.0));
+    /// ```
     pub fn sin(self) -> Self {
         let w = csinh(Complex::new(-self.im, self.re));
         Complex::new(w.im, -w.re)
     }
 
-    /// `np.cos(z)` (C99 `ccos`).
+    /// Complex cosine, like `np.cos(z)` (C99 `ccos`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).cos().re, 1.0);
+    /// ```
     pub fn cos(self) -> Self {
         ccosh(Complex::new(-self.im, self.re))
     }
 
-    /// `np.tan(z)` (C99 `ctan`).
+    /// Complex tangent, like `np.tan(z)` (C99 `ctan`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).tan(), np::Complex::new(0.0, 0.0));
+    /// ```
     pub fn tan(self) -> Self {
         let w = ctanh(Complex::new(-self.im, self.re));
         Complex::new(w.im, -w.re)
     }
 
-    /// `np.sinh(z)` (C99 `csinh`).
+    /// Complex hyperbolic sine, like `np.sinh(z)` (C99 `csinh`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).sinh(), np::Complex::new(0.0, 0.0));
+    /// ```
     pub fn sinh(self) -> Self {
         csinh(self)
     }
 
-    /// `np.cosh(z)` (C99 `ccosh`).
+    /// Complex hyperbolic cosine, like `np.cosh(z)` (C99 `ccosh`).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).cosh().re, 1.0);
+    /// ```
     pub fn cosh(self) -> Self {
         ccosh(self)
     }
 
-    /// `np.tanh(z)` (C99 `ctanh`, Kahan's algorithm).
+    /// Complex hyperbolic tangent, like `np.tanh(z)` (C99 `ctanh`, Kahan's algorithm).
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Complex::new(0.0, 0.0).tanh(), np::Complex::new(0.0, 0.0));
+    /// ```
     pub fn tanh(self) -> Self {
         ctanh(self)
     }
 
-    /// NumPy's sort order for complex values: lexicographic on `(re, im)` with NaNs last
-    /// (`[R + Rj, R + nanj, nan + Rj, nan + nanj]`). Equal values compare `Equal`.
+    /// Ordering used by `np.sort` on complex values: lexicographic on `(re, im)` with NaNs last.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// use std::cmp::Ordering;
+    /// let (a, b) = (np::Complex::new(1.0, 5.0), np::Complex::new(2.0, 0.0));
+    /// assert_eq!(a.cmp_numpy(&b), Ordering::Less);
+    /// assert_eq!(np::Complex::new(f64::NAN, 0.0).cmp_numpy(&b), Ordering::Greater);
+    /// ```
     pub fn cmp_numpy(&self, other: &Self) -> Ordering {
         if clt(self, other) {
             Ordering::Less
@@ -268,7 +400,7 @@ impl<F: KFloat> Complex<F> {
 }
 
 /// NumPy's `CLT` for complex sorting.
-fn clt<F: KFloat>(a: &Complex<F>, b: &Complex<F>) -> bool {
+fn clt<F: Float>(a: &Complex<F>, b: &Complex<F>) -> bool {
     if a.re < b.re {
         !a.im.is_nan() || b.im.is_nan()
     } else if a.re > b.re {
@@ -281,11 +413,11 @@ fn clt<F: KFloat>(a: &Complex<F>, b: &Complex<F>) -> bool {
 }
 
 /// `b - b` of C: zero for finite `b`, NaN for NaN or infinity.
-fn zero_or_nan<F: KFloat>(b: F) -> F {
+fn zero_or_nan<F: Float>(b: F) -> F {
     if b.is_finite() { F::ZERO } else { F::NAN }
 }
 
-fn csinh<F: KFloat>(z: Complex<F>) -> Complex<F> {
+fn csinh<F: Float>(z: Complex<F>) -> Complex<F> {
     let (x, y) = (z.re, z.im);
     if x.is_finite() && y.is_finite() {
         if y == F::ZERO {
@@ -295,13 +427,13 @@ fn csinh<F: KFloat>(z: Complex<F>) -> Complex<F> {
         if ax < F::HYPERBOLIC_DIRECT {
             return Complex::new(x.sinh() * y.cos(), x.cosh() * y.sin());
         }
-        if ax < F::MAX.ln() {
+        if ax < F::MAX_VALUE.ln() {
             let h = ax.exp() * F::HALF;
-            return Complex::new(h.copysign(x) * y.cos(), h * y.sin());
+            return Complex::new(h.copy_sign(x) * y.cos(), h * y.sin());
         }
         let s = (ax * F::HALF).exp();
         let h = s * F::HALF;
-        return Complex::new((h.copysign(x) * y.cos()) * s, (h * y.sin()) * s);
+        return Complex::new((h.copy_sign(x) * y.cos()) * s, (h * y.sin()) * s);
     }
     if x == F::ZERO {
         return Complex::new(x, F::NAN);
@@ -321,7 +453,7 @@ fn csinh<F: KFloat>(z: Complex<F>) -> Complex<F> {
     Complex::new(F::NAN, F::NAN)
 }
 
-fn ccosh<F: KFloat>(z: Complex<F>) -> Complex<F> {
+fn ccosh<F: Float>(z: Complex<F>) -> Complex<F> {
     let (x, y) = (z.re, z.im);
     if x.is_finite() && y.is_finite() {
         if y == F::ZERO {
@@ -331,19 +463,19 @@ fn ccosh<F: KFloat>(z: Complex<F>) -> Complex<F> {
         if ax < F::HYPERBOLIC_DIRECT {
             return Complex::new(x.cosh() * y.cos(), x.sinh() * y.sin());
         }
-        if ax < F::MAX.ln() {
+        if ax < F::MAX_VALUE.ln() {
             let h = ax.exp() * F::HALF;
-            return Complex::new(h * y.cos(), h.copysign(x) * y.sin());
+            return Complex::new(h * y.cos(), h.copy_sign(x) * y.sin());
         }
         let s = (ax * F::HALF).exp();
         let h = s * F::HALF;
-        return Complex::new((h * y.cos()) * s, (h.copysign(x) * y.sin()) * s);
+        return Complex::new((h * y.cos()) * s, (h.copy_sign(x) * y.sin()) * s);
     }
     if x == F::ZERO {
-        return Complex::new(F::NAN, x * F::ZERO.copysign(y));
+        return Complex::new(F::NAN, x * F::ZERO.copy_sign(y));
     }
     if y == F::ZERO {
-        return Complex::new(x * x, F::ZERO.copysign(x) * y);
+        return Complex::new(x * x, F::ZERO.copy_sign(x) * y);
     }
     if x.is_finite() {
         return Complex::new(F::NAN, F::NAN);
@@ -357,7 +489,7 @@ fn ccosh<F: KFloat>(z: Complex<F>) -> Complex<F> {
     Complex::new(F::NAN, F::NAN)
 }
 
-fn ctanh<F: KFloat>(z: Complex<F>) -> Complex<F> {
+fn ctanh<F: Float>(z: Complex<F>) -> Complex<F> {
     let (x, y) = (z.re, z.im);
     if !x.is_finite() {
         if x.is_nan() {
@@ -368,7 +500,7 @@ fn ctanh<F: KFloat>(z: Complex<F>) -> Complex<F> {
         } else {
             y.sin() * y.cos()
         };
-        return Complex::new(F::ONE.copysign(x), F::ZERO.copysign(t));
+        return Complex::new(F::ONE.copy_sign(x), F::ZERO.copy_sign(t));
     }
     if !y.is_finite() {
         return Complex::new(F::NAN, F::NAN);
@@ -376,7 +508,7 @@ fn ctanh<F: KFloat>(z: Complex<F>) -> Complex<F> {
     if x.abs() >= F::HYPERBOLIC_DIRECT {
         let e = (-x.abs()).exp();
         let four = F::from_f64(4.0);
-        return Complex::new(F::ONE.copysign(x), four * y.sin() * y.cos() * e * e);
+        return Complex::new(F::ONE.copy_sign(x), four * y.sin() * y.cos() * e * e);
     }
     let t = y.tan();
     let beta = F::ONE + t * t;
@@ -390,21 +522,21 @@ fn ctanh<F: KFloat>(z: Complex<F>) -> Complex<F> {
 // Arithmetic
 // ---------------------------------------------------------------------------------------
 
-impl<F: KFloat> Add for Complex<F> {
+impl<F: Float> Add for Complex<F> {
     type Output = Self;
     fn add(self, o: Self) -> Self {
         Complex::new(self.re + o.re, self.im + o.im)
     }
 }
 
-impl<F: KFloat> Sub for Complex<F> {
+impl<F: Float> Sub for Complex<F> {
     type Output = Self;
     fn sub(self, o: Self) -> Self {
         Complex::new(self.re - o.re, self.im - o.im)
     }
 }
 
-impl<F: KFloat> Mul for Complex<F> {
+impl<F: Float> Mul for Complex<F> {
     type Output = Self;
     fn mul(self, o: Self) -> Self {
         Complex::new(
@@ -415,7 +547,7 @@ impl<F: KFloat> Mul for Complex<F> {
 }
 
 /// Smith's algorithm, exactly as in NumPy's `complex division` loop.
-impl<F: KFloat> Div for Complex<F> {
+impl<F: Float> Div for Complex<F> {
     type Output = Self;
     fn div(self, o: Self) -> Self {
         let (ar, ai, br, bi) = (self.re, self.im, o.re, o.im);
@@ -437,7 +569,7 @@ impl<F: KFloat> Div for Complex<F> {
     }
 }
 
-impl<F: KFloat> Neg for Complex<F> {
+impl<F: Float> Neg for Complex<F> {
     type Output = Self;
     fn neg(self) -> Self {
         Complex::new(-self.re, -self.im)
@@ -448,18 +580,18 @@ impl<F: KFloat> Neg for Complex<F> {
 // results with infinities and signed zeros match NumPy bit for bit.
 macro_rules! scalar_rhs {
     ($($tr:ident $m:ident $atr:ident $am:ident),*) => {$(
-        impl<F: KFloat> $tr<F> for Complex<F> {
+        impl<F: Float> $tr<F> for Complex<F> {
             type Output = Complex<F>;
             fn $m(self, s: F) -> Complex<F> {
                 $tr::$m(self, Complex::from_real(s))
             }
         }
-        impl<F: KFloat> $atr for Complex<F> {
+        impl<F: Float> $atr for Complex<F> {
             fn $am(&mut self, o: Complex<F>) {
                 *self = $tr::$m(*self, o);
             }
         }
-        impl<F: KFloat> $atr<F> for Complex<F> {
+        impl<F: Float> $atr<F> for Complex<F> {
             fn $am(&mut self, s: F) {
                 *self = $tr::$m(*self, Complex::from_real(s));
             }
@@ -497,7 +629,7 @@ scalar_lhs!(f32, f64);
 // ---------------------------------------------------------------------------------------
 
 /// Python / NumPy shortest repr of `|x|` without sign and without a trailing `.0`.
-fn py_abs_repr<F: KFloat>(x: F) -> String {
+fn py_abs_repr<F: Float>(x: F) -> String {
     if x.is_nan() {
         return "nan".to_string();
     }
@@ -537,10 +669,10 @@ fn py_abs_repr<F: KFloat>(x: F) -> String {
 }
 
 /// Like `str(np.complex128(...))`: `(1+2j)`, `(-0.5-1j)`, `2j` when the real part is `+0`.
-impl<F: KFloat> fmt::Display for Complex<F> {
+impl<F: Float> fmt::Display for Complex<F> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let im_neg = self.im.is_sign_negative() && !self.im.is_nan();
-        let re_neg = self.re.is_sign_negative() && !self.re.is_nan();
+        let im_neg = self.im.sign_bit() && !self.im.is_nan();
+        let re_neg = self.re.sign_bit() && !self.re.is_nan();
         let im = py_abs_repr(self.im);
         if self.re == F::ZERO && !re_neg {
             let sign = if im_neg { "-" } else { "" };

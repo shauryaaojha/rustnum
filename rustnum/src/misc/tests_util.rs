@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 
 use super::complex::Complex;
-use super::math_kernels::KFloat;
+use crate::Float;
 
 thread_local! {
     static FAILS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -45,7 +45,7 @@ impl Drop for Report {
 /// NaN matches NaN (payload ignored). Infinities and zeros must match exactly, including the
 /// sign of zero. Other values must agree within `atol + rtol * |want|`; with `rtol = atol = 0`
 /// the bit patterns must be identical.
-pub fn check<F: KFloat>(what: &str, input: &str, got: F, want: F, rtol: f64, atol: f64) {
+pub fn check<F: Float>(what: &str, input: &str, got: F, want: F, rtol: f64, atol: f64) {
     let ok = if want.is_nan() {
         got.is_nan()
     } else if want.is_infinite() || want == F::ZERO || (rtol == 0.0 && atol == 0.0) {
@@ -65,7 +65,7 @@ pub fn check<F: KFloat>(what: &str, input: &str, got: F, want: F, rtol: f64, ato
 /// part does not cause false alarms. When `loose_signs` is set (used for non-finite inputs,
 /// where C99 Annex G leaves the sign of a zero or infinity unspecified and libms disagree),
 /// zeros and infinities only have to match in magnitude.
-pub fn check_c<F: KFloat>(
+pub fn check_c<F: Float>(
     what: &str,
     input: &str,
     got: Complex<F>,
@@ -99,6 +99,6 @@ pub fn check_c<F: KFloat>(
 }
 
 /// True when both parts of `z` are finite (the strict-sign regime).
-pub fn finite_input<F: KFloat>(z: Complex<F>) -> bool {
+pub fn finite_input<F: Float>(z: Complex<F>) -> bool {
     z.re.is_finite() && z.im.is_finite()
 }

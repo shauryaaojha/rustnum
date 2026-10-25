@@ -83,7 +83,11 @@ pub trait Num:
 /// use rustnum as np;
 /// assert!(<f64 as np::Float>::PI>3.0);
 /// ```
-pub trait Float: Num + Neg<Output = Self> {
+///
+/// `Float` has a hidden, sealed supertrait (`FloatHooks`) that carries the bit-level helpers and
+/// constants of the `f32`/`f64` kernels. Its items never clash with `Float`/`Num`/`Element`, so
+/// generic code bounded by `F: Float` can call every `Array<F>` method.
+pub trait Float: Num + Neg<Output = Self> + crate::misc::FloatHooks {
     /// Scalar equivalent of np.nan.
     /// ```
     /// use rustnum as np;
