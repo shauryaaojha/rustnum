@@ -8,7 +8,10 @@ use crate::{Array, Element, Float, Num};
 /// ```
 pub fn zeros<T: Element>(shape: impl AsRef<[usize]>) -> Array<T> {
     let shape = shape.as_ref();
-    Array::from_vec(vec![T::default(); crate::layout::size(shape)], shape)
+    Array::from_vec(
+        crate::pool::filled(crate::layout::size(shape), T::default()),
+        shape,
+    )
 }
 /// Creates ones, like `np.ones`.
 /// Implements np.ones with array value semantics.
@@ -29,7 +32,7 @@ pub fn ones<T: Num>(shape: impl AsRef<[usize]>) -> Array<T> {
 /// ```
 pub fn full<T: Element>(shape: impl AsRef<[usize]>, v: T) -> Array<T> {
     let shape = shape.as_ref();
-    Array::from_vec(vec![v; crate::layout::size(shape)], shape)
+    Array::from_vec(crate::pool::filled(crate::layout::size(shape), v), shape)
 }
 /// Implements np.zeros_like with array value semantics.
 ///

@@ -15,6 +15,14 @@ pub trait IntoArray<T: Element> {
     /// assert_eq!(7.into_array().item(),7);
     /// ```
     fn into_array(self) -> Array<T>;
+    /// Exposes a scalar without allocation, like NumPy scalar broadcasting.
+    /// ```
+    /// use rustnum::IntoArray;
+    /// assert_eq!(3.scalar_value(),Some(3));
+    /// ```
+    fn scalar_value(&self) -> Option<T> {
+        None
+    }
 }
 impl<T: Element> IntoArray<T> for Array<T> {
     fn into_array(self) -> Array<T> {
@@ -27,6 +35,9 @@ impl<T: Element> IntoArray<T> for &Array<T> {
     }
 }
 impl<T: Element> IntoArray<T> for T {
+    fn scalar_value(&self) -> Option<T> {
+        Some(*self)
+    }
     fn into_array(self) -> Array<T> {
         Array::scalar(self)
     }

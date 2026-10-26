@@ -1,7 +1,5 @@
 use crate::element::{add, isnan, maximum_value, minimum_value, mul, sub};
 use crate::layout::Offsets;
-#[cfg(feature = "rayon")]
-use crate::layout::PAR_THRESHOLD;
 use crate::slicing::axis_index;
 use crate::{Array, Element, Float, Num};
 #[cfg(feature = "rayon")]
@@ -30,13 +28,104 @@ fn pairwise<T: Num>(x: &[T]) -> T {
     }
     let mid = (x.len() / 2) / 8 * 8;
     #[cfg(feature = "rayon")]
-    if x.len() >= PAR_THRESHOLD {
+    if x.len() >= crate::kernels_mem::REDUCE_ALL {
         let (a, b) = rayon::join(|| pairwise(&x[..mid]), || pairwise(&x[mid..]));
         return add(a, b);
     }
     add(pairwise(&x[..mid]), pairwise(&x[mid..]))
 }
+// Balanced summation over a virtual slice avoids materializing strided lanes.
+fn pairwise_by<T: Num>(n: usize, f: &impl Fn(usize) -> T) -> T {
+    fn visit<T: Num>(start: usize, n: usize, f: &impl Fn(usize) -> T) -> T {
+        if n <= 128 {
+            let mut acc = [T::ZERO; 8];
+            for i in 0..n {
+                acc[i % 8] = add(acc[i % 8], f(start + i));
+            }
+            add(
+                add(add(acc[0], acc[1]), add(acc[2], acc[3])),
+                add(add(acc[4], acc[5]), add(acc[6], acc[7])),
+            )
+        } else {
+            let mid = n / 2 / 8 * 8;
+            add(visit(start, mid, f), visit(start + mid, n - mid, f))
+        }
+    }
+    visit(0, n, f)
+}
+fn sum_rows<T: Num>(data: &[T], stride: usize, rows: usize, out: &mut [T]) {
+    if rows <= 16 {
+        out.fill(T::ZERO);
+        for row in 0..rows {
+            for (x, &y) in out.iter_mut().zip(&data[row * stride..]) {
+                *x = add(*x, y);
+            }
+        }
+    } else {
+        let mid = rows / 2;
+        sum_rows(data, stride, mid, out);
+        let mut right = [T::ZERO; 128];
+        sum_rows(
+            &data[mid * stride..],
+            stride,
+            rows - mid,
+            &mut right[..out.len()],
+        );
+        for (x, &y) in out.iter_mut().zip(&right) {
+            *x = add(*x, y);
+        }
+    }
+}
 impl<T: Element> Array<T> {
+    fn axis_kernel<U: Element>(
+        &self,
+        axis: isize,
+        f: impl Fn(usize, isize, usize) -> U + Sync + Send,
+    ) -> Array<U> {
+        let axis = axis_index(axis, self.ndim());
+        let mut shape = self.shape.clone();
+        let n = shape.remove(axis);
+        let mut data = crate::pool::output(crate::layout::size(&shape));
+        let step = self.strides[axis];
+        let compute = |i: usize| {
+            let mut index = i;
+            let mut base = self.offset as isize;
+            for d in (0..self.ndim()).rev() {
+                if d != axis {
+                    base += (index % self.shape[d]) as isize * self.strides[d];
+                    index /= self.shape[d];
+                }
+            }
+            f(base as usize, step, n)
+        };
+        #[cfg(feature = "rayon")]
+        if self.size() >= crate::kernels_mem::REDUCE_LANES {
+            data.par_iter_mut()
+                .enumerate()
+                .for_each(|(i, x)| *x = compute(i));
+        } else {
+            for (i, x) in data.iter_mut().enumerate() {
+                *x = compute(i);
+            }
+        }
+        #[cfg(not(feature = "rayon"))]
+        for (i, x) in data.iter_mut().enumerate() {
+            *x = compute(i);
+        }
+        Array::from_owned_shape(data, shape)
+    }
+    fn axis_fold<U: Element>(
+        &self,
+        axis: isize,
+        init: U,
+        f: impl Fn(U, T) -> U + Sync + Send,
+    ) -> Array<U> {
+        self.axis_kernel(axis, |base, step, n| {
+            (0..n).fold(init, |acc, i| {
+                f(acc, self.data[(base as isize + i as isize * step) as usize])
+            })
+        })
+    }
     pub(crate) fn lanes<U: Element>(
         &self,
         axis: isize,
@@ -50,6 +139,7 @@ impl<T: Element> Array<T> {
         let offsets = Offsets::new(&shape, &strides, self.offset);
         let mut lane = Array {
             data: self.data.clone(),
+            recycle: self.recycle,
             shape: vec![n],
             strides: vec![stride],
             offset: self.offset,
@@ -95,7 +185,7 @@ impl<T: Element> Array<T> {
         };
         if let Some(s) = self.as_slice() {
             #[cfg(feature = "rayon")]
-            if s.len() >= PAR_THRESHOLD {
+            if s.len() >= crate::kernels_mem::REDUCE_ALL {
                 return s.par_iter().copied().reduce_with(combine).unwrap();
             }
             return s.iter().copied().reduce(combine).unwrap();
@@ -154,7 +244,11 @@ impl<T: Element> Array<T> {
             self.shape[a] > 0,
             "zero-size array to reduction operation minimum which has no identity"
         );
-        self.lanes(axis, |a| a.min())
+        self.axis_kernel(axis, |base, step, n| {
+            (1..n).fold(self.data[base], |acc, i| {
+                minimum_value(acc, self.data[(base as isize + i as isize * step) as usize])
+            })
+        })
     }
     /// Implements np.max with array value semantics.
     ///
@@ -169,7 +263,11 @@ impl<T: Element> Array<T> {
             self.shape[a] > 0,
             "zero-size array to reduction operation maximum which has no identity"
         );
-        self.lanes(axis, |a| a.max())
+        self.axis_kernel(axis, |base, step, n| {
+            (1..n).fold(self.data[base], |acc, i| {
+                maximum_value(acc, self.data[(base as isize + i as isize * step) as usize])
+            })
+        })
     }
     /// Implements np.argmin with array value semantics.
     ///
@@ -184,7 +282,18 @@ impl<T: Element> Array<T> {
             self.shape[a] > 0,
             "zero-size array to reduction operation minimum which has no identity"
         );
-        self.lanes(axis, |a| a.argmin())
+        self.axis_kernel(axis, |base, step, n| {
+            let mut best = 0;
+            let mut value = self.data[base];
+            for i in 1..n {
+                let x = self.data[(base as isize + i as isize * step) as usize];
+                if !isnan(value) && (isnan(x) || x < value) {
+                    best = i;
+                    value = x;
+                }
+            }
+            best
+        })
     }
     /// Implements np.argmax with array value semantics.
     ///
@@ -199,7 +308,18 @@ impl<T: Element> Array<T> {
             self.shape[a] > 0,
             "zero-size array to reduction operation maximum which has no identity"
         );
-        self.lanes(axis, |a| a.argmax())
+        self.axis_kernel(axis, |base, step, n| {
+            let mut best = 0;
+            let mut value = self.data[base];
+            for i in 1..n {
+                let x = self.data[(base as isize + i as isize * step) as usize];
+                if !isnan(value) && (isnan(x) || x > value) {
+                    best = i;
+                    value = x;
+                }
+            }
+            best
+        })
     }
     /// Implements np.any with array value semantics.
     ///
@@ -235,7 +355,7 @@ impl<T: Element> Array<T> {
     /// assert_eq!(a.any_axis(1).to_vec(),[true,true]);
     /// ```
     pub fn any_axis(&self, axis: isize) -> Array<bool> {
-        self.lanes(axis, |a| a.any())
+        self.axis_fold(axis, false, |acc, x| acc || x != T::default())
     }
     /// Implements np.all with array value semantics.
     ///
@@ -245,7 +365,7 @@ impl<T: Element> Array<T> {
     /// assert_eq!(a.all_axis(1).to_vec(),[true,true]);
     /// ```
     pub fn all_axis(&self, axis: isize) -> Array<bool> {
-        self.lanes(axis, |a| a.all())
+        self.axis_fold(axis, true, |acc, x| acc && x != T::default())
     }
     /// Implements np.count_nonzero with array value semantics.
     ///
@@ -272,7 +392,7 @@ impl<T: Num> Array<T> {
         if let Some(s) = self.as_slice() {
             pairwise(s)
         } else {
-            pairwise(&self.to_vec())
+            pairwise_by(self.size(), &|i| self.flat_value(i))
         }
     }
     /// Implements np.prod with array value semantics.
@@ -284,7 +404,7 @@ impl<T: Num> Array<T> {
     pub fn prod(&self) -> T {
         if let Some(s) = self.as_slice() {
             #[cfg(feature = "rayon")]
-            if s.len() >= PAR_THRESHOLD {
+            if s.len() >= crate::kernels_mem::REDUCE_ALL {
                 return s.par_iter().copied().reduce(|| T::ONE, mul);
             }
             return s.iter().copied().fold(T::ONE, mul);
@@ -310,7 +430,67 @@ impl<T: Num> Array<T> {
     /// assert_eq!(a.sum_axis(1).to_vec(),[3.,7.]);
     /// ```
     pub fn sum_axis(&self, axis: isize) -> Array<T> {
-        self.lanes(axis, |a| a.sum())
+        let axis = axis_index(axis, self.ndim());
+        if let Some(input) = self.as_slice() {
+            let inner = crate::layout::size(&self.shape[axis + 1..]);
+            let mut shape = self.shape.clone();
+            let rows = shape.remove(axis);
+            let mut out = crate::pool::filled(crate::layout::size(&shape), T::ZERO);
+            if rows > 0 && inner > 0 {
+                if inner == 1 {
+                    #[cfg(feature = "rayon")]
+                    if input.len() >= crate::kernels_mem::REDUCE_LANES {
+                        out.par_iter_mut()
+                            .zip(input.par_chunks(rows))
+                            .for_each(|(o, row)| *o = pairwise(row));
+                    } else {
+                        for (o, row) in out.iter_mut().zip(input.chunks(rows)) {
+                            *o = pairwise(row);
+                        }
+                    }
+                    #[cfg(not(feature = "rayon"))]
+                    for (o, row) in out.iter_mut().zip(input.chunks(rows)) {
+                        *o = pairwise(row);
+                    }
+                } else {
+                    // Split output into disjoint column blocks; each task streams
+                    // complete row segments. Middle axes add independent outer batches.
+                    let run = |outer: usize, dst: &mut [T]| {
+                        let input = &input[outer * rows * inner..];
+                        #[cfg(feature = "rayon")]
+                        if input.len() >= crate::kernels_mem::REDUCE_ROWS {
+                            dst.par_chunks_mut(128)
+                                .enumerate()
+                                .for_each(|(c, out)| sum_rows(&input[c * 128..], inner, rows, out));
+                            return;
+                        }
+                        dst.chunks_mut(128)
+                            .enumerate()
+                            .for_each(|(c, out)| sum_rows(&input[c * 128..], inner, rows, out));
+                    };
+                    #[cfg(feature = "rayon")]
+                    if out.len() / inner > 1 && input.len() >= crate::kernels_mem::REDUCE_ROWS {
+                        out.par_chunks_mut(inner)
+                            .enumerate()
+                            .for_each(|(i, dst)| run(i, dst));
+                    } else {
+                        out.chunks_mut(inner)
+                            .enumerate()
+                            .for_each(|(i, dst)| run(i, dst));
+                    }
+                    #[cfg(not(feature = "rayon"))]
+                    out.chunks_mut(inner)
+                        .enumerate()
+                        .for_each(|(i, dst)| run(i, dst));
+                }
+            }
+            return Array::from_owned_shape(out, shape);
+        }
+        self.axis_kernel(axis as isize, |base, step, n| {
+            pairwise_by(n, &|i| {
+                self.data[(base as isize + i as isize * step) as usize]
+            })
+        })
     }
     /// Implements np.prod with array value semantics.
     ///
@@ -320,7 +500,7 @@ impl<T: Num> Array<T> {
     /// assert_eq!(a.prod_axis(1).to_vec(),[2.,12.]);
     /// ```
     pub fn prod_axis(&self, axis: isize) -> Array<T> {
-        self.lanes(axis, |a| a.prod())
+        self.axis_fold(axis, T::ONE, mul)
     }
     /// Implements np.cumsum with array value semantics.
     ///
@@ -432,11 +612,10 @@ impl<F: Float> Array<F> {
     /// ```
     pub fn var_ddof(&self, ddof: usize) -> F {
         let m = self.mean();
-        let residuals = self.par_map(|x| {
-            let d = x - m;
+        pairwise_by(self.size(), &|i| {
+            let d = self.flat_value(i) - m;
             d * d
-        });
-        residuals.sum() / F::from_usize(self.size().saturating_sub(ddof))
+        }) / F::from_usize(self.size().saturating_sub(ddof))
     }
     /// Implements np.std with array value semantics.
     ///
@@ -455,7 +634,8 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.mean_axis(1).to_vec(),[1.5,3.5]);
     /// ```
     pub fn mean_axis(&self, axis: isize) -> Array<F> {
-        self.lanes(axis, |a| a.mean())
+        let n = self.shape[axis_index(axis, self.ndim())];
+        self.sum_axis(axis).into_map(|x| x / F::from_usize(n))
     }
     /// Implements np.var with array value semantics.
     ///
@@ -487,7 +667,14 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.var_ddof_axis(1,1).to_vec(),[0.5,0.5]);
     /// ```
     pub fn var_ddof_axis(&self, axis: isize, ddof: usize) -> Array<F> {
-        self.lanes(axis, |a| a.var_ddof(ddof))
+        self.axis_kernel(axis, |base, step, n| {
+            let value = |i| self.data[(base as isize + i as isize * step) as usize];
+            let mean = pairwise_by(n, &value) / F::from_usize(n);
+            pairwise_by(n, &|i| {
+                let d = value(i) - mean;
+                d * d
+            }) / F::from_usize(n.saturating_sub(ddof))
+        })
     }
     /// Implements np.std with array value semantics.
     ///
@@ -499,7 +686,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.std_ddof_axis(1,1).to_vec(),[0.5f64.sqrt(),0.5f64.sqrt()]);
     /// ```
     pub fn std_ddof_axis(&self, axis: isize, ddof: usize) -> Array<F> {
-        self.lanes(axis, |a| a.std_ddof(ddof))
+        self.var_ddof_axis(axis, ddof).into_sqrt()
     }
     /// Implements np.median with array value semantics.
     ///
@@ -560,7 +747,10 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1.,f64::NAN,3.].nansum(),4.);
     /// ```
     pub fn nansum(&self) -> F {
-        self.par_map(|x| if x.is_nan() { F::ZERO } else { x }).sum()
+        pairwise_by(self.size(), &|i| {
+            let x = self.flat_value(i);
+            if x.is_nan() { F::ZERO } else { x }
+        })
     }
     /// Implements np.nanmean with array value semantics.
     ///
@@ -587,12 +777,17 @@ impl<F: Float> Array<F> {
             !self.is_empty(),
             "zero-size array to reduction operation minimum which has no identity"
         );
-        let clean = self.par_map(|x| if x.is_nan() { F::INFINITY } else { x });
-        if self.is_nan().all() {
-            F::NAN
-        } else {
-            clean.min()
-        }
+        (0..self.size())
+            .map(|i| self.flat_value(i))
+            .fold(F::NAN, |acc, x| {
+                if x.is_nan() {
+                    acc
+                } else if acc.is_nan() {
+                    x
+                } else {
+                    minimum_value(acc, x)
+                }
+            })
     }
     /// Implements np.nanmax with array value semantics.
     ///
@@ -605,12 +800,17 @@ impl<F: Float> Array<F> {
             !self.is_empty(),
             "zero-size array to reduction operation maximum which has no identity"
         );
-        let clean = self.par_map(|x| if x.is_nan() { F::NEG_INFINITY } else { x });
-        if self.is_nan().all() {
-            F::NAN
-        } else {
-            clean.max()
-        }
+        (0..self.size())
+            .map(|i| self.flat_value(i))
+            .fold(F::NAN, |acc, x| {
+                if x.is_nan() {
+                    acc
+                } else if acc.is_nan() {
+                    x
+                } else {
+                    maximum_value(acc, x)
+                }
+            })
     }
     /// Implements np.nansum with array value semantics.
     ///
@@ -620,7 +820,12 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.nansum_axis(1).to_vec(),[3.,7.]);
     /// ```
     pub fn nansum_axis(&self, axis: isize) -> Array<F> {
-        self.lanes(axis, |a| a.nansum())
+        self.axis_kernel(axis, |base, step, n| {
+            pairwise_by(n, &|i| {
+                let x = self.data[(base as isize + i as isize * step) as usize];
+                if x.is_nan() { F::ZERO } else { x }
+            })
+        })
     }
     /// Implements np.nanmean with array value semantics.
     ///
@@ -630,7 +835,14 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.nanmean_axis(1).to_vec(),[1.5,3.5]);
     /// ```
     pub fn nanmean_axis(&self, axis: isize) -> Array<F> {
-        self.lanes(axis, |a| a.nanmean())
+        self.axis_kernel(axis, |base, step, n| {
+            let value = |i| self.data[(base as isize + i as isize * step) as usize];
+            let count = (0..n).filter(|&i| !value(i).is_nan()).count();
+            pairwise_by(n, &|i| {
+                let x = value(i);
+                if x.is_nan() { F::ZERO } else { x }
+            }) / F::from_usize(count)
+        })
     }
     /// Implements np.nanmin with array value semantics.
     ///
@@ -645,7 +857,15 @@ impl<F: Float> Array<F> {
             self.shape[a] > 0,
             "zero-size array to reduction operation minimum which has no identity"
         );
-        self.lanes(axis, |a| a.nanmin())
+        self.axis_fold(axis, F::NAN, |acc, x| {
+            if x.is_nan() {
+                acc
+            } else if acc.is_nan() {
+                x
+            } else {
+                minimum_value(acc, x)
+            }
+        })
     }
     /// Implements np.nanmax with array value semantics.
     ///
@@ -660,7 +880,15 @@ impl<F: Float> Array<F> {
             self.shape[a] > 0,
             "zero-size array to reduction operation maximum which has no identity"
         );
-        self.lanes(axis, |a| a.nanmax())
+        self.axis_fold(axis, F::NAN, |acc, x| {
+            if x.is_nan() {
+                acc
+            } else if acc.is_nan() {
+                x
+            } else {
+                maximum_value(acc, x)
+            }
+        })
     }
 }
 #[cfg(test)]

@@ -27,7 +27,8 @@ impl<T: Element> Array<T> {
         );
         let a = self.to_contiguous();
         Self {
-            data: a.data,
+            data: a.data.clone(),
+            recycle: a.recycle,
             shape: shape.to_vec(),
             strides: strides(shape),
             offset: a.offset,
@@ -112,6 +113,7 @@ impl<T: Element> Array<T> {
         }
         Self {
             data: self.data.clone(),
+            recycle: self.recycle,
             shape: axes.iter().map(|&i| self.shape[i]).collect(),
             strides: axes.iter().map(|&i| self.strides[i]).collect(),
             offset: self.offset,

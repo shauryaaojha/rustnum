@@ -1,6 +1,4 @@
 use crate::broadcast::broadcast_shapes;
-#[cfg(feature = "rayon")]
-use crate::layout::PAR_THRESHOLD;
 use crate::layout::{Offsets, advance, contiguous, size, strides};
 use crate::{Element, IntoArray};
 #[cfg(feature = "rayon")]
@@ -26,9 +24,35 @@ use std::{
 #[derive(Clone)]
 pub struct Array<T> {
     pub(crate) data: Arc<Vec<T>>,
+    pub(crate) recycle: fn(Vec<T>),
     pub(crate) shape: Vec<usize>,
     pub(crate) strides: Vec<isize>,
     pub(crate) offset: usize,
+}
+impl<T> Drop for Array<T> {
+    fn drop(&mut self) {
+        if let Some(data) = Arc::get_mut(&mut self.data)
+            && data.capacity().saturating_mul(std::mem::size_of::<T>()) >= crate::pool::MIN_BYTES
+        {
+            (self.recycle)(std::mem::take(data));
+        }
+    }
+}
+#[cfg(feature = "rayon")]
+fn unary_threshold() -> usize {
+    crate::kernels_mem::UNARY
+}
+#[cfg(not(feature = "rayon"))]
+fn unary_threshold() -> usize {
+    0
+}
+#[cfg(feature = "rayon")]
+fn cheap_threshold() -> usize {
+    crate::kernels_mem::CHEAP
+}
+#[cfg(not(feature = "rayon"))]
+fn cheap_threshold() -> usize {
+    0
 }
 impl<T: Element> Array<T> {
     /// Implements np.array(...).reshape with array value semantics.
@@ -45,10 +69,14 @@ impl<T: Element> Array<T> {
             data.len(),
             shape
         );
+        Self::from_owned_shape(data, shape.to_vec())
+    }
+    pub(crate) fn from_owned_shape(data: Vec<T>, shape: Vec<usize>) -> Self {
         Self {
             data: Arc::new(data),
-            shape: shape.to_vec(),
-            strides: strides(shape),
+            recycle: crate::pool::release::<T>,
+            strides: strides(&shape),
+            shape,
             offset: 0,
         }
     }
@@ -236,11 +264,7 @@ impl<T: Element> Array<T> {
     /// assert_eq!(np::array![[1,2],[3,4]].t().to_vec(),[1,3,2,4]);
     /// ```
     pub fn to_vec(&self) -> Vec<T> {
-        if let Some(s) = self.as_slice() {
-            s.to_vec()
-        } else {
-            self.iter().collect()
-        }
+        crate::kernels_mem::copy(self)
     }
     /// Implements np.ascontiguousarray with array value semantics.
     ///
@@ -288,8 +312,12 @@ impl<T: Element> Array<T> {
     /// ```
     pub fn astype<U: Element>(&self) -> Array<U> {
         if TypeId::of::<T>() == TypeId::of::<U>() {
-            let boxed: Box<dyn Any> = Box::new(self.copy());
-            return *boxed.downcast::<Array<U>>().expect("identical type");
+            let mut value = Some(self.clone());
+            return (&mut value as &mut dyn Any)
+                .downcast_mut::<Option<Array<U>>>()
+                .expect("identical type")
+                .take()
+                .unwrap();
         }
         self.par_map(|v| U::from_f64(v.to_f64()))
     }
@@ -303,9 +331,9 @@ impl<T: Element> Array<T> {
     /// ```
     pub fn map<U: Element>(&self, f: impl Fn(T) -> U) -> Array<U> {
         let data = if let Some(s) = self.as_slice() {
-            s.iter().copied().map(f).collect()
+            crate::pool::collect(s.len(), s.iter().copied().map(f))
         } else {
-            self.iter().map(f).collect()
+            crate::pool::collect(self.size(), self.iter().map(f))
         };
         Array::from_vec(data, &self.shape)
     }
@@ -323,14 +351,13 @@ impl<T: Element> Array<T> {
         let off = self.offset;
         let n = self.size();
         let contiguous = self.is_contiguous();
-        let offsets = Offsets::new(&self.shape, &self.strides, off);
         let data = Arc::make_mut(&mut self.data);
         if contiguous {
             for v in &mut data[off..off + n] {
                 *v = f(*v)
             }
         } else {
-            for i in offsets {
+            for i in Offsets::new(&self.shape, &self.strides, off) {
                 data[i] = f(data[i]);
             }
         }
@@ -344,7 +371,7 @@ impl<T: Element> Array<T> {
     /// ```
     pub fn fill(&mut self, value: T) {
         #[cfg(feature = "rayon")]
-        if self.is_contiguous() && self.size() >= PAR_THRESHOLD {
+        if self.is_contiguous() && self.size() >= crate::kernels_mem::CHEAP {
             self.prepare_write();
             let end = self.offset + self.size();
             Arc::make_mut(&mut self.data)[self.offset..end]
@@ -385,20 +412,21 @@ impl<T: Element> Array<T> {
     ) -> Array<R> {
         let other = other.into_array();
         let shape = self.common_shape(&other);
-        let a = self.broadcast_to(&shape);
-        let b = other.broadcast_to(&shape);
-        let data = match (a.as_slice(), b.as_slice()) {
-            (Some(x), Some(y)) => x
-                .iter()
-                .copied()
-                .zip(y.iter().copied())
-                .map(|(x, y)| f(x, y))
-                .collect(),
-            _ => a.iter().zip(b.iter()).map(|(x, y)| f(x, y)).collect(),
-        };
+        let mut data = crate::pool::output(size(&shape));
+        let width = shape.last().copied().unwrap_or(1).max(1);
+        data.chunks_mut(width)
+            .enumerate()
+            .for_each(|(r, out)| crate::kernels_mem::zip_row(out, self, &other, &shape, r, &f));
         Array::from_vec(data, &shape)
     }
-    #[cfg(feature = "rayon")]
+    pub(crate) fn flat_offset(&self, mut i: usize) -> usize {
+        let mut offset = self.offset as isize;
+        for (&n, &s) in self.shape.iter().zip(&self.strides).rev() {
+            offset += (i % n) as isize * s;
+            i /= n;
+        }
+        offset as usize
+    }
     pub(crate) fn flat_value(&self, mut i: usize) -> T {
         if self.is_contiguous() {
             return self.data[self.offset + i];
@@ -419,11 +447,30 @@ impl<T: Element> Array<T> {
         })
     }
     pub(crate) fn par_map<U: Element>(&self, f: impl Fn(T) -> U + Sync + Send) -> Array<U> {
+        self.par_map_at(unary_threshold(), f)
+    }
+    /// `par_map` for cheap memory-bound closures (scalar arithmetic).
+    pub(crate) fn par_map_cheap<U: Element>(&self, f: impl Fn(T) -> U + Sync + Send) -> Array<U> {
+        #[cfg(feature = "rayon")]
+        return self.par_map_at(crate::kernels_mem::CHEAP, f);
+        #[cfg(not(feature = "rayon"))]
+        self.par_map_at(0, f)
+    }
+    fn par_map_at<U: Element>(
+        &self,
+        threshold: usize,
+        f: impl Fn(T) -> U + Sync + Send,
+    ) -> Array<U> {
+        let _ = threshold;
         #[cfg(feature = "rayon")]
         if let Some(s) = self.as_slice()
-            && s.len() >= PAR_THRESHOLD
+            && s.len() >= threshold
         {
-            return Array::from_vec(s.par_iter().map(|&x| f(x)).collect(), &self.shape);
+            let mut out = crate::pool::output(s.len());
+            out.par_iter_mut()
+                .zip(s.par_iter())
+                .for_each(|(o, &x)| *o = f(x));
+            return Array::from_vec(out, &self.shape);
         }
         self.map(f)
     }
@@ -433,47 +480,167 @@ impl<T: Element> Array<T> {
         f: impl Fn(T, U) -> R + Sync + Send,
     ) -> Array<R> {
         let b = b.into_array();
+        if b.ndim() == 0 {
+            let y = b.item();
+            return self.par_map_cheap(|x| f(x, y));
+        }
+        if self.ndim() == 0 {
+            let x = self.item();
+            return b.par_map_cheap(|y| f(x, y));
+        }
         let shape = self.common_shape(&b);
-        #[cfg(feature = "rayon")]
-        if size(&shape) >= PAR_THRESHOLD
+        let mut data = crate::pool::output(size(&shape));
+        if self.shape == shape
+            && b.shape == shape
             && let (Some(x), Some(y)) = (self.as_slice(), b.as_slice())
         {
-            if self.shape == shape && b.shape == shape {
-                return Array::from_vec(
-                    x.par_iter()
-                        .zip(y.par_iter())
-                        .map(|(&x, &y)| f(x, y))
-                        .collect(),
-                    &shape,
-                );
+            #[cfg(feature = "rayon")]
+            if data.len() >= crate::kernels_mem::BINARY {
+                data.par_iter_mut()
+                    .zip(x.par_iter())
+                    .zip(y.par_iter())
+                    .for_each(|((o, &x), &y)| *o = f(x, y));
+                return Array::from_owned_shape(data, shape);
             }
-            if self.size() == 1 && b.shape == shape {
-                let v = self.item();
-                return b.par_map(|y| f(v, y));
+            for ((o, &x), &y) in data.iter_mut().zip(x).zip(y) {
+                *o = f(x, y);
             }
-            if b.size() == 1 && self.shape == shape {
-                let v = b.item();
-                return self.par_map(|x| f(x, v));
+            return Array::from_owned_shape(data, shape);
+        }
+        let width = shape.last().copied().unwrap_or(1).max(1);
+        #[cfg(feature = "rayon")]
+        if data.len() >= crate::kernels_mem::BROADCAST {
+            data.par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(r, out)| crate::kernels_mem::zip_row(out, self, &b, &shape, r, &f));
+        } else {
+            data.chunks_mut(width)
+                .enumerate()
+                .for_each(|(r, out)| crate::kernels_mem::zip_row(out, self, &b, &shape, r, &f));
+        }
+        #[cfg(not(feature = "rayon"))]
+        data.chunks_mut(width)
+            .enumerate()
+            .for_each(|(r, out)| crate::kernels_mem::zip_row(out, self, &b, &shape, r, &f));
+        Array::from_vec(data, &shape)
+    }
+    pub(crate) fn reusable(&mut self) -> bool {
+        self.is_contiguous() && Arc::get_mut(&mut self.data).is_some()
+    }
+    pub(crate) fn into_map(mut self, f: impl Fn(T) -> T + Sync + Send) -> Self {
+        if self.reusable() {
+            self.map_inplace_at(cheap_threshold(), f);
+            self
+        } else {
+            self.par_map_cheap(f)
+        }
+    }
+    pub(crate) fn into_zip(mut self, b: &Self, f: impl Fn(T, T) -> T + Sync + Send) -> Self {
+        if crate::kernels_mem::fits(&b.shape, &self.shape) && self.reusable() {
+            self.zip_inplace(b, f);
+            self
+        } else {
+            self.par_zip(b, f)
+        }
+    }
+    pub(crate) fn into_zip_owned(self, mut b: Self, f: impl Fn(T, T) -> T + Sync + Send) -> Self {
+        if crate::kernels_mem::fits(&self.shape, &b.shape) && b.reusable() {
+            b.zip_inplace(&self, |y, x| f(x, y));
+            b
+        } else {
+            self.into_zip(&b, f)
+        }
+    }
+    pub(crate) fn zip_inplace(&mut self, b: &Self, f: impl Fn(T, T) -> T + Sync + Send) {
+        assert!(
+            crate::kernels_mem::fits(&b.shape, &self.shape),
+            "non-broadcastable output operand with shape {:?} doesn't match the broadcast shape",
+            self.shape
+        );
+        if b.size() == 1 {
+            let y = b.item();
+            self.map_inplace_at(cheap_threshold(), |x| f(x, y));
+            return;
+        }
+        if !self.is_contiguous() {
+            *self = self.copy();
+        } else {
+            self.prepare_write();
+        }
+        let n = self.size();
+        let width = self.shape.last().copied().unwrap_or(1).max(1);
+        let out = &mut Arc::make_mut(&mut self.data)[self.offset..self.offset + n];
+        if self.shape == b.shape
+            && let Some(rhs) = b.as_slice()
+        {
+            #[cfg(feature = "rayon")]
+            if n >= crate::kernels_mem::BINARY {
+                out.par_iter_mut()
+                    .zip(rhs.par_iter())
+                    .for_each(|(x, &y)| *x = f(*x, y));
+                return;
             }
-            let a = self.broadcast_to(&shape);
-            let b = b.broadcast_to(&shape);
-            return Array::from_vec(
-                (0..size(&shape))
-                    .into_par_iter()
-                    .map(|i| f(a.flat_value(i), b.flat_value(i)))
-                    .collect(),
-                &shape,
-            );
+            for (x, &y) in out.iter_mut().zip(rhs) {
+                *x = f(*x, y);
+            }
+            return;
         }
-        if self.size() == 1 && b.shape == shape {
-            let v = self.item();
-            return b.map(|y| f(v, y));
+        #[cfg(feature = "rayon")]
+        if n >= crate::kernels_mem::BROADCAST {
+            out.par_chunks_mut(width)
+                .enumerate()
+                .for_each(|(r, s)| crate::kernels_mem::assign_row(s, b, &self.shape, r, &f));
+            return;
         }
-        if b.size() == 1 && self.shape == shape {
-            let v = b.item();
-            return self.map(|x| f(x, v));
+        out.chunks_mut(width)
+            .enumerate()
+            .for_each(|(r, s)| crate::kernels_mem::assign_row(s, b, &self.shape, r, &f));
+    }
+    /// Updates elements in parallel, like np.vectorize followed by assignment.
+    ///
+    /// Unlike `mapv_inplace`, callbacks must be Send + Sync and may run concurrently.
+    /// ```
+    /// let mut a=rustnum::array![1,2]; a.mapv_inplace_parallel(|x|x*2);
+    /// assert_eq!(a.to_vec(),[2,4]);
+    /// ```
+    pub fn mapv_inplace_parallel(&mut self, f: impl Fn(T) -> T + Send + Sync) {
+        self.map_inplace_at(unary_threshold(), f);
+    }
+    pub(crate) fn map_inplace_at(&mut self, threshold: usize, f: impl Fn(T) -> T + Send + Sync) {
+        let _ = threshold;
+        self.prepare_write();
+        if self.is_contiguous() {
+            let end = self.offset + self.size();
+            let out = &mut Arc::make_mut(&mut self.data)[self.offset..end];
+            #[cfg(feature = "rayon")]
+            if out.len() >= threshold {
+                out.par_iter_mut().for_each(|x| *x = f(*x));
+                return;
+            }
+            for x in out {
+                *x = f(*x);
+            }
+        } else {
+            self.mapv_inplace(f);
         }
-        self.zip_map(b, f)
+    }
+    /// Consumes and casts an array, like np.asarray(a, dtype=dtype).
+    ///
+    /// Identical dtypes retain storage and metadata, including views.
+    /// ```
+    /// let a=rustnum::array![1i64,2]; let p=a.as_slice().unwrap().as_ptr();
+    /// let b=a.into_astype::<i64>(); assert_eq!(p,b.as_slice().unwrap().as_ptr());
+    /// ```
+    pub fn into_astype<U: Element>(self) -> Array<U> {
+        if TypeId::of::<T>() == TypeId::of::<U>() {
+            let mut value = Some(self);
+            return (&mut value as &mut dyn Any)
+                .downcast_mut::<Option<Array<U>>>()
+                .unwrap()
+                .take()
+                .unwrap();
+        }
+        self.astype()
     }
     /// Implements np.broadcast_to with array value semantics.
     ///
@@ -500,6 +667,7 @@ impl<T: Element> Array<T> {
         }
         Self {
             data: self.data.clone(),
+            recycle: self.recycle,
             shape: target.to_vec(),
             strides: st,
             offset: self.offset,
@@ -589,22 +757,22 @@ mod tests {
     fn rayon_threshold_dispatch() {
         use std::sync::atomic::{AtomicUsize, Ordering};
         let calls = AtomicUsize::new(0);
-        let small = crate::ones::<i32>([PAR_THRESHOLD - 1]);
+        let small = crate::ones::<i32>([crate::kernels_mem::UNARY - 1]);
         let _ = small.par_map(|x| {
             assert!(rayon::current_thread_index().is_none());
             x
         });
-        let large = crate::ones::<i32>([PAR_THRESHOLD]);
+        let large = crate::ones::<i32>([crate::kernels_mem::UNARY]);
         let output = large.par_map(|x| {
             if rayon::current_thread_index().is_some() {
                 calls.fetch_add(1, Ordering::Relaxed);
             }
             x + 1
         });
-        assert_eq!(calls.load(Ordering::Relaxed), PAR_THRESHOLD);
-        assert_eq!(output.sum(), 2 * PAR_THRESHOLD as i32);
+        assert_eq!(calls.load(Ordering::Relaxed), crate::kernels_mem::UNARY);
+        assert_eq!(output.sum(), 2 * crate::kernels_mem::UNARY as i32);
         calls.store(0, Ordering::Relaxed);
-        let left = crate::ones::<i32>([128, 1]);
+        let left = crate::ones::<i32>([crate::kernels_mem::BROADCAST / 256, 1]);
         let right = crate::ones::<i32>([256]);
         let output = left.par_zip(&right, |x, y| {
             if rayon::current_thread_index().is_some() {
@@ -612,8 +780,8 @@ mod tests {
             }
             x + y
         });
-        assert_eq!(calls.load(Ordering::Relaxed), PAR_THRESHOLD);
-        assert_eq!(output.shape(), [128, 256]);
+        assert_eq!(calls.load(Ordering::Relaxed), crate::kernels_mem::BROADCAST);
+        assert_eq!(output.shape(), [crate::kernels_mem::BROADCAST / 256, 256]);
     }
     #[cfg(not(feature = "rayon"))]
     #[test]
