@@ -38,7 +38,7 @@ The crate is not on crates.io yet. Use it from a path or from git:
 ```toml
 [dependencies]
 rustnum = { path = "rustnum" }
-# or: rustnum = { git = "https://github.com/shauryaaojha/ml-in-rust" }
+# or: rustnum = { git = "https://github.com/shauryaaojha/rustnum" }
 ```
 
 Then write `use rustnum as np;` and call `np::zeros`, `np::linalg::inv`, and so on.

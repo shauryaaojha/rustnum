@@ -14,7 +14,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `manip`: accelerated `sort`, `argsort`, and `unique` with single-pass NaN partitioning, LSD radix sort for `f64`/`f32`/`i64`/`i32` lanes >= 65536, and Rayon parallel sorting for large lanes.
 - `simd_math`: added private AVX2+FMA transcendental SIMD math kernels (`exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p`, `sin`, `cos`, `tan`, `tanh`, `sigmoid`) with runtime CPU feature dispatch and scalar fallback.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-26
 
 First release of `rustnum`: NumPy-style n-dimensional arrays in pure Rust.
 
@@ -42,5 +42,5 @@ First release of `rustnum`: NumPy-style n-dimensional arrays in pure Rust.
 - NumPy parity test suite driven by fixtures from `tools/gen_fixtures.py`.
 - Continuous integration on Linux, macOS and Windows; dual MIT / Apache-2.0 licence.
 
-[Unreleased]: https://github.com/shauryaaojha/ml-in-rust/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/shauryaaojha/ml-in-rust/releases/tag/v0.1.0
+[Unreleased]: https://github.com/shauryaaojha/rustnum/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/shauryaaojha/rustnum/releases/tag/v0.1.0
