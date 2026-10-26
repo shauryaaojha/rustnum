@@ -120,3 +120,17 @@ Exit: sort 1e6 f64 ≤ NumPy's 12.0 ms; per-op thread thresholds recorded in `do
 | P3 blocked LAPACK | Claude subagent (Sonnet, high), starts when P1 GEMM lands |
 | P4 sorting | agy |
 | Benchmarks, verification, merges | orchestrator |
+
+## 7. Status (2026-10-26)
+| Gap | Status | Where |
+|---|---|---|
+| G1 matmul | Done: own BLIS-style GEMM (AVX2/FMA 6x8 f64, 6x16 f32), rayon tasks over cache blocks, fused epilogue; `gemm`, `matmul_into`, `matmul_map`; matrixmultiply removed | `linalg/gemm/` |
+| G2 axis reductions, G3 strided copy, G4 broadcast, G12 thresholds | Done, thresholds measured | `kernels_mem.rs`, `reduce.rs` |
+| G11 allocations | Done: owned-buffer reuse, `*_inplace` / `into_*`, buffer pool (`np::memory`, default cap 512 MiB, `RUSTNUM_POOL_BYTES`), `tests/alloc.rs` | `pool.rs`, `memory.rs`, `ops.rs`, `ufunc.rs` |
+| G6 SIMD math | Wired for f64 exp/exp2/log/sin/cos/tanh/sigmoid and f32 exp; measured 1–3 ulp; expm1/log2/log10/log1p/tan and most f32 still scalar | `simd_math.rs`, `ufunc.rs` |
+| G10 RNG | Done: ziggurat, deterministic parallel fill (seed-only, thread-count independent) | `random/engine.rs` |
+| G5 sort | Done: NaN partition, parallel and radix sort | `manip.rs` |
+| G7–G9 blocked LU/QR/Cholesky, D&C SVD/eigh | Not started (needs the new GEMM, now available) | P3 |
+
+Verification notes: the agent reports for G6/G10 were wrong in several places (an AVX-512 instruction on the AVX2 path,
+false accuracy figures, a non-compiling test); all were fixed and re-measured by the orchestrator before merging.
