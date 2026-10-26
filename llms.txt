@@ -1,6 +1,6 @@
 # rustnum
 
-> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`, `np::fft::fft`, `np::poly::polyval`, `np::io::save_npy`. Element types: f32 f64 i32 i64 u8 usize bool Complex<f32> Complex<f64>. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
+> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`, `np::fft::fft`, `np::poly::polyval`, `np::io::save_npy`. Element types: f32 f64 i32 i64 u8 usize bool Complex<f32> Complex<f64> f16 bf16. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
 
 ## Rules for writing rustnum code
 - Always `use rustnum as np;`. `shape` is `&[usize]`, `axis` is `isize` (negative allowed).
@@ -171,6 +171,12 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `a.astype::<np::Complex<f64>>()` from real gives `x + 0j`; `.npy`/`.npz` store `<c8`/`<c16`
 - Display `[1.+2.j 3.-4.j]`
 
+## float16 / bfloat16 (np::f16, np::bf16)
+- `np::f16::from_f32(x)`, `from_f64`, `to_f32()`, `to_bits()`; `a.astype::<np::f16>()` (F16C bulk path from `f32`), `h.astype::<f32>()`
+- 16-bit types are `Num` and `Float`: arithmetic and `exp`/`sin`/... compute in f32 and round once; `sum`/`mean`/`var`/`std` accumulate in f32
+- `.npy` `<f2` read/write for f16; bf16 has no NumPy dtype (no `.npy`)
+- `matmul` on f16 rounds every partial sum to 16 bits (NumPy accumulates in f32): cast to f32 first
+
 ## Discrete Fourier Transform (np::fft)
 - `np::fft::fft(&a)`, `ifft(&a)` — FFT over last axis of a real or complex array, return `Array<Complex<F>>`
 - `np::fft::rfft(&a)` — real FFT over last axis, `n/2 + 1` bins
@@ -228,7 +234,7 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `println!("{a:?}")` — `array([[1., 2.], [3., 4.]], dtype=float64)`
 
 ## Not supported in v0.1
-float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arrays, fancy indexing with multidimensional index arrays on several axes at once. (Complex arrays are supported since v0.2; complex linalg is not.)
+datetime/struct dtypes, masked arrays, memory-mapped files, string arrays, fancy indexing with multidimensional index arrays on several axes at once. (Complex arrays are supported since v0.2; complex linalg is not.)
 
 ## Files
 - README.md — overview and quick start

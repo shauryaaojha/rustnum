@@ -263,6 +263,11 @@ def main():
     # =========================================================================
     complex_cases(save_case, rng)
 
+    # =========================================================================
+    # 11. float16 / bfloat16 (stage 2 of v0.2)
+    # =========================================================================
+    half_cases(save_case, rng)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -344,6 +349,158 @@ def complex_cases(save_case, rng):
     }
     for k, arr in strings.items():
         save_case(f"c_str_{k}", "c_str", [arr], {"str": str(arr)}, np.array(0), "str")
+
+
+def _bf16_reference_bits(v):
+    """Exact round-to-nearest-even of a Python float to bfloat16 bits, using rational arithmetic."""
+    import math
+    from fractions import Fraction
+    if math.isnan(v):
+        return 0x7FC0
+    sign = 0x8000 if math.copysign(1.0, v) < 0 else 0
+    a = abs(v)
+    if math.isinf(a):
+        return sign | 0x7F80
+    if a == 0.0:
+        return sign
+    _, ex = math.frexp(a)
+    e = max(ex - 1, -126)
+    unit = Fraction(2) ** (e - 7)
+    q = Fraction(a) / unit
+    n = q.numerator // q.denominator
+    r = q - n
+    if r > Fraction(1, 2) or (r == Fraction(1, 2) and n % 2 == 1):
+        n += 1
+    val = n * unit
+    if val >= Fraction(2) ** 128:
+        return sign | 0x7F80
+    f32_bits = int(np.float32(float(val)).view(np.uint32))
+    return sign | (f32_bits >> 16)
+
+
+def half_cases(save_case, rng):
+    """float16 / bfloat16 parity cases (ops prefixed `h_` for float16, `bh_` for bfloat16)."""
+    import ml_dtypes
+
+    bf16 = ml_dtypes.bfloat16
+    r = np.random.default_rng(7)
+
+    # --- exhaustive: every float16 bit pattern -------------------------------------------
+    h_all = np.arange(65536, dtype=np.uint16).view(np.float16)
+    as32 = h_all.astype(np.float32)
+    nan = np.isnan(as32)
+    bits32 = as32.view(np.uint32).astype(np.int64)
+    bits32[nan] = 0x7FC00000
+    save_case("h_all_to_f32", "h_to_f32_bits", [h_all], {}, bits32, "int64")
+    back = as32.astype(np.float16).view(np.uint16).astype(np.int64)
+    back[nan] = 0x7E00
+    save_case("h_all_roundtrip", "h_roundtrip_bits", [h_all], {}, back, "int64")
+    as64 = h_all.astype(np.float64)
+    save_case("h_all_to_f64", "h_to_f64", [h_all], {}, as64, "float64", rtol=0.0, atol=0.0)
+
+    # --- float32 -> float16: random values, every tie, specials ---------------------------
+    n = 400_000
+    e = r.integers(96, 150, n).astype(np.uint32)
+    m = r.integers(0, 1 << 23, n).astype(np.uint32)
+    s = r.integers(0, 2, n).astype(np.uint32)
+    rand_bits = (s << 31) | (e << 23) | m
+    pos = np.arange(0x7C00, dtype=np.uint16).view(np.float16)
+    nxt = np.nextafter(pos, np.float16(np.inf))
+    mid = ((pos.astype(np.float64) + nxt.astype(np.float64)) / 2).astype(np.float32)
+    mb = mid.view(np.uint32)
+    ties = np.concatenate([mb, mb + 1, mb - 1, mb | 0x80000000, (mb + 1) | 0x80000000])
+    specials = np.array(
+        [0, 0x80000000, 0x7F800000, 0xFF800000, 0x7FC00000, 0xFFC00000, 0x7F800001, 0x00000001,
+         0x33000000, 0x33000001, 0x477FE000, 0x477FEFFF, 0x477FF000, 0x47800000, 0x38800000,
+         0x387FFFFF, 0x7F7FFFFF], dtype=np.uint32)
+    x32 = np.concatenate([rand_bits, ties, specials]).astype(np.uint32).view(np.float32)
+    with np.errstate(all="ignore"):
+        e16 = x32.astype(np.float16).view(np.uint16).astype(np.int64)
+    e16[np.isnan(x32)] = 0x7E00
+    save_case("h_f32_to_f16_bits", "h_f32_to_f16_bits", [x32], {}, e16, "int64")
+
+    # --- float64 -> float16 (NumPy rounds once) --------------------------------------------
+    n = 200_000
+    e = r.integers(990, 1040, n).astype(np.uint64)
+    m = r.integers(0, 1 << 52, n, dtype=np.uint64)
+    s = r.integers(0, 2, n).astype(np.uint64)
+    rand64 = (s << np.uint64(63)) | (e << np.uint64(52)) | m
+    mid64 = (pos.astype(np.float64) + nxt.astype(np.float64)) / 2
+    mb64 = mid64.view(np.uint64)
+    ties64 = np.concatenate([mb64, mb64 + np.uint64(1), mb64 - np.uint64(1)])
+    x64 = np.concatenate([rand64, ties64]).astype(np.uint64).view(np.float64)
+    with np.errstate(all="ignore"):
+        e16 = x64.astype(np.float16).view(np.uint16).astype(np.int64)
+    e16[np.isnan(x64)] = 0x7E00
+    save_case("h_f64_to_f16_bits", "h_f64_to_f16_bits", [x64], {}, e16, "int64")
+
+    # --- arithmetic and functions ------------------------------------------------------------
+    a = (r.standard_normal((6, 5)) * 30).astype(np.float16)
+    b = (r.standard_normal((1, 5)) * 7).astype(np.float16)
+    b[0, 2] = 0
+    with np.errstate(all="ignore"):
+        for name, f in [("add", np.add), ("sub", np.subtract), ("mul", np.multiply), ("div", np.divide)]:
+            save_case(f"h_{name}", f"h_{name}", [a, b], {}, f(a, b), "float16", rtol=0.0, atol=0.0)
+        pos_in = np.abs(a) + np.float16(0.01)
+        small = (a / np.float16(8)).astype(np.float16)
+        for name, f, src in [("exp", np.exp, small), ("log", np.log, pos_in), ("sqrt", np.sqrt, pos_in),
+                             ("sin", np.sin, a), ("cos", np.cos, a), ("tanh", np.tanh, small),
+                             ("floor", np.floor, a), ("round", np.round, a)]:
+            save_case(f"h_{name}", f"h_{name}", [src], {}, f(src), "float16", rtol=2.5e-3, atol=1e-4)
+        save_case("h_abs", "h_abs", [a], {}, np.abs(a), "float16", rtol=0.0, atol=0.0)
+        save_case("h_neg", "h_neg", [a], {}, -a, "float16", rtol=0.0, atol=0.0)
+        long = (r.standard_normal(10000) + 3).astype(np.float16)
+        ones = np.ones(10000, dtype=np.float16)
+        save_case("h_sum_long", "h_sum", [long], {}, np.array(long.sum()), "float16", rtol=0.0, atol=0.0)
+        save_case("h_sum_ones", "h_sum", [ones], {}, np.array(ones.sum()), "float16", rtol=0.0, atol=0.0)
+        save_case("h_mean", "h_mean", [long], {}, np.array(long.mean()), "float16", rtol=1e-3, atol=0.0)
+        save_case("h_std", "h_std", [long], {}, np.array(long.std()), "float16", rtol=1e-3, atol=0.0)
+        save_case("h_var", "h_var", [long], {}, np.array(long.var()), "float16", rtol=1e-3, atol=0.0)
+        save_case("h_sum_axis0", "h_sum_axis", [a], {"axis": 0}, a.sum(axis=0), "float16", rtol=1e-3, atol=0.0)
+        save_case("h_max", "h_max", [a], {}, np.array(a.max()), "float16", rtol=0.0, atol=0.0)
+        save_case("h_cumsum", "h_cumsum", [a.ravel()[:10].copy()], {}, np.cumsum(a.ravel()[:10]), "float16",
+                  rtol=0.0, atol=0.0)
+        save_case("h_sort", "h_sort", [a.ravel()], {}, np.sort(a.ravel()), "float16", rtol=0.0, atol=0.0)
+        save_case("h_astype_i64", "h_to_i64", [a], {}, a.astype(np.int64), "int64")
+        save_case("h_from_f64", "h_from_f64", [a.astype(np.float64) / 3], {}, (a.astype(np.float64) / 3).astype(np.float16),
+                  "float16", rtol=0.0, atol=0.0)
+        special = np.array([np.nan, np.inf, -np.inf, 0.0, -0.0, 65504, 6.1e-5, 5.96e-8, 0.1, 1 / 3], dtype=np.float16)
+        save_case("h_isnan", "h_isnan", [special], {}, np.isnan(special), "bool")
+    strings = {
+        "simple": np.array([0.1, 1.5, 3.0], dtype=np.float16),
+        "sci": np.array([0.1, 1.5, 65504, 1e-5], dtype=np.float16),
+        "matrix": np.array([[1, 2.5], [-3, 4]], dtype=np.float16),
+        "special": np.array([np.nan, np.inf, -np.inf, 0.5], dtype=np.float16),
+        "third": np.array([1 / 3, 2 / 3, 100.0], dtype=np.float16),
+    }
+    for k, arr in strings.items():
+        save_case(f"h_str_{k}", "h_str", [arr], {"str": str(arr)}, np.array(0), "str")
+
+    # --- bfloat16 (ground truth from ml_dtypes; inputs and outputs as int64 bit patterns) -----
+    bits16 = np.arange(65536, dtype=np.uint16)
+    b_all = bits16.view(bf16)
+    f32 = b_all.astype(np.float32)
+    nan = np.isnan(f32)
+    exp_bits = f32.view(np.uint32).astype(np.int64)
+    exp_bits[nan] = 0x7FC00000
+    save_case("bh_all_to_f32", "bh_to_f32_bits", [bits16.astype(np.int64)], {}, exp_bits, "int64")
+    xs = x32[:300_000]
+    with np.errstate(all="ignore"):
+        eb = xs.astype(bf16).view(np.uint16).astype(np.int64)
+    eb[np.isnan(xs)] = 0x7FC0
+    save_case("bh_f32_to_bf16_bits", "bh_f32_to_bf16_bits", [xs], {}, eb, "int64")
+    sample64 = np.concatenate([x64[:30000], r.standard_normal(10000) * 1e3, np.array([1.0 + 2**-8 + 2**-40, 1.0 + 2**-8, 3e38, 3.5e38, 1e-40, 1e-45])])
+    eb64 = np.array([_bf16_reference_bits(float(v)) for v in sample64], dtype=np.int64)
+    save_case("bh_f64_to_bf16_bits", "bh_f64_to_bf16_bits", [sample64], {}, eb64, "int64")
+    ba = (r.standard_normal((4, 5)) * 20).astype(bf16)
+    bb = (r.standard_normal((1, 5)) * 5).astype(bf16)
+    with np.errstate(all="ignore"):
+        for name, f in [("add", np.add), ("sub", np.subtract), ("mul", np.multiply), ("div", np.divide)]:
+            out = f(ba, bb).view(np.uint16).astype(np.int64)
+            save_case(f"bh_{name}", f"bh_{name}", [ba.view(np.uint16).astype(np.int64), bb.view(np.uint16).astype(np.int64)],
+                      {}, out, "int64")
+        out = np.exp((ba / bf16(8)).astype(bf16)).view(np.uint16).astype(np.int64)
+        save_case("bh_exp", "bh_exp", [(ba / bf16(8)).astype(bf16).view(np.uint16).astype(np.int64)], {}, out, "int64")
 
 
 if __name__ == "__main__":

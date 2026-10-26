@@ -37,8 +37,8 @@ pub trait FloatHooks: Copy + Display + LowerExp {
     const REPR_SCI_UPPER: f64;
     /// NumPy dtype name of `Complex<Self>` (`"complex128"`, `"complex64"`).
     const COMPLEX_DTYPE: &'static str;
-    /// `.npy` descriptor of `Complex<Self>` (`"<c16"`, `"<c8"`).
-    const COMPLEX_DESCR: &'static str;
+    /// `.npy` descriptor of `Complex<Self>` (`"<c16"`, `"<c8"`), `None` when NumPy has no such dtype.
+    const COMPLEX_DESCR: Option<&'static str>;
     /// Bytes of one real value (8 or 4).
     const BYTES: usize;
 
@@ -53,7 +53,7 @@ pub trait FloatHooks: Copy + Display + LowerExp {
 }
 
 macro_rules! impl_float_hooks {
-    ($t:ident, $bits:ident, $mant:expr, $expb:expr, $thresh:expr, $direct:expr, $sci:expr, $cd:literal, $cdescr:literal, $bytes:expr) => {
+    ($t:ident, $bits:ident, $mant:expr, $expb:expr, $thresh:expr, $direct:expr, $sci:expr, $cd:literal, $cdescr:expr, $bytes:expr) => {
         impl FloatHooks for $t {
             const TWO: Self = 2.0;
             const HALF: Self = 0.5;
@@ -65,7 +65,7 @@ macro_rules! impl_float_hooks {
             const HYPERBOLIC_DIRECT: Self = $direct;
             const REPR_SCI_UPPER: f64 = $sci;
             const COMPLEX_DTYPE: &'static str = $cd;
-            const COMPLEX_DESCR: &'static str = $cdescr;
+            const COMPLEX_DESCR: Option<&'static str> = $cdescr;
             const BYTES: usize = $bytes;
 
             fn to_bits64(self) -> u64 {
@@ -94,7 +94,7 @@ impl_float_hooks!(
     22.0,
     1e16,
     "complex128",
-    "<c16",
+    Some("<c16"),
     8
 );
 impl_float_hooks!(
@@ -106,7 +106,7 @@ impl_float_hooks!(
     9.0,
     1e6,
     "complex64",
-    "<c8",
+    Some("<c8"),
     4
 );
 

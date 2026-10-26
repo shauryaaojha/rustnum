@@ -318,6 +318,18 @@ Matrix products, dot and trace are methods. Decompositions and solvers are free 
 | `a.astype(complex)` | `a.astype::<np::Complex<f64>>()` | Real to complex gives `x + 0j` |
 | `np.save("z.npy", z)` | `np::io::save_npy("z.npy", &z)` | `<c8`, `<c16` |
 
+## float16 and bfloat16
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.float16(x)` | `np::f16::from_f32(x)`, `np::f16::from_f64(x)` | Round to nearest even; `bf16` is the same API |
+| `a.astype(np.float16)` | `a.astype::<np::f16>()` | `f32` to `f16` uses F16C when the CPU has it |
+| `h.astype(np.float32)` | `h.astype::<f32>()` | Exact |
+| `np.finfo(np.float16).max`, `.eps` | `np::f16::MAX`, `np::f16::EPSILON` | |
+| `a.sum()`, `a.mean()`, `a.std()` on float16 | `a.sum()`, `a.mean()`, `a.std()` | Accumulate in `f32`, round once |
+| `h.view(np.uint16)` | `h.to_bits()`, `np::f16::from_bits(b)` | |
+| `np.save` of a float16 array | `np::io::save_npy` | `<f2`; bfloat16 has no NumPy dtype and cannot be saved |
+
 ## Discrete Fourier Transform (np::fft)
 
 Transforms accept real or complex arrays (`Array<F>` or `Array<Complex<F>>`) and return complex arrays, like NumPy. `f64` gives `complex128`, `f32` gives `complex64`.
@@ -484,5 +496,5 @@ takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return p
 
 ## Not in v0.1
 
-`float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays, and
+structured and datetime dtypes, masked arrays, memory-mapped files, string arrays, and
 multidimensional fancy indexing with index arrays on several axes at once. (Complex arrays arrived in v0.2.)

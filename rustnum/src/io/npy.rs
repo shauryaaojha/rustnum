@@ -362,6 +362,7 @@ fn descr_to_dtype(descr: &str) -> String {
     match descr {
         "<f8" | "=f8" => "float64",
         "<f4" | "=f4" => "float32",
+        "<f2" | "=f2" => "float16",
         "<i8" | "=i8" => "int64",
         "<i4" | "=i4" => "int32",
         "|u1" | "<u1" => "uint8",

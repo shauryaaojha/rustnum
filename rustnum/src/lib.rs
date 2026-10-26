@@ -30,6 +30,7 @@ mod creation;
 mod display;
 mod element;
 mod extra;
+mod half;
 mod kernels_mem;
 mod layout;
 mod manip;
@@ -60,6 +61,7 @@ pub use extra::api::{
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
 };
+pub use half::{bf16, f16};
 pub use manip::*;
 pub use misc::{
     Complex, angle, angle_deg, bartlett, blackman, copysign, divmod, ediff1d, ediff1d_with,

@@ -24,3 +24,7 @@ criterion = "0.8"
 [[bench]]
 name = "core"
 harness = false
+
+[[bench]]
+name = "half"
+harness = false

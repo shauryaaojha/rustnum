@@ -562,6 +562,10 @@ macro_rules! float {
 float!(f32);
 float!(f64);
 
+/// True for `float16`, `float32`, `float64` and `bfloat16`.
+pub(crate) fn is_float_dtype(dtype: &str) -> bool {
+    dtype.starts_with("float") || dtype.starts_with("bfloat")
+}
 pub(crate) fn isnan<T: Element>(x: T) -> bool {
     x.partial_cmp(&x).is_none()
 }

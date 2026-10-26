@@ -13,7 +13,7 @@ fn raw<T: Element>(x: T) -> String {
         }
     } else {
         let text = format!("{x:?}").to_lowercase();
-        if T::DTYPE.starts_with("float")
+        if crate::element::is_float_dtype(T::DTYPE)
             && let Some((mantissa, exponent)) = text.split_once('e')
         {
             let exp = exponent.parse::<i32>().unwrap();
@@ -30,12 +30,20 @@ fn raw<T: Element>(x: T) -> String {
 fn shortest<T: Element>(x: T) -> String {
     if let Some(x) = (&x as &dyn Any).downcast_ref::<f32>() {
         x.to_string().to_lowercase()
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::f16>() {
+        x.to_string().to_lowercase()
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::bf16>() {
+        x.to_string().to_lowercase()
     } else {
         x.to_f64().to_string().to_lowercase()
     }
 }
 fn scientific<T: Element>(x: T) -> String {
     if let Some(x) = (&x as &dyn Any).downcast_ref::<f32>() {
+        format!("{x:e}")
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::f16>() {
+        format!("{x:e}")
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::bf16>() {
         format!("{x:e}")
     } else {
         format!("{:e}", x.to_f64())
@@ -82,7 +90,7 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
     if T::DTYPE.starts_with("complex") {
         return complex_values(values);
     }
-    if !T::DTYPE.starts_with("float") {
+    if !crate::element::is_float_dtype(T::DTYPE) {
         let text: Vec<_> = values.iter().copied().map(raw).collect();
         let width = if T::DTYPE == "bool" {
             5
@@ -300,7 +308,7 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     };
     if a.ndim() == 0 {
         let v = a.item();
-        if debug && (T::DTYPE.starts_with("float") || T::DTYPE.starts_with("complex")) {
+        if debug && (crate::element::is_float_dtype(T::DTYPE) || T::DTYPE.starts_with("complex")) {
             let t = format_values(&[v]);
             out.push_str(t[0].trim());
         } else if T::DTYPE.starts_with("complex") {

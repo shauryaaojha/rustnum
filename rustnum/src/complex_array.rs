@@ -55,7 +55,7 @@ impl<F: Float> Element for Complex<F> {
         Complex::new(F::from_f64(re), F::from_f64(im))
     }
     fn npy_descr() -> Option<String> {
-        Some(F::COMPLEX_DESCR.to_string())
+        F::COMPLEX_DESCR.map(str::to_string)
     }
     fn npy_itemsize() -> usize {
         2 * F::BYTES
@@ -524,7 +524,7 @@ macro_rules! absolute_real {
         }
     )*};
 }
-absolute_real!(f32, f64, i32, i64, u8, usize);
+absolute_real!(f32, f64, i32, i64, u8, usize, crate::f16, crate::bf16);
 impl<F: Float> Absolute for Array<Complex<F>> {
     type Output = F;
     fn absolute(&self) -> Array<F> {

@@ -14,9 +14,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 1. Element types and errors
 
-- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64` (plus defaulted `to_complex_parts`/`from_complex_parts` for `astype` and the `.npy` hooks `npy_descr`/`npy_itemsize`/`npy_write`/`npy_read`); implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `bool`, and (v0.2) `Complex<f32>` (`complex64`) and `Complex<f64>` (`complex128`).
-- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, and `Complex<F>`.
-- `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32` and `f64`.
+- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64` (plus defaulted `to_complex_parts`/`from_complex_parts` for `astype` and the `.npy` hooks `npy_descr`/`npy_itemsize`/`npy_write`/`npy_read`); implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `bool`, and (v0.2) `Complex<f32>` (`complex64`), `Complex<f64>` (`complex128`), `f16` (`float16`) and `bf16` (bfloat16).
+- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `Complex<F>`, `f16` and `bf16`.
+- `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32`, `f64`, `f16` and `bf16` (the 16-bit types compute through `f32`).
 - `Error` variants are `Shape(String)`, `DType { expected: String, found: String }`, `Singular`, `NotPositiveDefinite`, `Io(std::io::Error)`, `Parse(String)`, `Format(String)`, and `NoConvergence(String)`.
 - `type Result<T> = std::result::Result<T, Error>`.
 
@@ -261,3 +261,12 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Display follows NumPy: `[1.+2.j 3.-4.j]`, `Debug` is `array([...], dtype=complex128)`.
 - I/O: `.npy`/`.npz` `<c8` and `<c16` read and write through the usual `np::io` functions.
 - Not done: complex `np::linalg` (`solve`, `inv`, `eig` with complex input), complex `std`/`var`, arcsin/arccos/arctan on complex arrays, `np::poly::roots` still returns `(re, im)` pairs.
+
+## 23. float16 and bfloat16 (v0.2)
+
+- `np::f16` is IEEE 754 binary16 (NumPy `float16`, `DTYPE` `"float16"`) and `np::bf16` is bfloat16 (`"bfloat16"`). Both are 16-bit `Copy` types: `from_bits`/`to_bits`, `from_f32`/`from_f64` (round to nearest, ties to even; `from_f64` rounds once), `to_f32`/`to_f64` (exact), `is_nan`/`is_infinite`/`is_finite`, and the constants `MAX`, `MIN`, `EPSILON`, `INFINITY`, `NEG_INFINITY`, `NAN`. They implement `Element`, `Num` and `Float`, so every `Array<T: Num>` and `Array<F: Float>` routine works. NaN, infinities, signed zeros and subnormals behave like NumPy.
+- Arithmetic and elementary functions compute in `f32` and round the result once, like NumPy. `sum`, `sum_axis`, `mean`, `mean_axis`, `var`, `std` accumulate in `f32` and round once at the end (NumPy's behaviour); `cumsum` and `prod` round at every step.
+- `astype` between `f32` and `f16`/`bf16` is a bulk conversion that uses the x86 F16C instructions (`_mm256_cvtph_ps`/`_mm256_cvtps_ph`, eight lanes, detected at run time with `is_x86_feature_detected!`) and a scalar fallback elsewhere. `f16::slice_from_f32(&[f32], &mut [f16])`, `f16::slice_to_f32` and `f16::slice_from_f32_scalar` expose the slice kernels.
+- Display follows NumPy's shortest-unique-digits rule (`[1.00e-01 1.50e+00 6.55e+04]`); `Display` of a scalar prints the shortest round-trip decimal (`0.1`).
+- I/O: `f16` reads and writes `.npy`/`.npz` `<f2`. NumPy has no bfloat16 dtype, so `bf16` has no `.npy` encoding: saving one returns `Error::DType`.
+- Limit: `matmul`/`dot` use the generic loop and round every partial sum to 16 bits, whereas NumPy accumulates `float16` products in `float32`. Cast to `f32` first for accurate products.

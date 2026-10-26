@@ -113,3 +113,38 @@ assert n['z'].dtype == np.complex128 and np.array_equal(n['z'], z)",
     run_python(&script);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn float16_npy_files_are_read_and_written_by_numpy() {
+    use rustnum::f16;
+    let dir = scratch("f16");
+    let path = dir.join("from_python.npy");
+    let script = format!(
+        "import numpy as np
+np.save({}, np.array([[0.1, -2.5, 65504.0], [np.inf, -0.0, 6e-8]], dtype=np.float16))",
+        py(&path)
+    );
+    if run_python(&script).is_none() {
+        return;
+    }
+    let a: np::Array<f16> = np::io::load_npy(&path).unwrap();
+    assert_eq!(a.shape(), [2, 3]);
+    let bits: Vec<u16> = a.to_vec().iter().map(|x| x.to_bits()).collect();
+    assert_eq!(bits, [0x2e66, 0xc100, 0x7bff, 0x7c00, 0x8000, 0x0001]);
+    let out = dir.join("from_rust.npy");
+    np::io::save_npy(&out, &a).unwrap();
+    let npz = dir.join("f.npz");
+    np::io::savez(&npz, &[("h", &a)]).unwrap();
+    let script = format!(
+        "import numpy as np
+h = np.load({})
+assert h.dtype == np.float16 and h.shape == (2, 3), (h.dtype, h.shape)
+assert h.view(np.uint16).ravel().tolist() == [0x2e66, 0xc100, 0x7bff, 0x7c00, 0x8000, 0x0001]
+z = np.load({})['h']
+assert z.dtype == np.float16 and np.array_equal(z, h)",
+        py(&out),
+        py(&npz)
+    );
+    run_python(&script);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -70,7 +70,7 @@ pub fn full_like<T: Element>(a: &Array<T>, v: T) -> Array<T> {
 /// ```
 pub fn arange<T: Num>(start: T, stop: T, step: T) -> Array<T> {
     assert!(step != T::ZERO, "arange: step must not be zero");
-    if T::DTYPE.starts_with("float") {
+    if crate::element::is_float_dtype(T::DTYPE) {
         let length = ((stop.to_f64() - start.to_f64()) / step.to_f64()).ceil();
         assert!(!length.is_nan(), "arange: cannot compute length");
         assert!(
