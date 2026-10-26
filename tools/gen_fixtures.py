@@ -258,12 +258,93 @@ def main():
     save_case("outer_product", "outer", [v1, v2], {}, np.outer(v1, v2), "float64")
     save_case("trace_matrix", "trace", [m3], {}, np.array(np.trace(m3)), "float64")
 
+    # =========================================================================
+    # 10. Complex dtype (stage 1 of v0.2)
+    # =========================================================================
+    complex_cases(save_case, rng)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(cases, f, indent=2)
 
     print(f"Generated {len(cases)} parity fixture cases in {FIXTURE_DIR}")
+
+
+def complex_cases(save_case, rng):
+    """complex128 / complex64 parity cases (ops prefixed `c_`)."""
+    z = np.array([1 + 2j, -0.5 + 0.25j, 3 - 1j, 0.75 + 4j, -2 + 0j, 1.5 - 1.5j])
+    za = np.array([[1 + 2j], [3 - 1j], [-0.5 + 0.5j]])
+    zb = np.array([[2 - 1j, 0.5 + 0.5j, -1 + 0j, 0 + 3j]])
+    zr = np.array([[2.0, -0.5, 4.0, 0.25]])
+    tol = dict(rtol=1e-12, atol=1e-13)
+    for name, f in [("add", np.add), ("sub", np.subtract), ("mul", np.multiply), ("div", np.divide)]:
+        save_case(f"c_{name}_broadcast", f"c_{name}", [za, zb], {}, f(za, zb), "complex128", **tol)
+    save_case("c_mul_real", "c_mul", [za, zr], {}, za * zr, "complex128", **tol)
+    save_case("c_real_div_complex", "c_div", [zr, za], {}, zr / za, "complex128", **tol)
+    save_case("c_add_real_scalar_row", "c_add", [zb, zr], {}, zb + zr, "complex128", **tol)
+    save_case("c_neg", "c_neg", [z], {}, -z, "complex128", **tol)
+    for name, f in [("exp", np.exp), ("log", np.log), ("sqrt", np.sqrt), ("sin", np.sin), ("cos", np.cos),
+                    ("tan", np.tan), ("sinh", np.sinh), ("cosh", np.cosh), ("tanh", np.tanh),
+                    ("square", np.square), ("conj", np.conj)]:
+        save_case(f"c_{name}", f"c_{name}", [z], {}, f(z), "complex128", **tol)
+    save_case("c_abs", "c_abs", [z], {}, np.abs(z), "float64", **tol)
+    save_case("c_angle", "c_angle", [z], {}, np.angle(z), "float64", **tol)
+    save_case("c_real", "c_real", [z], {}, z.real, "float64", **tol)
+    save_case("c_imag", "c_imag", [z], {}, z.imag, "float64", **tol)
+    w = np.array([0.5 + 1j, 2 + 0j, -1 + 1j, 1.5 - 0.5j, 3 + 0j, 0.25 + 0.25j])
+    save_case("c_power", "c_power", [z, w], {}, np.power(z, w), "complex128", rtol=1e-11, atol=1e-12)
+    save_case("c_power_int", "c_power", [z, np.full(6, 3 + 0j)], {}, np.power(z, 3), "complex128", **tol)
+    m = z.reshape(2, 3)
+    save_case("c_sum", "c_sum", [z], {}, np.array(z.sum()), "complex128", **tol)
+    save_case("c_prod", "c_prod", [z], {}, np.array(z.prod()), "complex128", **tol)
+    save_case("c_mean", "c_mean", [z], {}, np.array(z.mean()), "complex128", **tol)
+    save_case("c_sum_axis0", "c_sum_axis", [m], {"axis": 0}, m.sum(axis=0), "complex128", **tol)
+    save_case("c_sum_axis1", "c_sum_axis", [m], {"axis": 1}, m.sum(axis=1), "complex128", **tol)
+    save_case("c_mean_axis1", "c_mean_axis", [m], {"axis": 1}, m.mean(axis=1), "complex128", **tol)
+    save_case("c_cumsum", "c_cumsum", [z], {}, np.cumsum(z), "complex128", **tol)
+    save_case("c_max", "c_max", [z], {}, np.array(z.max()), "complex128", **tol)
+    save_case("c_min", "c_min", [z], {}, np.array(z.min()), "complex128", **tol)
+    save_case("c_sort", "c_sort", [z], {}, np.sort(z), "complex128", **tol)
+    save_case("c_argsort", "c_argsort", [z], {}, np.argsort(z).astype(np.int64), "int64")
+    a34 = (rng.standard_normal((3, 4)) + 1j * rng.standard_normal((3, 4)))
+    b42 = (rng.standard_normal((4, 2)) + 1j * rng.standard_normal((4, 2)))
+    save_case("c_matmul", "c_matmul", [a34, b42], {}, a34 @ b42, "complex128", rtol=1e-12, atol=1e-12)
+    v1 = rng.standard_normal(5) + 1j * rng.standard_normal(5)
+    v2 = rng.standard_normal(5) + 1j * rng.standard_normal(5)
+    save_case("c_dot", "c_dot", [v1, v2], {}, np.array(np.dot(v1, v2)), "complex128", rtol=1e-12, atol=1e-12)
+    save_case("c_vdot", "c_vdot", [v1, v2], {}, np.array(np.vdot(v1, v2)), "complex128", rtol=1e-12, atol=1e-12)
+    save_case("c_matmul_vec", "c_matmul", [a34, v1[:4]], {}, a34 @ v1[:4], "complex128", rtol=1e-12, atol=1e-12)
+    save_case("c_fft", "c_fft", [z], {}, np.fft.fft(z), "complex128", rtol=1e-11, atol=1e-12)
+    save_case("c_ifft", "c_ifft", [z], {}, np.fft.ifft(z), "complex128", rtol=1e-11, atol=1e-12)
+    xr = rng.standard_normal(7)
+    save_case("c_fft_real_input", "c_fft", [xr], {}, np.fft.fft(xr), "complex128", rtol=1e-11, atol=1e-12)
+    save_case("c_rfft", "c_rfft", [xr], {}, np.fft.rfft(xr), "complex128", rtol=1e-11, atol=1e-12)
+    h = np.fft.rfft(xr)
+    save_case("c_irfft_odd", "c_irfft", [h], {"n": 7}, np.fft.irfft(h, 7), "float64", rtol=1e-11, atol=1e-12)
+    save_case("c_irfft_default", "c_irfft", [h], {}, np.fft.irfft(h), "float64", rtol=1e-11, atol=1e-12)
+    m2 = rng.standard_normal((3, 4)) + 1j * rng.standard_normal((3, 4))
+    save_case("c_fft2", "c_fft2", [m2], {}, np.fft.fft2(m2), "complex128", rtol=1e-11, atol=1e-12)
+    save_case("c_ifft2", "c_ifft2", [m2], {}, np.fft.ifft2(m2), "complex128", rtol=1e-11, atol=1e-12)
+    z64 = z.astype(np.complex64)
+    save_case("c64_fft", "c64_fft", [z64], {}, np.fft.fft(z64), "complex64", rtol=2e-5, atol=2e-5)
+    save_case("c64_mul", "c64_mul", [z64, z64[::-1].copy()], {}, z64 * z64[::-1], "complex64", rtol=2e-6, atol=1e-6)
+    save_case("c_astype_c128_to_c64", "c_to_c64", [z], {}, z.astype(np.complex64), "complex64", rtol=1e-7, atol=1e-7)
+    save_case("c_astype_f64_to_c128", "c_from_real", [xr], {}, xr.astype(np.complex128), "complex128", **tol)
+    save_case("c_isnan", "c_isnan", [np.array([np.nan + 1j, 1 + 0j, 2 + np.nan * 1j])], {},
+              np.isnan(np.array([np.nan + 1j, 1 + 0j, 2 + np.nan * 1j])), "bool")
+    strings = {
+        "mixed": z,
+        "round": np.array([1.5 + 2j, 3 - 4j]),
+        "sci": np.array([1e-5 + 1j, 1 + 1e5j]),
+        "matrix": np.array([[1 + 1j, 2 - 2j], [0.5j, -0.0 - 0j]]),
+        "special": np.array([np.nan + 1j, 1 + np.inf * 1j, complex(1, -np.nan)]),
+        "c64": z.astype(np.complex64),
+        "third": np.array([0.1 + 0.2j, 1 / 3 + 2 / 3j]),
+    }
+    for k, arr in strings.items():
+        save_case(f"c_str_{k}", "c_str", [arr], {"str": str(arr)}, np.array(0), "str")
+
 
 if __name__ == "__main__":
     main()

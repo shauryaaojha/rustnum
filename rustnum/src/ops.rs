@@ -97,7 +97,7 @@ impl<T: Num + Neg<Output = T>> Neg for Array<T> {
     type Output = Self;
     fn neg(self) -> Self {
         self.into_map(|x| {
-            if T::DTYPE.starts_with("float") {
+            if T::DTYPE.starts_with("float") || T::DTYPE.starts_with("complex") {
                 -x
             } else {
                 sub(T::ZERO, x)
@@ -109,7 +109,7 @@ impl<T: Num + Neg<Output = T>> Neg for &Array<T> {
     type Output = Array<T>;
     fn neg(self) -> Self::Output {
         self.par_map(|x| {
-            if T::DTYPE.starts_with("float") {
+            if T::DTYPE.starts_with("float") || T::DTYPE.starts_with("complex") {
                 -x
             } else {
                 sub(T::ZERO, x)

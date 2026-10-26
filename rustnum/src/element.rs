@@ -27,6 +27,69 @@ pub trait Element:
     /// assert_eq!(<i32 as np::Element>::from_f64(2.9),2);
     /// ```
     fn from_f64(value: f64) -> Self;
+    /// Real and imaginary parts as `f64`, used by `astype` so complex values keep both parts.
+    ///
+    /// Real types return `(self.to_f64(), 0.0)`, like NumPy casting a real array to complex.
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<i32 as np::Element>::to_complex_parts(3),(3.0,0.0));
+    /// assert_eq!(<np::Complex<f64> as np::Element>::to_complex_parts(np::Complex::new(1.0,2.0)),(1.0,2.0));
+    /// ```
+    fn to_complex_parts(self) -> (f64, f64) {
+        (self.to_f64(), 0.0)
+    }
+    /// Builds a value from real and imaginary parts; real types drop `im`, like NumPy's
+    /// `ComplexWarning` cast.
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<f64 as np::Element>::from_complex_parts(1.5,9.0),1.5);
+    /// assert_eq!(<np::Complex<f64> as np::Element>::from_complex_parts(1.5,9.0),np::Complex::new(1.5,9.0));
+    /// ```
+    fn from_complex_parts(re: f64, im: f64) -> Self {
+        let _ = im;
+        Self::from_f64(re)
+    }
+    /// `.npy` dtype descriptor such as `"<c16"`, or `None` for types without a `.npy` encoding.
+    ///
+    /// Types outside the seven built-ins that return `Some` are written and read through
+    /// [`Element::npy_write`] and [`Element::npy_read`].
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<np::Complex<f64> as np::Element>::npy_descr().as_deref(),Some("<c16"));
+    /// assert_eq!(<f64 as np::Element>::npy_descr(),None);
+    /// ```
+    fn npy_descr() -> Option<String> {
+        None
+    }
+    /// Bytes per element in a `.npy` file (meaningful when [`Element::npy_descr`] is `Some`).
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<np::Complex<f64> as np::Element>::npy_itemsize(),16);
+    /// ```
+    fn npy_itemsize() -> usize {
+        0
+    }
+    /// Appends the little-endian `.npy` encoding of `self`.
+    /// ```
+    /// use rustnum as np;
+    /// let mut out=Vec::new();
+    /// np::Element::npy_write(np::Complex::new(1.0f32,2.0),&mut out);
+    /// assert_eq!(out.len(),8);
+    /// ```
+    fn npy_write(self, out: &mut Vec<u8>) {
+        let _ = out;
+    }
+    /// Decodes one element from little-endian `.npy` bytes.
+    /// ```
+    /// use rustnum as np;
+    /// let mut out=Vec::new();
+    /// np::Element::npy_write(np::Complex::new(1.0f32,2.0),&mut out);
+    /// assert_eq!(<np::Complex<f32> as np::Element>::npy_read(&out),np::Complex::new(1.0,2.0));
+    /// ```
+    fn npy_read(bytes: &[u8]) -> Self {
+        let _ = bytes;
+        Self::default()
+    }
 }
 /// A numeric array element, like NumPy numeric dtypes.
 /// ```

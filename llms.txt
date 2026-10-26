@@ -1,6 +1,6 @@
 # rustnum
 
-> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`, `np::fft::fft`, `np::poly::polyval`, `np::io::save_npy`. Element types: f32 f64 i32 i64 u8 usize bool. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
+> rustnum is a NumPy-style n-dimensional array library for pure Rust. One type, `Array<T>`, covers 0-d, 1-d and n-d data. Function names, argument order and panic messages follow NumPy. Write `use rustnum as np;` and call `np::zeros`, `np::linalg::solve`, `np::random::Rng`, `np::fft::fft`, `np::poly::polyval`, `np::io::save_npy`. Element types: f32 f64 i32 i64 u8 usize bool Complex<f32> Complex<f64>. Views are copy-on-write, not write-through. Misuse (bad shape, index, axis) panics with NumPy's message; bad data (files, singular matrix) returns `np::Result`. Full NumPy table: docs/NUMPY_MAPPING.md. Contract: docs/API.md.
 
 ## Rules for writing rustnum code
 - Always `use rustnum as np;`. `shape` is `&[usize]`, `axis` is `isize` (negative allowed).
@@ -14,7 +14,7 @@
 - Fallible calls need `?`: `np::linalg::solve`, `inv`, `cholesky`, `lstsq`, `matrix_power`, `eig`, `eigvals`, all `np::io` functions (`load_npy`, `save_npy`, `load_csv`, `save_csv`, `savez`, `savez_compressed`, `load_npz`, `NpzFile::open`).
 - Random methods need `let mut rng = np::random::Rng::seed(42);`. Streams differ from NumPy.
 - A slice is a view, but a write never changes the parent. Use `a.slice_assign(..)` to write into part of an array.
-- Complex data is handled as `(re, im)` pairs of real arrays in `np::fft`, `np::poly::roots`, and `np::linalg::eig`. Scalar complex is `np::Complex::new(re, im)`.
+- Complex arrays are `Array<np::Complex<f64>>` (complex128) and `Array<np::Complex<f32>>` (complex64); build with `np::Complex::new(re, im)`. `np::fft` takes real or complex arrays and returns complex arrays. `np::poly::roots` and `np::linalg::eig` still return `(re, im)` pairs. Real modulus is `np::absolute(&z)`; `z.abs()` returns a complex array.
 
 ## 10 NumPy to rustnum translations
 ```
@@ -35,7 +35,7 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `Element` — all element types. `Num: Element` — f32 f64 i32 i64 u8 usize. `Float: Num` — f32 f64.
 - `IntoArray<T>` — anything array-like: `T`, `Array<T>`, `&Array<T>`, `Vec<T>`, `&[T]`, `[T; N]`.
 - `np::Error` — variants include Singular, NotPositiveDefinite, Shape(String), DType, Parse, Format, NoConvergence, Io. `np::Result<T>`.
-- `np::Complex<F>` — scalar complex number `re + im*j`.
+- `np::Complex<F>` — complex number `re + im*j`; an `Element` + `Num` (complex64 for f32, complex128 for f64).
 
 ## Construction
 - `np::array![1.0, 2.0]`, `np::array![[1.0, 2.0], [3.0, 4.0]]` — array literal (ragged panics)
@@ -162,11 +162,20 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `np::linalg::multi_dot(&[&a, &b, &c])`
 - `np::linalg::tensordot(&a, &b, &axes_a, &axes_b)`, `tensordot_n(&a, &b, n)`
 
+## Complex arrays (Array<np::Complex<F>>)
+- Operators broadcast and mix real and complex: `&z * &w`, `&z + &r` (r real array), `&z * 2.0`, `np::Complex::new(0.0, 1.0) * &z`
+- `z.real()`, `z.imag()`, `z.conj()`, `z.angle()`, `z.angle_deg()`, `np::absolute(&z)` (real output)
+- `z.exp()`, `log()`, `log2()`, `log10()`, `sqrt()`, `sin()`, `cos()`, `tan()`, `sinh()`, `cosh()`, `tanh()`, `np::power(&z, &w)`
+- `z.is_nan()`, `is_inf()`, `is_finite()`; `z.sum()`, `prod()`, `mean()`, `mean_axis(k)`, `sum_axis(k)`, `cumsum()`
+- `a.matmul(&b)`, `a.dot(&b)`, `a.vdot(&b)` (conjugates `a`); `z.sort()`, `max()`, `min()` are lexicographic
+- `a.astype::<np::Complex<f64>>()` from real gives `x + 0j`; `.npy`/`.npz` store `<c8`/`<c16`
+- Display `[1.+2.j 3.-4.j]`
+
 ## Discrete Fourier Transform (np::fft)
-- `np::fft::fft(&re, &im)`, `ifft(&re, &im)` — 1-d complex FFT over last axis, return (re, im)
-- `np::fft::rfft(&a)` — real FFT over last axis, returns (re, im) with n/2 + 1 bins
-- `np::fft::irfft(&re, &im, n)` — inverse real FFT to length n, returns Array<F>
-- `np::fft::fft2(&re, &im)`, `ifft2(&re, &im)` — 2-d FFT over last two axes, return (re, im)
+- `np::fft::fft(&a)`, `ifft(&a)` — FFT over last axis of a real or complex array, return `Array<Complex<F>>`
+- `np::fft::rfft(&a)` — real FFT over last axis, `n/2 + 1` bins
+- `np::fft::irfft(&z, None)` or `irfft(&z, Some(n))` — inverse real FFT, returns `Array<F>`
+- `np::fft::fft2(&a)`, `ifft2(&a)` — 2-d FFT over last two axes
 - `np::fft::fftfreq(n, d)`, `rfftfreq(n, d)` — sample frequencies
 - `np::fft::fftshift(&a)`, `ifftshift(&a)` — shift zero-frequency to centre
 
@@ -219,7 +228,7 @@ rng = np.random.default_rng(42)      let mut rng = np::random::Rng::seed(42);
 - `println!("{a:?}")` — `array([[1., 2.], [3., 4.]], dtype=float64)`
 
 ## Not supported in v0.1
-float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arrays, fancy indexing with multidimensional index arrays on several axes at once, Array<Complex<F>> element type (complex numbers are supported as scalar Complex<F> and (re, im) array pairs).
+float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arrays, fancy indexing with multidimensional index arrays on several axes at once. (Complex arrays are supported since v0.2; complex linalg is not.)
 
 ## Files
 - README.md — overview and quick start

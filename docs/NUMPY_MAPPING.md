@@ -294,18 +294,42 @@ Matrix products, dot and trace are methods. Decompositions and solvers are free 
 | `np.tensordot(a, b, axes=(axes_a, axes_b))` | `np::linalg::tensordot(&a, &b, &axes_a, &axes_b)` | Tensor contraction over paired axes |
 | `np.tensordot(a, b, axes=n)` | `np::linalg::tensordot_n(&a, &b, n)` | Contract last `n` of `a` with first `n` of `b` |
 
-## Discrete Fourier Transform (np::fft)
+## Complex arrays
 
-Transforms over `Array<F>` (`f32` and `f64`). Since rustnum v0.1 has no complex array dtype, complex signals and spectra are pairs of real arrays `(re, im)` of the same shape.
+`Array<Complex<f64>>` is `complex128` and `Array<Complex<f32>>` is `complex64`. Build elements with `np::Complex::new(re, im)`.
 
 | NumPy | rustnum | Notes |
 |---|---|---|
-| `np.fft.fft(a)` | `np::fft::fft(&re, &im)` | 1-d complex FFT along last axis, returns `(re, im)` |
-| `np.fft.ifft(a)` | `np::fft::ifft(&re, &im)` | 1-d inverse complex FFT along last axis, divided by `n` |
-| `np.fft.rfft(a)` | `np::fft::rfft(&a)` | Real FFT along last axis, returns `n / 2 + 1` bins as `(re, im)` |
-| `np.fft.irfft(a, n)` | `np::fft::irfft(&re, &im, n)` | Inverse real FFT to length `n`, returns `Array<F>` |
-| `np.fft.fft2(a)` | `np::fft::fft2(&re, &im)` | 2-d complex FFT over last two axes, returns `(re, im)` |
-| `np.fft.ifft2(a)` | `np::fft::ifft2(&re, &im)` | 2-d inverse complex FFT over last two axes |
+| `a + b`, `a * b`, `a / b` (complex, mixed real/complex) | `&a + &b`, `&a * &b`, `&a / &b`, `&z * 2.0`, `&z + &r` | Broadcasting; the real operand becomes `x + 0j` |
+| `a.real`, `np.real(a)` | `z.real()` | `Array<F>` |
+| `a.imag`, `np.imag(a)` | `z.imag()` | `Array<F>` |
+| `np.conj(a)` | `z.conj()` | |
+| `np.abs(z)`, `np.absolute(z)` | `np::absolute(&z)` | Real output; `z.abs()` returns `\|z\| + 0j` as complex |
+| `np.angle(z)`, `np.angle(z, deg=True)` | `z.angle()`, `z.angle_deg()` | |
+| `np.exp/log/log2/log10/sqrt(z)` | `z.exp()`, `z.log()`, `z.log2()`, `z.log10()`, `z.sqrt()` | C99 branch cuts, signed zeros |
+| `np.sin/cos/tan/sinh/cosh/tanh(z)` | `z.sin()` ... `z.tanh()` | |
+| `np.power(z, w)` | `np::power(&z, &w)` | Complex exponents |
+| `np.isnan/isinf/isfinite(z)` | `z.is_nan()`, `z.is_inf()`, `z.is_finite()` | |
+| `z.sum()`, `z.prod()`, `np.cumsum(z)` | `z.sum()`, `z.prod()`, `z.cumsum()` | |
+| `z.mean()`, `z.mean(axis=k)` | `z.mean()`, `z.mean_axis(k)` | |
+| `a @ b`, `np.dot(a, b)` | `a.matmul(&b)`, `a.dot(&b)` | Generic (not packed) loop |
+| `np.vdot(a, b)` | `a.vdot(&b)` | Conjugates `a` |
+| `np.sort(z)`, `z.max()` | `z.sort()`, `z.max()` | Lexicographic `(re, im)` |
+| `a.astype(complex)` | `a.astype::<np::Complex<f64>>()` | Real to complex gives `x + 0j` |
+| `np.save("z.npy", z)` | `np::io::save_npy("z.npy", &z)` | `<c8`, `<c16` |
+
+## Discrete Fourier Transform (np::fft)
+
+Transforms accept real or complex arrays (`Array<F>` or `Array<Complex<F>>`) and return complex arrays, like NumPy. `f64` gives `complex128`, `f32` gives `complex64`.
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.fft.fft(a)` | `np::fft::fft(&a)` | 1-d FFT along last axis, returns `Array<Complex<F>>` |
+| `np.fft.ifft(a)` | `np::fft::ifft(&a)` | 1-d inverse FFT along last axis, divided by `n` |
+| `np.fft.rfft(a)` | `np::fft::rfft(&a)` | Real FFT along last axis, `n / 2 + 1` bins |
+| `np.fft.irfft(a)`, `np.fft.irfft(a, n)` | `np::fft::irfft(&a, None)`, `np::fft::irfft(&a, Some(n))` | Inverse real FFT, returns `Array<F>` |
+| `np.fft.fft2(a)` | `np::fft::fft2(&a)` | 2-d FFT over last two axes |
+| `np.fft.ifft2(a)` | `np::fft::ifft2(&a)` | 2-d inverse FFT over last two axes |
 | `np.fft.fftfreq(n, d=1.0)` | `np::fft::fftfreq(n, d)` | Sample frequencies for `n`-point DFT with spacing `d` |
 | `np.fft.rfftfreq(n, d=1.0)` | `np::fft::rfftfreq(n, d)` | Sample frequencies for `rfft`, `n / 2 + 1` bins |
 | `np.fft.fftshift(a)` | `np::fft::fftshift(&a)` | Shift zero-frequency component to centre (all axes) |
@@ -454,10 +478,11 @@ File errors, parse errors, singular matrices and non-positive-definite matrices 
 **14. A mask must match the array shape.** `a.mask(&m)` needs `m.shape() == a.shape()`. To select rows by a 1-d condition,
 use `a.take(&np::nonzero(&cond)[0].to_vec(), 0)` or `a.compress(&cond, 0)`.
 
-**15. Complex data is represented as `(re, im)` pairs.** `Array` does not yet have a complex element type; `np::fft::fft`,
-`np::poly::roots`, and `np::linalg::eig` take or return pairs of real arrays `(re, im)`. Scalar complex arithmetic is available via `np::Complex<F>`.
+**15. Complex arrays exist, but some APIs still use `(re, im)` pairs.** `Array<Complex<F>>` is a real dtype since v0.2 and `np::fft`
+takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return pairs of real arrays `(re, im)`. `z.abs()` returns a complex array
+(`|z| + 0j`); use `np::absolute(&z)` for the real modulus.
 
 ## Not in v0.1
 
-`float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,
-multidimensional fancy indexing with index arrays on several axes at once, and `Array<Complex<F>>` element type.
+`float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays, and
+multidimensional fancy indexing with index arrays on several axes at once. (Complex arrays arrived in v0.2.)

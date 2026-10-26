@@ -367,6 +367,8 @@ fn descr_to_dtype(descr: &str) -> String {
         "|u1" | "<u1" => "uint8",
         "<u8" | "=u8" => "uint64",
         "|b1" => "bool",
+        "<c16" | "=c16" => "complex128",
+        "<c8" | "=c8" => "complex64",
         other => other,
     }
     .to_string()
@@ -431,8 +433,16 @@ pub(crate) fn encode_elements<T: Element>(data: Vec<T>, shape: &[usize]) -> Resu
         )*};
     }
     arm!(f64, f32, i64, i32, u8, bool, usize);
+    if let Some(descr) = T::npy_descr() {
+        let mut buf = write_npy_header(&descr, shape);
+        buf.reserve(data.len() * T::npy_itemsize());
+        for v in data {
+            v.npy_write(&mut buf);
+        }
+        return Ok(buf);
+    }
     Err(Error::DType {
-        expected: "a built-in rustnum dtype".into(),
+        expected: "a dtype with a .npy encoding".into(),
         found: T::DTYPE.into(),
     })
 }
@@ -450,10 +460,47 @@ pub(crate) fn decode_elements<T: Element>(bytes: &[u8]) -> Result<(Vec<T>, Vec<u
         )*};
     }
     arm!(f64, f32, i64, i32, u8, bool, usize);
+    if let Some(descr) = T::npy_descr() {
+        return decode_with_hooks::<T>(bytes, &descr);
+    }
     Err(Error::DType {
-        expected: "a built-in rustnum dtype".into(),
+        expected: "a dtype with a .npy encoding".into(),
         found: T::DTYPE.into(),
     })
+}
+
+/// Decode through the [`Element`] `.npy` hooks (complex, float16, datetime, structured, ...).
+fn decode_with_hooks<T: Element>(bytes: &[u8], descr: &str) -> Result<(Vec<T>, Vec<usize>)> {
+    let (header, data_offset) = parse_npy_header(bytes)?;
+    if header.descr != descr {
+        return Err(Error::DType {
+            expected: descr_to_dtype(descr),
+            found: descr_to_dtype(&header.descr),
+        });
+    }
+    let n_elements = header
+        .shape
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(|| Error::Format("shape in .npy header is too large".into()))?;
+    let size = T::npy_itemsize();
+    let data_bytes = &bytes[data_offset..];
+    let expected_bytes = n_elements
+        .checked_mul(size)
+        .ok_or_else(|| Error::Format("shape in .npy header is too large".into()))?;
+    if data_bytes.len() < expected_bytes {
+        return Err(Error::Format(format!(
+            "data truncated: need {expected_bytes} bytes, have {}",
+            data_bytes.len()
+        )));
+    }
+    let mut data: Vec<T> = (0..n_elements)
+        .map(|i| T::npy_read(&data_bytes[i * size..]))
+        .collect();
+    if header.fortran_order && header.shape.len() > 1 {
+        data = fortran_to_c_order(&data, &header.shape);
+    }
+    Ok((data, header.shape))
 }
 
 /// Reorder data from Fortran (column-major) to C (row-major) order.

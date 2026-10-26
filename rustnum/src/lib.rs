@@ -25,6 +25,7 @@
 
 mod array;
 mod broadcast;
+mod complex_array;
 mod creation;
 mod display;
 mod element;
@@ -50,6 +51,7 @@ pub mod random;
 
 pub use array::Array;
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
+pub use complex_array::{Absolute, absolute};
 pub use creation::*;
 pub use element::{Element, Float, Num};
 pub use extra::api::{

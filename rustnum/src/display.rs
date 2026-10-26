@@ -41,7 +41,47 @@ fn scientific<T: Element>(x: T) -> String {
         format!("{:e}", x.to_f64())
     }
 }
+fn complex_values<T: Element>(values: &[T]) -> Vec<String> {
+    // NumPy formats the real and imaginary parts as two independent float columns; the
+    // imaginary column always carries a sign and the `j` goes right after the digits.
+    fn columns<F: Element>(re: Vec<F>, im: Vec<F>) -> Vec<String> {
+        let re_text = format_values(&re);
+        let neg: Vec<bool> = im
+            .iter()
+            .map(|x| x.to_f64().is_sign_negative() && !x.to_f64().is_nan())
+            .collect();
+        let im_abs: Vec<F> = im.iter().map(|&x| F::from_f64(x.to_f64().abs())).collect();
+        let im_text = format_values(&im_abs);
+        re_text
+            .into_iter()
+            .zip(im_text)
+            .zip(neg)
+            .map(|((r, i), n)| {
+                let trimmed = i.trim_end();
+                let pad = &i[trimmed.len()..];
+                let lead = trimmed.trim_start();
+                let left = &trimmed[..trimmed.len() - lead.len()];
+                format!("{r}{left}{}{lead}j{pad}", if n { '-' } else { '+' })
+            })
+            .collect()
+    }
+    let parts: Vec<(f64, f64)> = values.iter().map(|v| v.to_complex_parts()).collect();
+    if T::DTYPE == "complex64" {
+        columns(
+            parts.iter().map(|p| p.0 as f32).collect(),
+            parts.iter().map(|p| p.1 as f32).collect(),
+        )
+    } else {
+        columns(
+            parts.iter().map(|p| p.0).collect(),
+            parts.iter().map(|p| p.1).collect(),
+        )
+    }
+}
 fn format_values<T: Element>(values: &[T]) -> Vec<String> {
+    if T::DTYPE.starts_with("complex") {
+        return complex_values(values);
+    }
     if !T::DTYPE.starts_with("float") {
         let text: Vec<_> = values.iter().copied().map(raw).collect();
         let width = if T::DTYPE == "bool" {
@@ -260,9 +300,12 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     };
     if a.ndim() == 0 {
         let v = a.item();
-        if debug && T::DTYPE.starts_with("float") {
+        if debug && (T::DTYPE.starts_with("float") || T::DTYPE.starts_with("complex")) {
             let t = format_values(&[v]);
             out.push_str(t[0].trim());
+        } else if T::DTYPE.starts_with("complex") {
+            let t = format_values(&[v]);
+            out.push_str(&format!("({})", t[0].trim()));
         } else {
             out.push_str(&raw(v));
         }

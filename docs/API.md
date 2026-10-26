@@ -1,4 +1,4 @@
-# rustnum v0.1 API contract
+# rustnum API contract (v0.1 core; v0.2 additions are sections 22 onward)
 
 This is the binding contract for the final v0.1 code. Names and behavior follow NumPy unless this document states otherwise; misuse panics with NumPy-style wording, while I/O, parsing, singular matrices, non-positive-definite matrices, and solver non-convergence return `rustnum::Result` where the signature permits it.
 
@@ -14,8 +14,8 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 1. Element types and errors
 
-- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, and `bool`.
-- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, and `usize`.
+- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64` (plus defaulted `to_complex_parts`/`from_complex_parts` for `astype` and the `.npy` hooks `npy_descr`/`npy_itemsize`/`npy_write`/`npy_read`); implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `bool`, and (v0.2) `Complex<f32>` (`complex64`) and `Complex<f64>` (`complex128`).
+- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, and `Complex<F>`.
 - `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32` and `f64`.
 - `Error` variants are `Shape(String)`, `DType { expected: String, found: String }`, `Singular`, `NotPositiveDefinite`, `Io(std::io::Error)`, `Parse(String)`, `Format(String)`, and `NoConvergence(String)`.
 - `type Result<T> = std::result::Result<T, Error>`.
@@ -181,13 +181,14 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 14. FFT (`np::fft`)
 
-- v0.1 complex arrays are represented by equal-shaped `(re, im)` real arrays; transforms use NumPy's default backward normalization and operate on the last axis.
-- `fft<F: Float>(&re, &im)` and `ifft<F: Float>(&re, &im)` return `(Array<F>, Array<F>)`.
-- `rfft<F: Float>(&a) -> (Array<F>, Array<F>)` returns `n/2 + 1` bins and `irfft<F: Float>(&re, &im, n: usize) -> Array<F>` requires the output length.
-- `fft2<F: Float>(&re, &im)` and `ifft2<F: Float>(&re, &im)` transform the last two axes.
+- v0.2 follows NumPy: every transform takes a real or a complex array (trait `FftInput`, implemented for `Array<F>` and `Array<Complex<F>>`) and returns a complex array; transforms use NumPy's default backward normalization and operate on the last axis (the last two for the `2` forms). `f64` input gives `complex128`, `f32` gives `complex64`.
+- `fft<A: FftInput>(&a)` and `ifft<A: FftInput>(&a)` return `Array<Complex<A::Real>>`.
+- `rfft<F: Float>(&a) -> Array<Complex<F>>` returns `n/2 + 1` bins and `irfft<A: FftInput>(&a, n: Option<usize>) -> Array<A::Real>`; `None` means NumPy's default `2 * (m - 1)`.
+- `fft2<A: FftInput>(&a)` and `ifft2<A: FftInput>(&a)` transform the last two axes.
 - `fftfreq<F: Float>(n, d)` and `rfftfreq<F: Float>(n, d)` return `Array<F>`.
-- `fftshift<T: Element>(&a)` and `ifftshift<T: Element>(&a)` shift every axis and return `Array<T>`.
+- `fftshift<T: Element>(&a)` and `ifftshift<T: Element>(&a)` shift every axis and return `Array<T>`; they work on complex arrays.
 - Length zero panics; radix-2 and Bluestein kernels support every positive length without external dependencies.
+- Breaking change from v0.1: the `(re, im)` pair signatures are gone.
 
 ## 15. Polynomials (`np::poly`)
 
@@ -211,7 +212,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 17. Scalar complex numbers
 
-- `Complex<F> { pub re: F, pub im: F }` is a scalar type for `F = f32 | f64`; it is not an `Element`, so v0.1 has no `Array<Complex<F>>` dtype.
+- `Complex<F> { pub re: F, pub im: F }` is a scalar type for `F = f32 | f64`; since v0.2 it is also an `Element` and a `Num` (section 22).
 - Constructors are `Complex::new`, `from_real`, `from_polar`, and `i`.
 - Methods are `conj`, `norm`, `norm_sqr`, `arg`, `is_nan`, `is_infinite`, `is_finite`, `exp`, `ln`, `sqrt`, `powc`, `powf`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, and `cmp_numpy`.
 - Operators are complex/complex and complex/real `+`, `-`, `*`, `/`, unary `-`, and their assignment forms; branch cuts follow signed zero.
@@ -225,7 +226,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 19. Deliberate v0.1 limits
 
-- Not supported as array dtypes: complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
+- Not supported as array dtypes (v0.1 list, see sections 22 onward for what v0.2 added): complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
 - Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
 
@@ -248,3 +249,15 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - The private cache uses thread-safe `(TypeId, exact capacity)` buckets for buffers of at least 1 MiB. A buffer exceeding remaining capacity is dropped immediately. Cached payload capacities count against the cap; small bookkeeping allocations do not.
 - Final unique array owners return buffers to the cache. Views and clones never release live shared storage. An iterator can outlive its array; if it is the final Arc owner, that storage goes directly to the allocator when the iterator ends.
 - Creation, element-wise output, and copying kernels obtain cached initialized buffers. Kernels overwrite every output before it is observable; no uninitialized reads or unsafe pool code are used. `from_vec` adopts the supplied Vec directly, so producers outside these kernels (including the existing GEMM implementation) do not acquire pooled buffers.
+
+## 22. Complex arrays (v0.2)
+
+- `Complex<f32>` is NumPy `complex64` and `Complex<f64>` is `complex128`; `Array<Complex<F>>` is an ordinary array (`DTYPE` is `"complex64"`/`"complex128"`). Elements are ordered lexicographically on `(re, im)`, so `sort`, `argsort`, `min`, `max`, `argmin`, `argmax` and comparisons follow NumPy.
+- `Complex<F>` implements `Element` and `Num`, so every `Num` routine works: operators with broadcasting, `sum`, `prod`, `cumsum`, `cumprod`, `sum_axis`, `matmul`, `dot`, `trace`, `outer`, `einsum`, `square`, `power` (complex exponents). `%` panics, as NumPy raises.
+- Mixed operands: `Array<Complex<F>>` with `Array<F>` (either side), with a real scalar `F` (either side, concrete `f32`/`f64` on the left), and with a `Complex<F>` scalar. The real operand is promoted to `x + 0j`.
+- Methods on `Array<Complex<F>>`: `real()`, `imag()`, `conj()`, `angle()`, `angle_deg()`, `exp`, `log`, `log2`, `log10`, `sqrt`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `is_nan`, `is_inf`, `is_finite`, `mean`, `mean_axis`, and `vdot(&other)` (conjugates the first argument; `linalg::vdot` is generic and does not).
+- `absolute<A: Absolute>(&a) -> Array<A::Output>` is `np.absolute`/`np.abs`: real output for complex input. (`Array::abs()` on complex data comes from `Num::abs` and returns `|z| + 0j` as a complex array.)
+- `astype` between `Complex<f32>`, `Complex<f64>` and real types keeps both parts between complex dtypes, gives `x + 0j` from real and drops the imaginary part towards real.
+- Display follows NumPy: `[1.+2.j 3.-4.j]`, `Debug` is `array([...], dtype=complex128)`.
+- I/O: `.npy`/`.npz` `<c8` and `<c16` read and write through the usual `np::io` functions.
+- Not done: complex `np::linalg` (`solve`, `inv`, `eig` with complex input), complex `std`/`var`, arcsin/arccos/arctan on complex arrays, `np::poly::roots` still returns `(re, im)` pairs.

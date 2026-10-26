@@ -12,6 +12,9 @@ use rustnum as np;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "parity_ext/mod.rs"]
+mod ext;
+
 // ---------------------------------------------------------------------------
 // Tiny JSON reader — no new dependencies
 // ---------------------------------------------------------------------------
@@ -586,7 +589,10 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
             Ok(RunResult::F64(Array::scalar(i[0].trace())))
         }
 
-        _ => Err(format!("skipped: op `{op}` not wired")),
+        _ => match ext::run(fixture_dir, case) {
+            Some(result) => result.map(RunResult::Ext),
+            None => Err(format!("skipped: op `{op}` not wired")),
+        },
     }
 }
 
@@ -594,6 +600,7 @@ enum RunResult {
     F64(Array<f64>),
     I64(Array<i64>),
     Bool(Array<bool>),
+    Ext(ext::Out),
 }
 
 // ---------------------------------------------------------------------------
@@ -645,6 +652,7 @@ fn parity_with_numpy() {
                         let expected = load_npy_i64(&output_file);
                         exact_i64(&computed, &expected)
                     }
+                    (RunResult::Ext(out), _) => ext::check(out, case, &output_file),
                     (RunResult::Bool(computed), "bool") => {
                         let expected = load_npy_bool(&output_file);
                         exact_bool(&computed, &expected)
