@@ -6,19 +6,19 @@ macro_rules! binary {
         impl<T: Num> $trait<Array<T>> for Array<T> {
             type Output = Array<T>;
             fn $method(self, r: Array<T>) -> Self::Output {
-                self.par_zip(r, $f)
+                self.into_zip_owned(r, $f)
             }
         }
         impl<T: Num> $trait<&Array<T>> for Array<T> {
             type Output = Array<T>;
             fn $method(self, r: &Array<T>) -> Self::Output {
-                self.par_zip(r, $f)
+                self.into_zip(r, $f)
             }
         }
         impl<T: Num> $trait<Array<T>> for &Array<T> {
             type Output = Array<T>;
             fn $method(self, r: Array<T>) -> Self::Output {
-                self.par_zip(r, $f)
+                r.into_zip(self, |y, x| ($f)(x, y))
             }
         }
         impl<T: Num> $trait<&Array<T>> for &Array<T> {
@@ -30,7 +30,7 @@ macro_rules! binary {
         impl<T: Num> $trait<T> for Array<T> {
             type Output = Array<T>;
             fn $method(self, r: T) -> Self::Output {
-                self.par_zip(r, $f)
+                self.into_map(|x| ($f)(x, r))
             }
         }
         impl<T: Num> $trait<T> for &Array<T> {
@@ -51,7 +51,7 @@ macro_rules! scalar_left {
         impl $trait<Array<$t>> for $t {
             type Output = Array<$t>;
             fn $method(self, r: Array<$t>) -> Self::Output {
-                r.par_map(|x| ($f)(self, x))
+                r.into_map(|x| ($f)(self, x))
             }
         }
         impl $trait<&Array<$t>> for $t {
@@ -76,15 +76,17 @@ scalar_left!(i64);
 scalar_left!(u8);
 scalar_left!(usize);
 macro_rules! assign {
- ($trait:ident,$method:ident,$f:expr)=>{
-    impl<T:Num,R:IntoArray<T>> $trait<R> for Array<T>{
-        fn $method(&mut self,r:R){
-            let r=r.into_array();
-            assert!(self.common_shape(&r)==self.shape,"non-broadcastable output operand with shape {:?} doesn't match the broadcast shape",self.shape);
-            let out=self.par_zip(r,$f);self.replace_c_order(out.to_vec());
+    ($trait:ident,$method:ident,$f:expr) => {
+        impl<T: Num, R: IntoArray<T>> $trait<R> for Array<T> {
+            fn $method(&mut self, r: R) {
+                if let Some(value) = r.scalar_value() {
+                    self.mapv_inplace_parallel(|x| ($f)(x, value));
+                } else {
+                    self.zip_inplace(&r.into_array(), $f);
+                }
+            }
         }
-    }
- };
+    };
 }
 assign!(AddAssign, add_assign, add);
 assign!(SubAssign, sub_assign, sub);
@@ -94,7 +96,7 @@ assign!(RemAssign, rem_assign, |a, b| a % b);
 impl<T: Num + Neg<Output = T>> Neg for Array<T> {
     type Output = Self;
     fn neg(self) -> Self {
-        self.par_map(|x| {
+        self.into_map(|x| {
             if T::DTYPE.starts_with("float") {
                 -x
             } else {
@@ -193,11 +195,11 @@ impl<F: Float> Array<F> {
 }
 macro_rules! bool_binary {
  ($trait:ident,$method:ident,$op:tt)=>{
- impl $trait<Array<bool>> for Array<bool>{type Output=Array<bool>;fn $method(self,r:Array<bool>)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
- impl $trait<&Array<bool>> for Array<bool>{type Output=Array<bool>;fn $method(self,r:&Array<bool>)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
- impl $trait<Array<bool>> for &Array<bool>{type Output=Array<bool>;fn $method(self,r:Array<bool>)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
+ impl $trait<Array<bool>> for Array<bool>{type Output=Array<bool>;fn $method(self,r:Array<bool>)->Self::Output{self.into_zip_owned(r,|a,b|a $op b)}}
+ impl $trait<&Array<bool>> for Array<bool>{type Output=Array<bool>;fn $method(self,r:&Array<bool>)->Self::Output{self.into_zip(r,|a,b|a $op b)}}
+ impl $trait<Array<bool>> for &Array<bool>{type Output=Array<bool>;fn $method(self,r:Array<bool>)->Self::Output{r.into_zip(self,|b,a|a $op b)}}
  impl $trait<&Array<bool>> for &Array<bool>{type Output=Array<bool>;fn $method(self,r:&Array<bool>)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
- impl $trait<bool> for Array<bool>{type Output=Array<bool>;fn $method(self,r:bool)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
+ impl $trait<bool> for Array<bool>{type Output=Array<bool>;fn $method(self,r:bool)->Self::Output{self.into_map(|a|a $op r)}}
  impl $trait<bool> for &Array<bool>{type Output=Array<bool>;fn $method(self,r:bool)->Self::Output{self.par_zip(r,|a,b|a $op b)}}
  };
 }
@@ -207,7 +209,7 @@ bool_binary!(BitXor,bitxor,^);
 impl Not for Array<bool> {
     type Output = Self;
     fn not(self) -> Self {
-        self.par_map(|x| !x)
+        self.into_map(|x| !x)
     }
 }
 impl Not for &Array<bool> {

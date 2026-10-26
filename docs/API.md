@@ -7,7 +7,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 ## 0. Crate surface
 
 - Users write `use rustnum as np;`; core items are re-exported once at the crate root.
-- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, and `np::random`; implementation modules remain private.
+- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, `np::memory`, and `np::random`; implementation modules remain private.
 - Root macros are `np::array!` for literals through three dimensions and `np::s!` for slice arguments.
 - Public APIs contain no explicit lifetime parameters and no public `unsafe` functions.
 - Integer addition, subtraction, multiplication, powers, reductions, and linear-algebra products wrap on overflow like fixed-width NumPy dtypes.
@@ -225,3 +225,23 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Not supported as array dtypes: complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
 - Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
+
+## 20. In-place and consuming operations
+
+- Same-dtype, single-output unary element-wise methods have `<name>_inplace(&mut self)` and `into_<name>(self) -> Self` variants: `exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p`, `sqrt`, `cbrt`, `sin`, `cos`, `tan`, `arcsin`, `arccos`, `arctan`, `sinh`, `cosh`, `tanh`, `floor`, `ceil`, `round`, `trunc`, `reciprocal`, `abs`, `square`, `sign`, `sigmoid`, `relu`, `sinc`, `i0`, `deg2rad`, `rad2deg`, `rint`, `fix`, `fabs`, `positive`, `negative`, `spacing`, and `nan_to_num`.
+- Parameterized variants preserve the original arguments: `round_decimals_inplace(d)` / `into_round_decimals(d)`, `powf_inplace(p)` / `into_powf(p)`, `powi_inplace(p)` / `into_powi(p)`, `clip_inplace(lo, hi)` / `into_clip(lo, hi)`, and `nan_to_num_with_inplace(nan, posinf, neginf)` / `into_nan_to_num_with(nan, posinf, neginf)`.
+- These express NumPy's `np.<ufunc>(a, out=a)` with copy-on-write value semantics. Shared inputs detach before mutation; unique contiguous arrays retain their data pointer. Sigmoid is the stable logistic formula; ReLU corresponds to `np.maximum(a, 0, out=a)`.
+- Type-changing predicates (`is_nan`, `is_inf`, `is_finite`, `signbit`), tuple results (`modf`, `frexp`), and the non-element-wise `unwrap` do not have same-buffer variants.
+- `(a.matmul(&b) / scale).into_tanh()` allocates no storage or metadata after matmul when its result is unique and contiguous. Owned arithmetic and unary negation reuse matching unique contiguous buffers; two-owned-array operators may reuse either side without reversing noncommutative operations.
+- `astype::<T>(&self)` shares same-dtype storage using copy-on-write; `into_astype::<T>(self)` also retains the metadata without allocation. Different dtypes allocate a converted result. This is the Rust value-semantic equivalent of `np.asarray(a, dtype=T)`.
+- `mapv_inplace(f)` retains its existing serial callback contract, including non-`Sync` captures. The added `mapv_inplace_parallel(f: impl Fn(T) -> T + Send + Sync)` uses the same contiguous parallel path as built-in in-place ufuncs. Requiring `Sync` on the existing method would break source compatibility.
+- `IntoArray::scalar_value(&self) -> Option<T>` defaults to `None`; primitive scalar implementations return `Some(value)` so compound assignment avoids allocating a scalar array. Custom implementations must return `Some` only when `into_array` represents that scalar.
+
+## 21. Memory cache (`np::memory`)
+
+- `pool_stats() -> PoolStats` reports `cached_bytes`, `limit_bytes`, `cached_buffers`, `hits`, and `misses`.
+- `clear_pool()` drops all cached buffers to the system allocator; whether released pages immediately leave the process working set depends on the OS allocator.
+- `set_pool_limit(bytes)` sets the hard cache cap directly; zero disables it, and lowering it below current use clears the cache. The initial cap is 25% of the default 2 GiB memory budget (512 MiB). `RUSTNUM_POOL_BYTES` overrides the cap in bytes, read once on first use.
+- The private cache uses thread-safe `(TypeId, exact capacity)` buckets for buffers of at least 1 MiB. A buffer exceeding remaining capacity is dropped immediately. Cached payload capacities count against the cap; small bookkeeping allocations do not.
+- Final unique array owners return buffers to the cache. Views and clones never release live shared storage. An iterator can outlive its array; if it is the final Arc owner, that storage goes directly to the allocator when the iterator ends.
+- Creation, element-wise output, and copying kernels obtain cached initialized buffers. Kernels overwrite every output before it is observable; no uninitialized reads or unsafe pool code are used. `from_vec` adopts the supplied Vec directly, so producers outside these kernels (including the existing GEMM implementation) do not acquire pooled buffers.

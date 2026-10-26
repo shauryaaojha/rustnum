@@ -129,6 +129,20 @@ fn array_benches(c: &mut Criterion) {
         b.iter(|| black_box(matrix.t().to_contiguous()))
     });
     c.bench_function("exp (1e6 f64)", |b| b.iter(|| black_box(million.exp())));
+    c.bench_function("into_tanh (1e6 f64)", |b| {
+        b.iter_batched(
+            || million.copy(),
+            |a| black_box(a.into_tanh()),
+            criterion::BatchSize::LargeInput,
+        )
+    });
+    let heavy = np::full([1024, 1024], 0.01f64);
+    c.bench_function("heavy step (1024)", |b| {
+        b.iter(|| black_box((heavy.matmul(&heavy) / 32.).into_tanh()))
+    });
+    c.bench_function("alloc-free loop (4096^2 f64)", |b| {
+        b.iter(|| black_box(np::full([4096, 4096], 1f64)))
+    });
     c.bench_function("sort (1e6 f64)", |b| b.iter(|| black_box(million.sort())));
 
     let mut inv_values = array_data(200 * 200);

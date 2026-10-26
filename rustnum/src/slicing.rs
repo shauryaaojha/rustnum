@@ -234,6 +234,7 @@ impl<T: Element> Array<T> {
         }
         Self {
             data: self.data.clone(),
+            recycle: self.recycle,
             shape,
             strides,
             offset: offset as usize,
@@ -249,7 +250,7 @@ impl<T: Element> Array<T> {
     pub fn slice_assign(&mut self, args: &[SliceArg], values: impl IntoArray<T>) {
         let values = values.into_array();
         // Validate before detaching; snapshot the RHS for overlapping assignments.
-        let shape = self.slice(args).shape;
+        let shape = self.slice(args).shape.clone();
         let values = values.broadcast_to(&shape).to_vec();
         self.prepare_write();
         let view = self.slice(args);

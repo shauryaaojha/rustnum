@@ -544,3 +544,187 @@ pub fn bartlett(m: usize) -> Array<f64> {
 pub fn kaiser(m: usize, beta: f64) -> Array<f64> {
     Array::from(w::kaiser(m, beta))
 }
+
+impl<F: Float> Array<F> {
+    /// Applies np.sinc with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.sinc_inplace();
+    /// ```
+    pub fn sinc_inplace(&mut self) {
+        self.mapv_inplace_parallel(k::sinc::<F>);
+    }
+    /// Applies np.sinc with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_sinc();
+    /// ```
+    pub fn into_sinc(mut self) -> Self {
+        self.sinc_inplace();
+        self
+    }
+    /// Applies np.i0 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.i0_inplace();
+    /// ```
+    pub fn i0_inplace(&mut self) {
+        self.mapv_inplace_parallel(k::i0::<F>);
+    }
+    /// Applies np.i0 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_i0();
+    /// ```
+    pub fn into_i0(mut self) -> Self {
+        self.i0_inplace();
+        self
+    }
+    /// Applies np.deg2rad with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.deg2rad_inplace();
+    /// ```
+    pub fn deg2rad_inplace(&mut self) {
+        self.mapv_inplace_parallel(k::deg2rad::<F>);
+    }
+    /// Applies np.deg2rad with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_deg2rad();
+    /// ```
+    pub fn into_deg2rad(mut self) -> Self {
+        self.deg2rad_inplace();
+        self
+    }
+    /// Applies np.rad2deg with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.rad2deg_inplace();
+    /// ```
+    pub fn rad2deg_inplace(&mut self) {
+        self.mapv_inplace_parallel(k::rad2deg::<F>);
+    }
+    /// Applies np.rad2deg with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_rad2deg();
+    /// ```
+    pub fn into_rad2deg(mut self) -> Self {
+        self.rad2deg_inplace();
+        self
+    }
+    /// Applies np.rint with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.rint_inplace();
+    /// ```
+    pub fn rint_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::round);
+    }
+    /// Applies np.rint with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_rint();
+    /// ```
+    pub fn into_rint(mut self) -> Self {
+        self.rint_inplace();
+        self
+    }
+    /// Applies np.fix with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.fix_inplace();
+    /// ```
+    pub fn fix_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::trunc);
+    }
+    /// Applies np.fix with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_fix();
+    /// ```
+    pub fn into_fix(mut self) -> Self {
+        self.fix_inplace();
+        self
+    }
+    /// Applies np.fabs with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.fabs_inplace();
+    /// ```
+    pub fn fabs_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::abs);
+    }
+    /// Applies np.fabs with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_fabs();
+    /// ```
+    pub fn into_fabs(mut self) -> Self {
+        self.fabs_inplace();
+        self
+    }
+    /// Applies np.positive with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.positive_inplace();
+    /// ```
+    pub fn positive_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| x);
+    }
+    /// Applies np.positive with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_positive();
+    /// ```
+    pub fn into_positive(mut self) -> Self {
+        self.positive_inplace();
+        self
+    }
+    /// Applies np.negative with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.negative_inplace();
+    /// ```
+    pub fn negative_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| -x);
+    }
+    /// Applies np.negative with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_negative();
+    /// ```
+    pub fn into_negative(mut self) -> Self {
+        self.negative_inplace();
+        self
+    }
+    /// Applies np.spacing with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.spacing_inplace();
+    /// ```
+    pub fn spacing_inplace(&mut self) {
+        self.mapv_inplace_parallel(k::spacing::<F>);
+    }
+    /// Applies np.spacing with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_spacing();
+    /// ```
+    pub fn into_spacing(mut self) -> Self {
+        self.spacing_inplace();
+        self
+    }
+    /// Applies np.nan_to_num with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.nan_to_num_inplace();
+    /// ```
+    pub fn nan_to_num_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| k::nan_to_num(x, F::ZERO, None, None));
+    }
+    /// Applies np.nan_to_num with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64]; a.into_nan_to_num();
+    /// ```
+    pub fn into_nan_to_num(mut self) -> Self {
+        self.nan_to_num_inplace();
+        self
+    }
+    /// Replaces non-finite values in place, like np.nan_to_num(a, copy=False).
+    /// ```
+    /// let mut a=rustnum::array![f64::NAN]; a.nan_to_num_with_inplace(2.,None,None);
+    /// assert_eq!(a.item(),2.);
+    /// ```
+    pub fn nan_to_num_with_inplace(&mut self, nan: F, posinf: Option<F>, neginf: Option<F>) {
+        self.mapv_inplace_parallel(|x| k::nan_to_num(x, nan, posinf, neginf));
+    }
+    /// Consumes and replaces non-finite values, like np.nan_to_num(a, copy=False).
+    /// ```
+    /// assert_eq!(rustnum::array![f64::NAN].into_nan_to_num_with(2.,None,None).item(),2.);
+    /// ```
+    pub fn into_nan_to_num_with(mut self, nan: F, posinf: Option<F>, neginf: Option<F>) -> Self {
+        self.nan_to_num_with_inplace(nan, posinf, neginf);
+        self
+    }
+}

@@ -1,5 +1,3 @@
-#[cfg(feature = "rayon")]
-pub(crate) const PAR_THRESHOLD: usize = 1 << 15;
 pub(crate) fn size(shape: &[usize]) -> usize {
     if shape.contains(&0) {
         return 0;
@@ -33,19 +31,70 @@ pub(crate) fn contiguous(shape: &[usize], st: &[isize]) -> bool {
     }
     true
 }
+// Common ranks stay on the stack; arbitrary rank remains supported.
+struct Axes<T: Copy + Default> {
+    inline: [T; 8],
+    spill: Vec<T>,
+    len: usize,
+}
+impl<T: Copy + Default> Axes<T> {
+    fn new(values: &[T]) -> Self {
+        let mut out = Self {
+            inline: [T::default(); 8],
+            spill: Vec::new(),
+            len: values.len(),
+        };
+        if values.len() <= 8 {
+            out.inline[..values.len()].copy_from_slice(values);
+        } else {
+            out.spill = values.to_vec();
+        }
+        out
+    }
+    fn zeros(len: usize) -> Self {
+        Self {
+            inline: [T::default(); 8],
+            spill: if len > 8 {
+                vec![T::default(); len]
+            } else {
+                Vec::new()
+            },
+            len,
+        }
+    }
+}
+impl<T: Copy + Default> std::ops::Deref for Axes<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        if self.len <= 8 {
+            &self.inline[..self.len]
+        } else {
+            &self.spill
+        }
+    }
+}
+impl<T: Copy + Default> std::ops::DerefMut for Axes<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.len <= 8 {
+            &mut self.inline[..self.len]
+        } else {
+            &mut self.spill
+        }
+    }
+}
 pub(crate) struct Offsets {
-    shape: Vec<usize>,
-    strides: Vec<isize>,
-    coord: Vec<usize>,
+    shape: Axes<usize>,
+    strides: Axes<isize>,
+    coord: Axes<usize>,
     offset: isize,
     left: usize,
 }
 impl Offsets {
     pub(crate) fn new(shape: &[usize], strides: &[isize], offset: usize) -> Self {
         Self {
-            shape: shape.to_vec(),
-            strides: strides.to_vec(),
-            coord: vec![0; shape.len()],
+            shape: Axes::new(shape),
+            strides: Axes::new(strides),
+            coord: Axes::zeros(shape.len()),
             offset: offset as isize,
             left: size(shape),
         }

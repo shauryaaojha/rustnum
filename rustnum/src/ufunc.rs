@@ -443,7 +443,7 @@ pub fn where_<T: crate::Element>(
     let x = x.broadcast_to(&shape);
     let y = y.broadcast_to(&shape);
     #[cfg(feature = "rayon")]
-    if parallel && crate::layout::size(&shape) >= crate::layout::PAR_THRESHOLD {
+    if parallel && crate::layout::size(&shape) >= crate::kernels_mem::UNARY {
         use rayon::prelude::*;
         return Array::from_vec(
             (0..crate::layout::size(&shape))
@@ -468,6 +468,583 @@ pub fn where_<T: crate::Element>(
         &shape,
     )
 }
+
+// SIMD integration: dispatch shared contiguous ufunc kernels here when available.
+impl<F: Float> Array<F> {
+    /// Applies np.exp with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.exp_inplace();
+    /// ```
+    pub fn exp_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::exp)
+    }
+    /// Applies np.exp with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_exp();
+    /// ```
+    pub fn into_exp(mut self) -> Self {
+        self.exp_inplace();
+        self
+    }
+    /// Applies np.exp2 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.exp2_inplace();
+    /// ```
+    pub fn exp2_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::exp2)
+    }
+    /// Applies np.exp2 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_exp2();
+    /// ```
+    pub fn into_exp2(mut self) -> Self {
+        self.exp2_inplace();
+        self
+    }
+    /// Applies np.expm1 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.expm1_inplace();
+    /// ```
+    pub fn expm1_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::exp_m1)
+    }
+    /// Applies np.expm1 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_expm1();
+    /// ```
+    pub fn into_expm1(mut self) -> Self {
+        self.expm1_inplace();
+        self
+    }
+    /// Applies np.log with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.log_inplace();
+    /// ```
+    pub fn log_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::ln)
+    }
+    /// Applies np.log with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_log();
+    /// ```
+    pub fn into_log(mut self) -> Self {
+        self.log_inplace();
+        self
+    }
+    /// Applies np.log2 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.log2_inplace();
+    /// ```
+    pub fn log2_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::log2)
+    }
+    /// Applies np.log2 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_log2();
+    /// ```
+    pub fn into_log2(mut self) -> Self {
+        self.log2_inplace();
+        self
+    }
+    /// Applies np.log10 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.log10_inplace();
+    /// ```
+    pub fn log10_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::log10)
+    }
+    /// Applies np.log10 with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_log10();
+    /// ```
+    pub fn into_log10(mut self) -> Self {
+        self.log10_inplace();
+        self
+    }
+    /// Applies np.log1p with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.log1p_inplace();
+    /// ```
+    pub fn log1p_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::ln_1p)
+    }
+    /// Applies np.log1p with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_log1p();
+    /// ```
+    pub fn into_log1p(mut self) -> Self {
+        self.log1p_inplace();
+        self
+    }
+    /// Applies np.sqrt with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.sqrt_inplace();
+    /// ```
+    pub fn sqrt_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::sqrt)
+    }
+    /// Applies np.sqrt with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_sqrt();
+    /// ```
+    pub fn into_sqrt(mut self) -> Self {
+        self.sqrt_inplace();
+        self
+    }
+    /// Applies np.cbrt with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.cbrt_inplace();
+    /// ```
+    pub fn cbrt_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::cbrt)
+    }
+    /// Applies np.cbrt with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_cbrt();
+    /// ```
+    pub fn into_cbrt(mut self) -> Self {
+        self.cbrt_inplace();
+        self
+    }
+    /// Applies np.sin with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.sin_inplace();
+    /// ```
+    pub fn sin_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::sin)
+    }
+    /// Applies np.sin with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_sin();
+    /// ```
+    pub fn into_sin(mut self) -> Self {
+        self.sin_inplace();
+        self
+    }
+    /// Applies np.cos with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.cos_inplace();
+    /// ```
+    pub fn cos_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::cos)
+    }
+    /// Applies np.cos with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_cos();
+    /// ```
+    pub fn into_cos(mut self) -> Self {
+        self.cos_inplace();
+        self
+    }
+    /// Applies np.tan with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.tan_inplace();
+    /// ```
+    pub fn tan_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::tan)
+    }
+    /// Applies np.tan with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_tan();
+    /// ```
+    pub fn into_tan(mut self) -> Self {
+        self.tan_inplace();
+        self
+    }
+    /// Applies np.arcsin with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.arcsin_inplace();
+    /// ```
+    pub fn arcsin_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::asin)
+    }
+    /// Applies np.arcsin with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_arcsin();
+    /// ```
+    pub fn into_arcsin(mut self) -> Self {
+        self.arcsin_inplace();
+        self
+    }
+    /// Applies np.arccos with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.arccos_inplace();
+    /// ```
+    pub fn arccos_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::acos)
+    }
+    /// Applies np.arccos with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_arccos();
+    /// ```
+    pub fn into_arccos(mut self) -> Self {
+        self.arccos_inplace();
+        self
+    }
+    /// Applies np.arctan with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.arctan_inplace();
+    /// ```
+    pub fn arctan_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::atan)
+    }
+    /// Applies np.arctan with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_arctan();
+    /// ```
+    pub fn into_arctan(mut self) -> Self {
+        self.arctan_inplace();
+        self
+    }
+    /// Applies np.sinh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.sinh_inplace();
+    /// ```
+    pub fn sinh_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::sinh)
+    }
+    /// Applies np.sinh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_sinh();
+    /// ```
+    pub fn into_sinh(mut self) -> Self {
+        self.sinh_inplace();
+        self
+    }
+    /// Applies np.cosh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.cosh_inplace();
+    /// ```
+    pub fn cosh_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::cosh)
+    }
+    /// Applies np.cosh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_cosh();
+    /// ```
+    pub fn into_cosh(mut self) -> Self {
+        self.cosh_inplace();
+        self
+    }
+    /// Applies np.tanh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.tanh_inplace();
+    /// ```
+    pub fn tanh_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::tanh)
+    }
+    /// Applies np.tanh with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_tanh();
+    /// ```
+    pub fn into_tanh(mut self) -> Self {
+        self.tanh_inplace();
+        self
+    }
+    /// Applies np.floor with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.floor_inplace();
+    /// ```
+    pub fn floor_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::floor)
+    }
+    /// Applies np.floor with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_floor();
+    /// ```
+    pub fn into_floor(mut self) -> Self {
+        self.floor_inplace();
+        self
+    }
+    /// Applies np.ceil with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.ceil_inplace();
+    /// ```
+    pub fn ceil_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::ceil)
+    }
+    /// Applies np.ceil with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_ceil();
+    /// ```
+    pub fn into_ceil(mut self) -> Self {
+        self.ceil_inplace();
+        self
+    }
+    /// Applies np.round with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.round_inplace();
+    /// ```
+    pub fn round_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::round)
+    }
+    /// Applies np.round with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_round();
+    /// ```
+    pub fn into_round(mut self) -> Self {
+        self.round_inplace();
+        self
+    }
+    /// Applies np.round with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.round_decimals_inplace(1);
+    /// ```
+    pub fn round_decimals_inplace(&mut self, d: i32) {
+        let scale = F::from_usize(10).powf(F::from_f64((d as f64).abs()));
+        self.mapv_inplace_parallel(|x| {
+            if d >= 0 {
+                (x * scale).round() / scale
+            } else {
+                (x / scale).round() * scale
+            }
+        })
+    }
+    /// Applies np.round with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_round_decimals(1);
+    /// ```
+    pub fn into_round_decimals(mut self, d: i32) -> Self {
+        self.round_decimals_inplace(d);
+        self
+    }
+    /// Applies np.trunc with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.trunc_inplace();
+    /// ```
+    pub fn trunc_inplace(&mut self) {
+        self.mapv_inplace_parallel(F::trunc)
+    }
+    /// Applies np.trunc with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_trunc();
+    /// ```
+    pub fn into_trunc(mut self) -> Self {
+        self.trunc_inplace();
+        self
+    }
+    /// Applies np.reciprocal with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.reciprocal_inplace();
+    /// ```
+    pub fn reciprocal_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| F::ONE / x)
+    }
+    /// Applies np.reciprocal with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_reciprocal();
+    /// ```
+    pub fn into_reciprocal(mut self) -> Self {
+        self.reciprocal_inplace();
+        self
+    }
+    /// Applies np.power with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.powf_inplace(2.0);
+    /// ```
+    pub fn powf_inplace(&mut self, p: F) {
+        self.mapv_inplace_parallel(|x| x.powf(p))
+    }
+    /// Applies np.power with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_powf(2.0);
+    /// ```
+    pub fn into_powf(mut self, p: F) -> Self {
+        self.powf_inplace(p);
+        self
+    }
+    /// Applies np.power with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.powi_inplace(2);
+    /// ```
+    pub fn powi_inplace(&mut self, p: i32) {
+        self.mapv_inplace_parallel(|x| x.powi(p))
+    }
+    /// Applies np.power with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_powi(2);
+    /// ```
+    pub fn into_powi(mut self, p: i32) -> Self {
+        self.powi_inplace(p);
+        self
+    }
+    /// Applies np.exp with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.sigmoid_inplace();
+    /// ```
+    pub fn sigmoid_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| {
+            if x >= F::ZERO {
+                F::ONE / (F::ONE + (-x).exp())
+            } else {
+                let e = x.exp();
+                e / (F::ONE + e)
+            }
+        })
+    }
+    /// Applies np.exp with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_sigmoid();
+    /// ```
+    pub fn into_sigmoid(mut self) -> Self {
+        self.sigmoid_inplace();
+        self
+    }
+    /// Applies np.maximum with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.relu_inplace();
+    /// ```
+    pub fn relu_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| x.max(F::ZERO))
+    }
+    /// Applies np.maximum with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_relu();
+    /// ```
+    pub fn into_relu(mut self) -> Self {
+        self.relu_inplace();
+        self
+    }
+}
+impl<T: Num> Array<T> {
+    /// Applies np.abs with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.abs_inplace();
+    /// ```
+    pub fn abs_inplace(&mut self) {
+        self.mapv_inplace_parallel(Num::abs)
+    }
+    /// Applies np.abs with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_abs();
+    /// ```
+    pub fn into_abs(mut self) -> Self {
+        self.abs_inplace();
+        self
+    }
+    /// Applies np.square with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.square_inplace();
+    /// ```
+    pub fn square_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| crate::element::mul(x, x))
+    }
+    /// Applies np.square with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_square();
+    /// ```
+    pub fn into_square(mut self) -> Self {
+        self.square_inplace();
+        self
+    }
+    /// Applies np.clip with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.clip_inplace(0.0, 1.0);
+    /// ```
+    pub fn clip_inplace(&mut self, lo: T, hi: T) {
+        self.mapv_inplace_parallel(|x| {
+            crate::element::minimum_value(crate::element::maximum_value(x, lo), hi)
+        })
+    }
+    /// Applies np.clip with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_clip(0.0, 1.0);
+    /// ```
+    pub fn into_clip(mut self, lo: T, hi: T) -> Self {
+        self.clip_inplace(lo, hi);
+        self
+    }
+    /// Applies np.sign with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.sign_inplace();
+    /// ```
+    pub fn sign_inplace(&mut self) {
+        self.mapv_inplace_parallel(|x| {
+            if x > T::ZERO {
+                T::ONE
+            } else if x < T::ZERO {
+                crate::element::sub(T::ZERO, T::ONE)
+            } else if crate::element::isnan(x) {
+                x
+            } else {
+                T::ZERO
+            }
+        })
+    }
+    /// Applies np.sign with out=a, preserving copy-on-write semantics.
+    /// ```
+    /// let mut a=rustnum::array![0.5f64];
+    /// a.into_sign();
+    /// ```
+    pub fn into_sign(mut self) -> Self {
+        self.sign_inplace();
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
