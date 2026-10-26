@@ -13,6 +13,8 @@
 
 mod api;
 pub(crate) mod kernels;
+#[path = "gemm/mod.rs"]
+mod packed_gemm;
 
 pub use api::*;
 pub use kernels::NormOrd;

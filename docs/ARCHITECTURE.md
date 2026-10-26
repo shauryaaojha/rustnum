@@ -152,8 +152,9 @@ Rules for contributors:
 Dispatch for one 2-d product:
 
 1. Check the inner dimensions agree, else panic with a NumPy-style message.
-2. If the element type is `f32` or `f64`, call `matrixmultiply::sgemm` / `dgemm`. These take a row stride and a
-   column stride for each operand, so transposed and flipped views are passed as-is with no copy.
+2. If the element type is `f32` or `f64`, call rustnum's packed GEMM (`linalg/gemm/`, BLIS-style: cache blocking, AVX2+FMA micro-kernels, rayon over
+   blocks). It takes a signed row stride and column stride for each operand and packs through them, so
+   transposed and flipped views are passed as-is with no copy.
 3. Otherwise (`i32`, `i64`, `u8`, `usize`) use a plain triple loop with a cache-friendly order (`i, k, j`).
 4. For batched input, broadcast the batch dimensions, then run steps 1 to 3 once per batch item.
 

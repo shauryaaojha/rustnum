@@ -42,6 +42,10 @@ mod element {
 }
 
 #[allow(dead_code)]
+#[path = "../src/linalg/gemm/mod.rs"]
+mod packed_gemm;
+
+#[allow(dead_code)]
 #[path = "../src/linalg/kernels.rs"]
 mod kernels;
 
@@ -169,7 +173,7 @@ fn array_benches(c: &mut Criterion) {
     c.bench_function("svd (100x100)", |b| {
         b.iter(|| black_box(np::linalg::svd(&svd_input)))
     });
-    for n in [256, 512, 1024] {
+    for n in [256, 512, 1024, 2048, 4096] {
         let left = np::Array::from_vec(array_data(n * n), &[n, n]);
         let right = left.t();
         c.bench_function(&format!("matmul ({n}x{n} f64)"), |b| {
@@ -181,6 +185,23 @@ fn array_benches(c: &mut Criterion) {
             });
         }
     }
+    for n in [1024, 2048, 4096] {
+        let left = np::Array::from_vec(array_data(n * n), &[n, n]).astype::<f32>();
+        c.bench_function(&format!("matmul ({n}x{n} f32)"), |b| {
+            b.iter(|| black_box(left.matmul(&left)))
+        });
+    }
+    let left = np::Array::from_vec(array_data(2048 * 2048), &[2048, 2048]);
+    c.bench_function("matmul_map tanh (2048x2048 f64)", |b| {
+        b.iter(|| {
+            black_box(np::linalg::matmul_map(
+                &left,
+                &left,
+                1.0 / 2048.0,
+                f64::tanh,
+            ))
+        })
+    });
 }
 
 criterion_group!(core, gemm_benches, decomposition_benches, array_benches);

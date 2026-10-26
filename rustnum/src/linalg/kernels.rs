@@ -157,7 +157,12 @@ fn assert_matrix_fits<T>(
 /// A broadcast (zero) stride or a layout whose strides overlap would alias.  The common
 /// layouts (row- or column-major, possibly with padding) are accepted in O(1); only
 /// unusual interleaved strides pay for an O(m n log(m n)) sort.
-fn output_is_non_aliasing(rows: usize, cols: usize, row_stride: isize, col_stride: isize) -> bool {
+pub(super) fn output_is_non_aliasing(
+    rows: usize,
+    cols: usize,
+    row_stride: isize,
+    col_stride: isize,
+) -> bool {
     if rows <= 1 && cols <= 1 {
         return true;
     }
@@ -224,6 +229,7 @@ where
 
 /// Stride-aware f32 GEMM: `C = alpha * A * B + beta * C`.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn gemm_f32(
     m: usize,
     k: usize,
@@ -240,184 +246,33 @@ pub(crate) fn gemm_f32(
     c_row_stride: isize,
     c_col_stride: isize,
 ) {
-    assert_matrix_fits(a, m, k, a_row_stride, a_col_stride);
-    assert_matrix_fits(b, k, n, b_row_stride, b_col_stride);
-    assert_matrix_fits(c, m, n, c_row_stride, c_col_stride);
-    assert!(
-        output_is_non_aliasing(m, n, c_row_stride, c_col_stride),
-        "GEMM output strides must not alias"
+    use super::packed_gemm::{Matrix, run};
+    run(
+        (m, k, n),
+        alpha,
+        Matrix {
+            data: a,
+            offset: 0,
+            row: a_row_stride,
+            col: a_col_stride,
+        },
+        Matrix {
+            data: b,
+            offset: 0,
+            row: b_row_stride,
+            col: b_col_stride,
+        },
+        beta,
+        c,
+        0,
+        (c_row_stride, c_col_stride),
+        None,
     );
-    if m == 0 || n == 0 {
-        return;
-    }
-    // SAFETY: validation above proves every logical A/B/C element lies in its
-    // corresponding slice. C uses caller-provided non-aliasing Array strides;
-    // the Array adapter only supplies writable, non-broadcast output layouts.
-    unsafe {
-        tiled_gemm(
-            matrixmultiply::sgemm,
-            m,
-            k,
-            n,
-            alpha,
-            a.as_ptr(),
-            a_row_stride,
-            a_col_stride,
-            b.as_ptr(),
-            b_row_stride,
-            b_col_stride,
-            beta,
-            c.as_mut_ptr(),
-            c_row_stride,
-            c_col_stride,
-        );
-    }
-}
-
-/// A raw matrixmultiply entry point (`sgemm` or `dgemm`).
-type RawGemm<T> = unsafe fn(
-    usize,
-    usize,
-    usize,
-    T,
-    *const T,
-    isize,
-    isize,
-    *const T,
-    isize,
-    isize,
-    T,
-    *mut T,
-    isize,
-    isize,
-);
-
-/// Multiply-adds (m·n·k) below which a GEMM runs as one call.
-#[cfg(feature = "rayon")]
-const PARALLEL_GEMM_MIN_WORK: usize = 1 << 21;
-
-/// Side of the square output tiles handed to rayon. Each tile is one
-/// single-threaded matrixmultiply call over the full K dimension.
-#[cfg(feature = "rayon")]
-const GEMM_TILE: usize = 256;
-
-/// A pointer shared by the tasks of one tiled GEMM.
-#[cfg(feature = "rayon")]
-#[derive(Clone, Copy)]
-struct SharedPtr<T>(*mut T);
-
-// SAFETY: tasks only read A and B, and each task writes a disjoint tile of C
-// (see `tiled_gemm`), so sharing these pointers across threads cannot race.
-#[cfg(feature = "rayon")]
-unsafe impl<T> Send for SharedPtr<T> {}
-#[cfg(feature = "rayon")]
-unsafe impl<T> Sync for SharedPtr<T> {}
-
-#[cfg(feature = "rayon")]
-impl<T> SharedPtr<T> {
-    // A method (not field access) so closures capture the Send wrapper itself.
-    fn get(self) -> *mut T {
-        self.0
-    }
-}
-
-/// Runs `raw` over the whole product, splitting large outputs into tiles that
-/// rayon spreads over every core.
-///
-/// matrixmultiply's own threading stops at 4 threads. Independent output tiles
-/// let work stealing use all cores and hand more tiles to fast cores on hybrid
-/// CPUs.
-///
-/// # Safety
-/// The pointers and strides must describe a valid A (m×k), B (k×n) and a
-/// non-aliasing C (m×n), as checked by `gemm_f32` / `gemm_f64`.
-#[allow(clippy::too_many_arguments)]
-unsafe fn tiled_gemm<T: Copy>(
-    raw: RawGemm<T>,
-    m: usize,
-    k: usize,
-    n: usize,
-    alpha: T,
-    a: *const T,
-    rsa: isize,
-    csa: isize,
-    b: *const T,
-    rsb: isize,
-    csb: isize,
-    beta: T,
-    c: *mut T,
-    rsc: isize,
-    csc: isize,
-) {
-    #[cfg(feature = "rayon")]
-    if m.saturating_mul(n).saturating_mul(k.max(1)) >= PARALLEL_GEMM_MIN_WORK
-        && rayon::current_num_threads() > 1
-        && (m > GEMM_TILE || n > GEMM_TILE)
-    {
-        use rayon::prelude::*;
-        let tiles: Vec<(usize, usize)> = (0..m)
-            .step_by(GEMM_TILE)
-            .flat_map(|i| (0..n).step_by(GEMM_TILE).map(move |j| (i, j)))
-            .collect();
-        let (a, b, c) = (
-            SharedPtr(a.cast_mut()),
-            SharedPtr(b.cast_mut()),
-            SharedPtr(c),
-        );
-        let (alpha, beta) = (SendCopy(alpha), SendCopy(beta));
-        tiles.into_par_iter().for_each(move |(i0, j0)| {
-            let rows = GEMM_TILE.min(m - i0);
-            let cols = GEMM_TILE.min(n - j0);
-            // SAFETY: (i0, j0) starts a tile inside C, the tiles partition C so
-            // no two tasks write the same element, and A rows / B columns are
-            // only read. wrapping_offset keeps the address math defined even
-            // when k == 0 and A or B is empty (matrixmultiply then reads none).
-            unsafe {
-                raw(
-                    rows,
-                    k,
-                    cols,
-                    alpha.get(),
-                    a.get().wrapping_offset(i0 as isize * rsa),
-                    rsa,
-                    csa,
-                    b.get().wrapping_offset(j0 as isize * csb),
-                    rsb,
-                    csb,
-                    beta.get(),
-                    c.get()
-                        .wrapping_offset(i0 as isize * rsc + j0 as isize * csc),
-                    rsc,
-                    csc,
-                );
-            }
-        });
-        return;
-    }
-    // SAFETY: forwarded from the caller's contract.
-    unsafe { raw(m, k, n, alpha, a, rsa, csa, b, rsb, csb, beta, c, rsc, csc) }
-}
-
-/// A scalar copied into every tile task.
-#[cfg(feature = "rayon")]
-#[derive(Clone, Copy)]
-struct SendCopy<T>(T);
-
-// SAFETY: only instantiated with f32 and f64, which are plain values.
-#[cfg(feature = "rayon")]
-unsafe impl<T> Send for SendCopy<T> {}
-#[cfg(feature = "rayon")]
-unsafe impl<T> Sync for SendCopy<T> {}
-
-#[cfg(feature = "rayon")]
-impl<T: Copy> SendCopy<T> {
-    fn get(self) -> T {
-        self.0
-    }
 }
 
 /// Stride-aware f64 GEMM: `C = alpha * A * B + beta * C`.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn gemm_f64(
     m: usize,
     k: usize,
@@ -434,37 +289,28 @@ pub(crate) fn gemm_f64(
     c_row_stride: isize,
     c_col_stride: isize,
 ) {
-    assert_matrix_fits(a, m, k, a_row_stride, a_col_stride);
-    assert_matrix_fits(b, k, n, b_row_stride, b_col_stride);
-    assert_matrix_fits(c, m, n, c_row_stride, c_col_stride);
-    assert!(
-        output_is_non_aliasing(m, n, c_row_stride, c_col_stride),
-        "GEMM output strides must not alias"
+    use super::packed_gemm::{Matrix, run};
+    run(
+        (m, k, n),
+        alpha,
+        Matrix {
+            data: a,
+            offset: 0,
+            row: a_row_stride,
+            col: a_col_stride,
+        },
+        Matrix {
+            data: b,
+            offset: 0,
+            row: b_row_stride,
+            col: b_col_stride,
+        },
+        beta,
+        c,
+        0,
+        (c_row_stride, c_col_stride),
+        None,
     );
-    if m == 0 || n == 0 {
-        return;
-    }
-    // SAFETY: see `gemm_f32`; matrixmultiply supports arbitrary valid input
-    // strides and the destination supplied by the adapter never aliases itself.
-    unsafe {
-        tiled_gemm(
-            matrixmultiply::dgemm,
-            m,
-            k,
-            n,
-            alpha,
-            a.as_ptr(),
-            a_row_stride,
-            a_col_stride,
-            b.as_ptr(),
-            b_row_stride,
-            b_col_stride,
-            beta,
-            c.as_mut_ptr(),
-            c_row_stride,
-            c_col_stride,
-        );
-    }
 }
 
 /// LU factorisation with partial pivoting of a square row-major matrix.

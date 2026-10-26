@@ -123,7 +123,10 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 - `LinalgFloat: Float` is the sealed bound for `f32` and `f64` decomposition kernels.
 - `NormOrd` variants are `Fro`, `Two`, `One`, `Inf`, `NegOne`, `NegTwo`, `NegInf`, `Zero`, and `Nuc`; `Nuc` is matrix-only and `Zero` is vector-only.
-- `Array<N: Num>::matmul(&b) -> Array<N>` implements vector promotion and broadcast batches; f32/f64 use `matrixmultiply`, and generic integer products wrap.
+- `Array<N: Num>::matmul(&b) -> Array<N>` implements vector promotion and broadcast batches; f32/f64 use the packed AVX2/FMA GEMM with a portable fallback, and generic integer products wrap.
+- `Array<N: Num>::matmul_into(&b, &mut out)` reuses a contiguous output with the exact product shape (shared storage detaches on write); packing uses temporary workspace.
+- `linalg::gemm<F: LinalgFloat>(alpha, &a, &b, beta, &c) -> Array<F>` computes `alpha * a @ b + beta * c` on 2-d arrays, like SciPy BLAS `dgemm`/`sgemm`.
+- `linalg::matmul_map<F: LinalgFloat>(&a, &b, alpha, f: fn(F) -> F) -> Array<F>` fuses `f(alpha * a @ b)` in the GEMM epilogue, including vectors and broadcast batches.
 - `Array<N: Num>::dot(&b) -> Array<N>` supports operands of at most two dimensions and scalar multiplication.
 - `Array<N: Num>::trace() -> N` requires a 2-d array and wraps integer accumulation.
 - `outer<T: Num>(a: &Array<T>, b: &Array<T>) -> Array<T>` flattens both inputs.
@@ -218,7 +221,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `Display` uses NumPy-style array layout and `Debug` uses `array(..., dtype=...)`; large arrays are summarized.
 - Contiguous element-wise operations and reductions use slice fast paths; the default `rayon` feature parallelizes sufficiently large inputs.
 - Results with and without `rayon` are identical for integer operations and agree within floating rounding for floating reductions.
-- f32/f64 matrix multiplication uses `matrixmultiply`; all other numerical kernels are pure Rust and dependencies stay minimal.
+- f32/f64 matrix multiplication uses rustnum's packed GEMM (AVX2/FMA or scalar fallback); numerical kernels are pure Rust, with optional rayon for parallelism.
 
 ## 19. Deliberate v0.1 limits
 

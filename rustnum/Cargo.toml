@@ -11,11 +11,10 @@ repository.workspace = true
 
 [features]
 default = ["rayon"]
-# matrixmultiply's own threading is capped at 4 threads; rustnum tiles large GEMMs over rayon instead.
+# Packed GEMM distributes cache blocks over the shared rayon pool.
 rayon = ["dep:rayon"]
 
 [dependencies]
-matrixmultiply = "0.3"
 rayon = { version = "1.12", optional = true }
 
 [dev-dependencies]

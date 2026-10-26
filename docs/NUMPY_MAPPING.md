@@ -263,7 +263,7 @@ Matrix products, dot and trace are methods. Decompositions and solvers are free 
 
 | NumPy | rustnum | Notes |
 |---|---|---|
-| `a @ b`, `np.matmul(a, b)` | `a.matmul(&b)` | 1-d, 2-d and batched n-d. Batch dimensions broadcast. f32 and f64 use `matrixmultiply` |
+| `a @ b`, `np.matmul(a, b)` | `a.matmul(&b)` | 1-d, 2-d and batched n-d. Batch dimensions broadcast. f32 and f64 use rustnum's packed AVX2/FMA GEMM |
 | `np.dot(a, b)` | `a.dot(&b)` | NumPy rules for up to 2-d |
 | `np.trace(a)` | `a.trace()` | Trace along main diagonal |
 | `np.outer(a, b)` | `np::linalg::outer(&a, &b)` | Outer product of flattened arrays |
