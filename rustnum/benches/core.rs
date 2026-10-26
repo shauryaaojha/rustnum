@@ -45,6 +45,9 @@ mod element {
 #[path = "../src/linalg/kernels.rs"]
 mod kernels;
 
+#[path = "../src/simd_math.rs"]
+mod simd_math;
+
 fn data(size: usize) -> Vec<f64> {
     (0..size)
         .map(|i| ((i * 17 % 101) as f64 - 50.0) / 17.0)
@@ -129,7 +132,30 @@ fn array_benches(c: &mut Criterion) {
         b.iter(|| black_box(matrix.t().to_contiguous()))
     });
     c.bench_function("exp (1e6 f64)", |b| b.iter(|| black_box(million.exp())));
+
+    let raw_million = array_data(1_000_000);
+    let mut raw_out = vec![0.0f64; 1_000_000];
+    c.bench_function("exp (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("tanh (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tanh_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    let mut rng = np::random::Rng::seed(42);
+    c.bench_function("standard_normal (4096x4096)", |b| {
+        b.iter(|| black_box(rng.standard_normal(&[4096, 4096])))
+    });
+
     c.bench_function("sort (1e6 f64)", |b| b.iter(|| black_box(million.sort())));
+    c.bench_function("sort (1e7 f64)", |b| {
+        b.iter(|| black_box(ten_million.sort()))
+    });
 
     let mut inv_values = array_data(200 * 200);
     for i in 0..200 {

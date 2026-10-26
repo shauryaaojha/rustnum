@@ -24,6 +24,7 @@ def main() -> None:
     ten_million = rng.standard_normal(10_000_000)
     matrix = rng.standard_normal((1_000, 1_000))
     sort_input = rng.standard_normal(1_000_000)
+    sort_1e7_input = rng.standard_normal(10_000_000)
     inv_input = rng.standard_normal((200, 200)) + np.eye(200) * 250
     svd_input = rng.standard_normal((100, 100))
 
@@ -34,7 +35,11 @@ def main() -> None:
         ("mean_axis(0) [1000,1000]", "a.mean(axis=0)", {"a": matrix}),
         ("transpose().to_contiguous() [1000,1000]", "np.ascontiguousarray(a.T)", {"a": matrix, "np": np}),
         ("exp (1e6 f64)", "np.exp(a)", {"a": million, "np": np}),
+        ("exp (1e6 f64) simd kernel", "np.exp(a)", {"a": million, "np": np}),
+        ("tanh (1e6 f64) simd kernel", "np.tanh(a)", {"a": million, "np": np}),
+        ("standard_normal (4096x4096)", "rng.standard_normal((4096, 4096))", {"rng": rng}),
         ("sort (1e6 f64)", "np.sort(a)", {"a": sort_input, "np": np}),
+        ("sort (1e7 f64)", "np.sort(a)", {"a": sort_1e7_input, "np": np}),
         ("inv (200x200)", "np.linalg.inv(a)", {"a": inv_input, "np": np}),
         ("svd (100x100)", "np.linalg.svd(a, full_matrices=False)", {"a": svd_input, "np": np}),
     ]

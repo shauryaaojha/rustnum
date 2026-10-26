@@ -3,6 +3,10 @@
 //! All functions produce plain `Vec`s or operate on slices — no `Array`
 //! dependency. The public `Rng` wrapper in `api.rs` calls these and returns `Array`.
 
+#[path = "ziggurat_tables.rs"]
+mod ziggurat_tables;
+use ziggurat_tables::*;
+
 // ---------------------------------------------------------------------------
 // SplitMix64 — used only to seed xoshiro256**
 // ---------------------------------------------------------------------------
@@ -82,10 +86,40 @@ impl Xoshiro256StarStar {
         // Use the upper 53 bits for a uniform double in [0, 1)
         (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
     }
+
+    /// Jump function for xoshiro256**. Equivalent to 2^128 calls to next_u64();
+    /// generates 2^128 non-overlapping subsequences for parallel computations.
+    pub(crate) fn jump(&mut self) {
+        const JUMP: [u64; 4] = [
+            0x180ec6d33cfd0aba,
+            0xd5a61266f0c9392c,
+            0xa9582618e03fc9aa,
+            0x39abdc4529b1661c,
+        ];
+        let mut s0 = 0u64;
+        let mut s1 = 0u64;
+        let mut s2 = 0u64;
+        let mut s3 = 0u64;
+        for &jump in &JUMP {
+            for b in 0..64 {
+                if (jump & (1u64 << b)) != 0 {
+                    s0 ^= self.s[0];
+                    s1 ^= self.s[1];
+                    s2 ^= self.s[2];
+                    s3 ^= self.s[3];
+                }
+                self.next_u64();
+            }
+        }
+        self.s[0] = s0;
+        self.s[1] = s1;
+        self.s[2] = s2;
+        self.s[3] = s3;
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Distribution helpers
+// Distribution helpers (Ziggurat method matching NumPy)
 // ---------------------------------------------------------------------------
 
 /// Uniform f64 in [low, high).
@@ -113,46 +147,91 @@ pub(crate) fn bounded_u64(rng: &mut Xoshiro256StarStar, range: u64) -> u64 {
     (m >> 64) as u64
 }
 
-/// Box-Muller transform: generate a pair of independent standard normals.
-pub(crate) fn normal_pair(rng: &mut Xoshiro256StarStar) -> (f64, f64) {
+/// Standard normal f64 variate using the 256-strip Ziggurat algorithm matching NumPy.
+pub(crate) fn standard_normal(rng: &mut Xoshiro256StarStar) -> f64 {
     loop {
-        let u1 = rng.next_f64();
-        if u1 <= f64::MIN_POSITIVE {
-            continue; // avoid log(0)
+        let mut r = rng.next_u64();
+        let idx = (r & 0xff) as usize;
+        r >>= 8;
+        let sign = if (r & 1) == 0 { 1.0 } else { -1.0 };
+        let rabs = (r >> 1) & 0x000f_ffff_ffff_ffff;
+        let x = (rabs as f64) * WI_DOUBLE[idx] * sign;
+
+        if rabs < KI_DOUBLE[idx] {
+            return x; // 99.3% fast path
         }
-        let u2 = rng.next_f64();
-        let r = (-2.0 * u1.ln()).sqrt();
-        let theta = 2.0 * std::f64::consts::PI * u2;
-        return (r * theta.cos(), r * theta.sin());
+
+        if idx == 0 {
+            loop {
+                let xx = -ZIGGURAT_NOR_INV_R * (-rng.next_f64()).ln_1p();
+                let yy = -(-rng.next_f64()).ln_1p();
+                if yy + yy > xx * xx {
+                    let tail_sign = if ((rabs >> 8) & 1) != 0 { -1.0 } else { 1.0 };
+                    return tail_sign * (ZIGGURAT_NOR_R + xx);
+                }
+            }
+        } else {
+            let u = rng.next_f64();
+            if (FI_DOUBLE[idx - 1] - FI_DOUBLE[idx]) * u + FI_DOUBLE[idx] < (-0.5 * x * x).exp() {
+                return x;
+            }
+        }
     }
+}
+
+/// Standard exponential f64 variate using the 256-strip Ziggurat algorithm matching NumPy.
+pub(crate) fn standard_exponential(rng: &mut Xoshiro256StarStar) -> f64 {
+    loop {
+        let mut ri = rng.next_u64() >> 3;
+        let idx = (ri & 0xff) as usize;
+        ri >>= 8;
+        let x = (ri as f64) * WE_DOUBLE[idx];
+
+        if ri < KE_DOUBLE[idx] {
+            return x; // 98.9% fast path
+        }
+
+        if idx == 0 {
+            return ZIGGURAT_EXP_R - (-rng.next_f64()).ln_1p();
+        } else {
+            let u = rng.next_f64();
+            if (FE_DOUBLE[idx - 1] - FE_DOUBLE[idx]) * u + FE_DOUBLE[idx] < (-x).exp() {
+                return x;
+            }
+        }
+    }
+}
+
+/// Normal(mean, std) variate.
+pub(crate) fn normal(rng: &mut Xoshiro256StarStar, mean: f64, std: f64) -> f64 {
+    mean + std * standard_normal(rng)
+}
+
+/// Normal pair helper for compatibility.
+#[allow(dead_code)]
+pub(crate) fn normal_pair(rng: &mut Xoshiro256StarStar) -> (f64, f64) {
+    (standard_normal(rng), standard_normal(rng))
 }
 
 /// Exponential(scale) variate.
 pub(crate) fn exponential(rng: &mut Xoshiro256StarStar, scale: f64) -> f64 {
-    loop {
-        let u = rng.next_f64();
-        if u > f64::MIN_POSITIVE {
-            return -scale * u.ln();
-        }
-    }
+    scale * standard_exponential(rng)
 }
 
 /// Gamma(shape, scale) variate — Marsaglia & Tsang for shape >= 1,
 /// Ahrens-Dieter transformation for shape < 1.
 pub(crate) fn gamma(rng: &mut Xoshiro256StarStar, shape: f64, scale: f64) -> f64 {
     if shape < 1.0 {
-        // Use shape+1 and multiply by U^(1/shape)
         let g = gamma(rng, shape + 1.0, 1.0);
         let u = rng.next_f64();
         return scale * g * u.powf(1.0 / shape);
     }
 
-    // Marsaglia & Tsang's method for shape >= 1
     let d = shape - 1.0 / 3.0;
     let c = 1.0 / (9.0 * d).sqrt();
 
     loop {
-        let (x, _) = normal_pair(rng);
+        let x = standard_normal(rng);
         let v = 1.0 + c * x;
         if v <= 0.0 {
             continue;
@@ -195,9 +274,6 @@ fn binomial_inversion(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
 }
 
 /// Binomial(n, p) variate, exact for every `n` and `p`.
-///
-/// Small `n * min(p, 1 - p)` uses inversion; larger cases split the problem with a Beta variate
-/// (the order-statistic recursion from Knuth, TAOCP vol. 2) until inversion applies.
 pub(crate) fn binomial(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
     if n == 0 || p <= 0.0 {
         return 0;
@@ -232,9 +308,6 @@ pub(crate) fn binomial(rng: &mut Xoshiro256StarStar, n: u64, p: f64) -> u64 {
 }
 
 /// Poisson(lam) variate, exact for every `lam`.
-///
-/// Knuth's multiplication method below 30; above that the mean is split with a Gamma variate
-/// (Ahrens and Dieter) so the cost grows with `ln(lam)` rather than `lam`.
 pub(crate) fn poisson(rng: &mut Xoshiro256StarStar, lam: f64) -> u64 {
     let (mut lam, mut acc) = (lam, 0u64);
     if lam.is_nan() || lam <= 0.0 {
@@ -263,12 +336,67 @@ pub(crate) fn poisson(rng: &mut Xoshiro256StarStar, lam: f64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Parallel Deterministic Chunk Filling
+// ---------------------------------------------------------------------------
+
+const CHUNK_SIZE: usize = 1 << 16;
+
+fn fill_deterministic_vec<T: Copy + Default + Send, F: Fn(&mut Xoshiro256StarStar) -> T + Sync>(
+    rng: &mut Xoshiro256StarStar,
+    len: usize,
+    generator: F,
+) -> Vec<T> {
+    if len < CHUNK_SIZE {
+        let mut res = Vec::with_capacity(len);
+        for _ in 0..len {
+            res.push(generator(rng));
+        }
+        return res;
+    }
+
+    let num_chunks = len.div_ceil(CHUNK_SIZE);
+    let mut streams = Vec::with_capacity(num_chunks);
+    let mut stream = rng.clone();
+    for _ in 0..num_chunks {
+        streams.push(stream.clone());
+        stream.jump();
+    }
+    *rng = stream;
+
+    let mut result = vec![T::default(); len];
+
+    #[cfg(feature = "rayon")]
+    {
+        use rayon::prelude::*;
+        result
+            .par_chunks_mut(CHUNK_SIZE)
+            .zip(streams)
+            .for_each(|(chunk, mut chunk_rng)| {
+                for val in chunk.iter_mut() {
+                    *val = generator(&mut chunk_rng);
+                }
+            });
+    }
+
+    #[cfg(not(feature = "rayon"))]
+    {
+        for (chunk, mut chunk_rng) in result.chunks_mut(CHUNK_SIZE).zip(streams) {
+            for val in chunk.iter_mut() {
+                *val = generator(&mut chunk_rng);
+            }
+        }
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Vec-producing functions
 // ---------------------------------------------------------------------------
 
 /// Fill a Vec with f64 in [0, 1).
 pub(crate) fn random_vec(rng: &mut Xoshiro256StarStar, len: usize) -> Vec<f64> {
-    (0..len).map(|_| rng.next_f64()).collect()
+    fill_deterministic_vec(rng, len, |r| r.next_f64())
 }
 
 /// Fill a Vec with uniform f64 in [low, high).
@@ -278,7 +406,7 @@ pub(crate) fn uniform_vec(
     high: f64,
     len: usize,
 ) -> Vec<f64> {
-    (0..len).map(|_| uniform_f64(rng, low, high)).collect()
+    fill_deterministic_vec(rng, len, |r| uniform_f64(r, low, high))
 }
 
 /// Fill a Vec with normal(mean, std) f64 values.
@@ -288,20 +416,12 @@ pub(crate) fn normal_vec(
     std: f64,
     len: usize,
 ) -> Vec<f64> {
-    let mut result = Vec::with_capacity(len);
-    while result.len() < len {
-        let (a, b) = normal_pair(rng);
-        result.push(mean + std * a);
-        if result.len() < len {
-            result.push(mean + std * b);
-        }
-    }
-    result
+    fill_deterministic_vec(rng, len, |r| normal(r, mean, std))
 }
 
 /// Fill a Vec with standard normal f64 values.
 pub(crate) fn standard_normal_vec(rng: &mut Xoshiro256StarStar, len: usize) -> Vec<f64> {
-    normal_vec(rng, 0.0, 1.0, len)
+    fill_deterministic_vec(rng, len, standard_normal)
 }
 
 /// Fill a Vec with random i64 in [low, high).
@@ -316,14 +436,12 @@ pub(crate) fn integers_vec(
         "high must be greater than low, got low={low}, high={high}"
     );
     let range = high.wrapping_sub(low) as u64;
-    (0..len)
-        .map(|_| low.wrapping_add(bounded_u64(rng, range) as i64))
-        .collect()
+    fill_deterministic_vec(rng, len, |r| low.wrapping_add(bounded_u64(r, range) as i64))
 }
 
 /// Fill a Vec with exponential(scale) values.
 pub(crate) fn exponential_vec(rng: &mut Xoshiro256StarStar, scale: f64, len: usize) -> Vec<f64> {
-    (0..len).map(|_| exponential(rng, scale)).collect()
+    fill_deterministic_vec(rng, len, |r| exponential(r, scale))
 }
 
 /// Fill a Vec with binomial(n, p) values.
@@ -384,7 +502,6 @@ pub(crate) fn choice_indices(
             "cannot take {k} samples from {n} without replacement"
         );
         if k <= n / 2 {
-            // Partial Fisher-Yates
             let mut pool: Vec<usize> = (0..n).collect();
             for i in 0..k {
                 let j = i + bounded_u64(rng, (n - i) as u64) as usize;
@@ -392,7 +509,6 @@ pub(crate) fn choice_indices(
             }
             pool[..k].to_vec()
         } else {
-            // Full shuffle, take first k
             let mut v = permutation_vec(rng, n);
             v.truncate(k);
             v
@@ -412,7 +528,6 @@ mod tests {
     fn splitmix64_determinism() {
         let mut sm = SplitMix64::new(42);
         let vals: Vec<u64> = (0..5).map(|_| sm.next_u64()).collect();
-        // Verified against reference SplitMix64
         assert_eq!(
             vals,
             vec![
@@ -429,8 +544,6 @@ mod tests {
     fn xoshiro256ss_determinism() {
         let mut rng = Xoshiro256StarStar::seed(42);
         let vals: Vec<u64> = (0..5).map(|_| rng.next_u64()).collect();
-        // Hard-coded regression values for seed 42 checked against the
-        // reference xoshiro256** algorithm seeded via SplitMix64(42).
         let expected = vec![
             1546998764402558742,
             6990951692964543102,
@@ -443,6 +556,42 @@ mod tests {
         let mut rng2 = Xoshiro256StarStar::seed(42);
         let vals2: Vec<u64> = (0..5).map(|_| rng2.next_u64()).collect();
         assert_eq!(vals, vals2, "same seed must produce same sequence");
+    }
+
+    #[test]
+    fn xoshiro256ss_jump_determinism() {
+        let mut rng1 = Xoshiro256StarStar::seed(42);
+        rng1.jump();
+        let vals1: Vec<u64> = (0..5).map(|_| rng1.next_u64()).collect();
+
+        let mut rng2 = Xoshiro256StarStar::seed(42);
+        rng2.jump();
+        let vals2: Vec<u64> = (0..5).map(|_| rng2.next_u64()).collect();
+        assert_eq!(vals1, vals2, "jump on same seed must be deterministic");
+    }
+
+    #[test]
+    fn parallel_equals_serial_rng() {
+        let mut rng1 = Xoshiro256StarStar::seed(42);
+        let rng2 = Xoshiro256StarStar::seed(42);
+        let len = 200_000;
+        let v_par = standard_normal_vec(&mut rng1, len);
+
+        // Compute serial chunking explicitly
+        let num_chunks = len.div_ceil(CHUNK_SIZE);
+        let mut streams = Vec::with_capacity(num_chunks);
+        let mut stream = rng2.clone();
+        for _ in 0..num_chunks {
+            streams.push(stream.clone());
+            stream.jump();
+        }
+        let mut v_ser = vec![0.0; len];
+        for (chunk, mut s) in v_ser.chunks_mut(CHUNK_SIZE).zip(streams) {
+            for x in chunk.iter_mut() {
+                *x = standard_normal(&mut s);
+            }
+        }
+        assert_eq!(v_par, v_ser, "parallel RNG must equal serial RNG exactly");
     }
 
     #[test]
@@ -490,12 +639,10 @@ mod tests {
         let mut rng = Xoshiro256StarStar::seed(42);
         let vals = integers_vec(&mut rng, 0, 10, 10_000);
 
-        // All in range
         for &v in &vals {
             assert!((0..10).contains(&v), "integer out of range: {v}");
         }
 
-        // All 10 values appear
         let mut seen = [false; 10];
         for &v in &vals {
             seen[v as usize] = true;
@@ -517,7 +664,6 @@ mod tests {
             "exponential mean too far from {scale}: {mean}"
         );
 
-        // All positive
         for &v in &vals {
             assert!(v > 0.0, "exponential should be positive: {v}");
         }
@@ -617,7 +763,6 @@ mod tests {
             "beta({a},{b}) mean too far from {expected}: {mean}"
         );
 
-        // All in [0, 1]
         for &v in &vals {
             assert!((0.0..=1.0).contains(&v), "beta out of range: {v}");
         }
@@ -687,7 +832,6 @@ mod tests {
 
     #[test]
     fn gamma_small_shape() {
-        // Test gamma with shape < 1
         let mut rng = Xoshiro256StarStar::seed(42);
         let vals = gamma_vec(&mut rng, 0.5, 1.0, 10_000);
         let mean = vals.iter().sum::<f64>() / vals.len() as f64;

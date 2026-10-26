@@ -7,6 +7,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- `random`: replaced Box-Muller normal and exponential variate generation with NumPy-parity 256-strip Ziggurat method.
+- `random`: added deterministic chunked parallel filling for large outputs (>= 65536 elements) behind the `rayon` feature using xoshiro256** `jump()` streams.
+- `random`: the variate stream for normal and exponential distributions has changed due to switching to the Ziggurat method; seed-42 regression values are updated accordingly.
+- `manip`: accelerated `sort`, `argsort`, and `unique` with single-pass NaN partitioning, LSD radix sort for `f64`/`f32`/`i64`/`i32` lanes >= 65536, and Rayon parallel sorting for large lanes.
+- `simd_math`: added private AVX2+FMA transcendental SIMD math kernels (`exp`, `exp2`, `expm1`, `log`, `log2`, `log10`, `log1p`, `sin`, `cos`, `tan`, `tanh`, `sigmoid`) with runtime CPU feature dispatch and scalar fallback.
+
 ## [0.1.0] - Unreleased
 
 First release of `rustnum`: NumPy-style n-dimensional arrays in pure Rust.

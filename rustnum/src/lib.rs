@@ -35,6 +35,7 @@ mod misc;
 mod npz;
 mod ops;
 mod reduce;
+mod simd_math;
 mod slicing;
 mod ufunc;
 
