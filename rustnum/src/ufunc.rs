@@ -1,4 +1,144 @@
-use crate::{Array, Float, IntoArray, Num};
+use std::any::TypeId;
+
+use crate::{Array, Float, IntoArray, Num, simd_math};
+
+/// SIMD slice kernels (out-of-place, in-place) for one function. Only paths that are
+/// really vectorised are listed (see the accuracy table in `simd_math`); everything
+/// else uses the scalar closure.
+#[derive(Clone, Copy)]
+struct Kernels {
+    f64: Option<KernelPair<f64>>,
+    f32: Option<KernelPair<f32>>,
+}
+/// An (out-of-place, in-place) pair of slice kernels.
+type KernelPair<T> = (fn(&[T], &mut [T]), fn(&mut [T]));
+const EXP: Kernels = Kernels {
+    f64: Some((simd_math::exp_f64, simd_math::exp_f64_inplace)),
+    f32: Some((simd_math::exp_f32, simd_math::exp_f32_inplace)),
+};
+const EXP2: Kernels = Kernels {
+    f64: Some((simd_math::exp2_f64, simd_math::exp2_f64_inplace)),
+    f32: None,
+};
+const LOG: Kernels = Kernels {
+    f64: Some((simd_math::log_f64, simd_math::log_f64_inplace)),
+    f32: None,
+};
+const SIN: Kernels = Kernels {
+    f64: Some((simd_math::sin_f64, simd_math::sin_f64_inplace)),
+    f32: None,
+};
+const COS: Kernels = Kernels {
+    f64: Some((simd_math::cos_f64, simd_math::cos_f64_inplace)),
+    f32: None,
+};
+const TANH: Kernels = Kernels {
+    f64: Some((simd_math::tanh_f64, simd_math::tanh_f64_inplace)),
+    f32: None,
+};
+const SIGMOID: Kernels = Kernels {
+    f64: Some((simd_math::sigmoid_f64, simd_math::sigmoid_f64_inplace)),
+    f32: None,
+};
+
+/// Elements per rayon task when a SIMD kernel runs in parallel.
+#[cfg(feature = "rayon")]
+const SIMD_CHUNK: usize = 1 << 14;
+
+fn scalar_sigmoid<F: Float>(x: F) -> F {
+    if x >= F::ZERO {
+        F::ONE / (F::ONE + (-x).exp())
+    } else {
+        let e = x.exp();
+        e / (F::ONE + e)
+    }
+}
+
+/// Reinterprets `&[A]` as `&[B]`.
+///
+/// # Safety
+/// `A` and `B` must be the same type (callers check `TypeId`).
+unsafe fn same_type_slice<A, B>(s: &[A]) -> &[B] {
+    // SAFETY: A and B are the same type, so layout, length and lifetime carry over.
+    unsafe { std::slice::from_raw_parts(s.as_ptr().cast::<B>(), s.len()) }
+}
+
+/// Mutable form of [`same_type_slice`].
+///
+/// # Safety
+/// `A` and `B` must be the same type.
+unsafe fn same_type_slice_mut<A, B>(s: &mut [A]) -> &mut [B] {
+    // SAFETY: as in `same_type_slice`; the unique borrow is moved, not duplicated.
+    unsafe { std::slice::from_raw_parts_mut(s.as_mut_ptr().cast::<B>(), s.len()) }
+}
+
+/// Runs `kernel` from `src` into `dst`, split over rayon above the unary threshold.
+fn run_chunked<T: Sync + Send>(kernel: fn(&[T], &mut [T]), src: &[T], dst: &mut [T]) {
+    #[cfg(feature = "rayon")]
+    if src.len() >= crate::kernels_mem::UNARY {
+        use rayon::prelude::*;
+        dst.par_chunks_mut(SIMD_CHUNK)
+            .zip(src.par_chunks(SIMD_CHUNK))
+            .for_each(|(d, s)| kernel(s, d));
+        return;
+    }
+    kernel(src, dst);
+}
+
+/// In-place form of [`run_chunked`].
+fn run_chunked_inplace<T: Send>(kernel: fn(&mut [T]), data: &mut [T]) {
+    #[cfg(feature = "rayon")]
+    if data.len() >= crate::kernels_mem::UNARY {
+        use rayon::prelude::*;
+        data.par_chunks_mut(SIMD_CHUNK).for_each(kernel);
+        return;
+    }
+    kernel(data);
+}
+
+impl<F: Float> Array<F> {
+    /// Applies `scalar` element-wise, using the SIMD kernel for contiguous f64/f32 data.
+    fn simd_map(&self, kernels: Kernels, scalar: fn(F) -> F) -> Self {
+        let is64 = TypeId::of::<F>() == TypeId::of::<f64>();
+        let is32 = TypeId::of::<F>() == TypeId::of::<f32>();
+        if let Some(src) = self.as_slice() {
+            if is64 && let Some((kernel, _)) = kernels.f64 {
+                let mut out = crate::pool::output::<F>(src.len());
+                // SAFETY: F is f64 (TypeId check above).
+                unsafe { run_chunked(kernel, same_type_slice(src), same_type_slice_mut(&mut out)) };
+                return Array::from_vec(out, self.shape());
+            }
+            if is32 && let Some((kernel, _)) = kernels.f32 {
+                let mut out = crate::pool::output::<F>(src.len());
+                // SAFETY: F is f32 (TypeId check above).
+                unsafe { run_chunked(kernel, same_type_slice(src), same_type_slice_mut(&mut out)) };
+                return Array::from_vec(out, self.shape());
+            }
+        }
+        self.par_map(scalar)
+    }
+    /// In-place form of [`Array::simd_map`] (copy-on-write when storage is shared).
+    fn simd_map_inplace(&mut self, kernels: Kernels, scalar: fn(F) -> F) {
+        let is64 = TypeId::of::<F>() == TypeId::of::<f64>();
+        let is32 = TypeId::of::<F>() == TypeId::of::<f32>();
+        let kernel64 = kernels.f64.filter(|_| is64).map(|(_, k)| k);
+        let kernel32 = kernels.f32.filter(|_| is32).map(|(_, k)| k);
+        if (kernel64.is_some() || kernel32.is_some())
+            && let Some(data) = self.contiguous_mut()
+        {
+            if let Some(kernel) = kernel64 {
+                // SAFETY: F is f64 (TypeId check above).
+                run_chunked_inplace(kernel, unsafe { same_type_slice_mut(data) });
+            } else if let Some(kernel) = kernel32 {
+                // SAFETY: F is f32 (TypeId check above).
+                run_chunked_inplace(kernel, unsafe { same_type_slice_mut(data) });
+            }
+            return;
+        }
+        self.mapv_inplace_parallel(scalar)
+    }
+}
+
 impl<F: Float> Array<F> {
     /// Implements np.exp with array value semantics.
     ///
@@ -7,7 +147,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].exp().item(),1f64);
     /// ```
     pub fn exp(&self) -> Self {
-        self.par_map(F::exp)
+        self.simd_map(EXP, F::exp)
     }
     /// Implements np.exp2 with array value semantics.
     ///
@@ -16,7 +156,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![3f64].exp2().item(),8f64);
     /// ```
     pub fn exp2(&self) -> Self {
-        self.par_map(F::exp2)
+        self.simd_map(EXP2, F::exp2)
     }
     /// Implements np.expm1 with array value semantics.
     ///
@@ -34,7 +174,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1f64].log().item(),0f64);
     /// ```
     pub fn log(&self) -> Self {
-        self.par_map(F::ln)
+        self.simd_map(LOG, F::ln)
     }
     /// Implements np.log2 with array value semantics.
     ///
@@ -88,7 +228,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].sin().item(),0f64);
     /// ```
     pub fn sin(&self) -> Self {
-        self.par_map(F::sin)
+        self.simd_map(SIN, F::sin)
     }
     /// Implements np.cos with array value semantics.
     ///
@@ -97,7 +237,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].cos().item(),1f64);
     /// ```
     pub fn cos(&self) -> Self {
-        self.par_map(F::cos)
+        self.simd_map(COS, F::cos)
     }
     /// Implements np.tan with array value semantics.
     ///
@@ -160,7 +300,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].tanh().item(),0f64);
     /// ```
     pub fn tanh(&self) -> Self {
-        self.par_map(F::tanh)
+        self.simd_map(TANH, F::tanh)
     }
     /// Implements np.floor with array value semantics.
     ///
@@ -275,14 +415,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0.0f64].sigmoid().item(),0.5);
     /// ```
     pub fn sigmoid(&self) -> Self {
-        self.par_map(|x| {
-            if x >= F::ZERO {
-                F::ONE / (F::ONE + (-x).exp())
-            } else {
-                let e = x.exp();
-                e / (F::ONE + e)
-            }
-        })
+        self.simd_map(SIGMOID, scalar_sigmoid)
     }
     /// Rectified linear activation (non-NumPy extra, equivalent to np.maximum(a, 0)).
     ///
@@ -477,7 +610,7 @@ impl<F: Float> Array<F> {
     /// a.exp_inplace();
     /// ```
     pub fn exp_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::exp)
+        self.simd_map_inplace(EXP, F::exp)
     }
     /// Applies np.exp with out=a, preserving copy-on-write semantics.
     /// ```
@@ -494,7 +627,7 @@ impl<F: Float> Array<F> {
     /// a.exp2_inplace();
     /// ```
     pub fn exp2_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::exp2)
+        self.simd_map_inplace(EXP2, F::exp2)
     }
     /// Applies np.exp2 with out=a, preserving copy-on-write semantics.
     /// ```
@@ -528,7 +661,7 @@ impl<F: Float> Array<F> {
     /// a.log_inplace();
     /// ```
     pub fn log_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::ln)
+        self.simd_map_inplace(LOG, F::ln)
     }
     /// Applies np.log with out=a, preserving copy-on-write semantics.
     /// ```
@@ -630,7 +763,7 @@ impl<F: Float> Array<F> {
     /// a.sin_inplace();
     /// ```
     pub fn sin_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::sin)
+        self.simd_map_inplace(SIN, F::sin)
     }
     /// Applies np.sin with out=a, preserving copy-on-write semantics.
     /// ```
@@ -647,7 +780,7 @@ impl<F: Float> Array<F> {
     /// a.cos_inplace();
     /// ```
     pub fn cos_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::cos)
+        self.simd_map_inplace(COS, F::cos)
     }
     /// Applies np.cos with out=a, preserving copy-on-write semantics.
     /// ```
@@ -766,7 +899,7 @@ impl<F: Float> Array<F> {
     /// a.tanh_inplace();
     /// ```
     pub fn tanh_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::tanh)
+        self.simd_map_inplace(TANH, F::tanh)
     }
     /// Applies np.tanh with out=a, preserving copy-on-write semantics.
     /// ```
@@ -926,14 +1059,7 @@ impl<F: Float> Array<F> {
     /// a.sigmoid_inplace();
     /// ```
     pub fn sigmoid_inplace(&mut self) {
-        self.mapv_inplace_parallel(|x| {
-            if x >= F::ZERO {
-                F::ONE / (F::ONE + (-x).exp())
-            } else {
-                let e = x.exp();
-                e / (F::ONE + e)
-            }
-        })
+        self.simd_map_inplace(SIGMOID, scalar_sigmoid)
     }
     /// Applies np.exp with out=a, preserving copy-on-write semantics.
     /// ```

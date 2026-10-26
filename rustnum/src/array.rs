@@ -606,6 +606,16 @@ impl<T: Element> Array<T> {
     pub fn mapv_inplace_parallel(&mut self, f: impl Fn(T) -> T + Send + Sync) {
         self.map_inplace_at(unary_threshold(), f);
     }
+    /// The element buffer as one mutable slice when the array is contiguous, after
+    /// detaching shared storage (copy-on-write). `None` for strided views.
+    pub(crate) fn contiguous_mut(&mut self) -> Option<&mut [T]> {
+        if !self.is_contiguous() {
+            return None;
+        }
+        self.prepare_write();
+        let end = self.offset + self.size();
+        Some(&mut Arc::make_mut(&mut self.data)[self.offset..end])
+    }
     pub(crate) fn map_inplace_at(&mut self, threshold: usize, f: impl Fn(T) -> T + Send + Sync) {
         let _ = threshold;
         self.prepare_write();
