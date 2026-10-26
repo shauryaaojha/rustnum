@@ -27,7 +27,7 @@ is `rustnum/` (NumPy). Design: `docs/PLAN.md`. Binding API spec: `docs/API.md`.
    cargo test --no-default-features
    cargo doc --no-deps
    ```
-8. Keep dependencies minimal: `matrixmultiply`, optional `rayon`. Dev: `proptest`, `criterion`. Ask before adding more.
+8. Keep dependencies minimal: optional `rayon` only (rustnum has its own packed GEMM). Dev: `proptest`, `criterion`. Ask before adding more.
 
 ## Layout
 `rustnum/src/<module>.rs` per area (see `docs/PLAN.md` section 4). Integration tests in `rustnum/tests/`,

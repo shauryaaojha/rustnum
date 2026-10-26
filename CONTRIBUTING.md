@@ -52,7 +52,7 @@ To cover a new function, add a case to `tools/gen_fixtures.py` and one match arm
 5. Every public item has a doc comment with a runnable example. The first line is one sentence
    and names the NumPy equivalent, for example `/// Sum of all elements, like np.sum(a).`
 6. Tests check ground truth: NumPy fixtures or hand-computed values.
-7. Keep dependencies minimal (`matrixmultiply`, optional `rayon`; dev: `proptest`, `criterion`).
+7. Keep dependencies minimal (optional `rayon`; dev: `proptest`, `criterion`).
    Ask before adding anything else. The `.npz` layer is dependency-free on purpose.
 
 ## Commits and pull requests

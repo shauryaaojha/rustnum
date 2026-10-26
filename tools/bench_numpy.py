@@ -38,10 +38,17 @@ def main() -> None:
         ("inv (200x200)", "np.linalg.inv(a)", {"a": inv_input, "np": np}),
         ("svd (100x100)", "np.linalg.svd(a, full_matrices=False)", {"a": svd_input, "np": np}),
     ]
-    for n in (256, 512, 1024):
+    for n in (256, 512, 1024, 2048, 4096):
         left = rng.standard_normal((n, n))
         right = rng.standard_normal((n, n))
         cases.append((f"matmul ({n}x{n} f64)", "a @ b", {"a": left, "b": right}))
+
+    for n in (1024, 2048, 4096):
+        left = rng.standard_normal((n, n), dtype=np.float32)
+        right = rng.standard_normal((n, n), dtype=np.float32)
+        cases.append((f"matmul ({n}x{n} f32)", "a @ b", {"a": left, "b": right}))
+    left = rng.standard_normal((2048, 2048))
+    cases.append(("matmul_map tanh (2048x2048 f64)", "np.tanh((a @ a) / 2048.0)", {"a": left, "np": np}))
 
     print("| benchmark | NumPy median (ms) |")
     print("| --- | ---: |")

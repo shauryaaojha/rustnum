@@ -1,7 +1,7 @@
 //! Array-facing linear algebra: `Array::matmul`, `Array::dot`, `Array::trace` and the free
 //! functions of `np::linalg`.
 //!
-//! `f32` and `f64` products call `matrixmultiply` with the real strides of the operands, so
+//! `f32` and `f64` products call the packed GEMM engine with the real strides of the operands, so
 //! transposed and sliced views are multiplied without copying. Other element types use a
 //! generic loop on contiguous copies. Decompositions work on `f32` and `f64` matrices
 //! (the `LinalgFloat` bound); v0.1 has no complex dtype, so complex results (`eig`, `eigvals`)
@@ -110,9 +110,8 @@ fn operand<T: Num>(
     batch_shape: &[usize],
     strided_ok: bool,
 ) -> Operand<T> {
-    let (row, col) = core_strides(a, left);
-    // The kernels need non-negative core strides; generic types want contiguous memory.
-    let array = if strided_ok && row >= 0 && col >= 0 {
+    // Native packing reads arbitrary signed strides; generic types use contiguous memory.
+    let array = if strided_ok {
         a.clone()
     } else {
         a.to_contiguous()
@@ -185,20 +184,13 @@ fn storage_as<T: Element, U: Element>(a: &Array<T>) -> Option<&[U]> {
         .map(|data| data.as_slice())
 }
 
-/// Converts an owned `Vec<U>` into `Vec<T>` when the two types are the same.
-fn vec_as<U: Element, T: Element>(v: Vec<U>) -> Vec<T> {
-    *(Box::new(v) as Box<dyn Any>)
-        .downcast::<Vec<T>>()
-        .expect("identical element type")
-}
-
 impl<T: Num> Array<T> {
     /// Matrix product, like `np.matmul(a, b)` or `a @ b`.
     ///
     /// Follows NumPy: two 1-d arrays give a 0-d dot product; a 1-d operand is promoted to a
     /// row (left) or column (right) vector and removed from the result; with more than two
     /// dimensions the leading "batch" axes broadcast. `f32` and `f64` operands go straight to
-    /// `matrixmultiply` using the real strides of the views (no copy for transposed or sliced
+    /// the packed GEMM engine using the real strides of the views (no copy for transposed or sliced
     /// operands); other types use a generic loop with wrapping integer arithmetic.
     ///
     /// Panics when the inner dimensions differ, an operand is 0-d, or the batch shapes cannot
@@ -218,6 +210,37 @@ impl<T: Num> Array<T> {
     /// assert_eq!(batch.shape(), [2, 3, 5]);
     /// ```
     pub fn matmul(&self, other: &Array<T>) -> Array<T> {
+        let mut out = Array::default();
+        self.matmul_write(other, &mut out, true, T::ONE, None);
+        out
+    }
+
+    /// Matrix product into an existing output, like `np.matmul(a, b, out=out)`.
+    ///
+    /// Supports the same vector promotion and batch broadcasting as `matmul`.
+    /// Panics unless `out` is C-contiguous and has exactly the result shape.
+    /// Reuses uniquely owned output storage; shared storage is detached on write.
+    /// GEMM packing still uses temporary workspace, but no new result is allocated.
+    ///
+    /// ```
+    /// use rustnum as np;
+    /// let a = np::array![[1.0, 2.0], [3.0, 4.0]];
+    /// let mut out = np::zeros::<f64>([2, 2]);
+    /// a.matmul_into(&a, &mut out);
+    /// assert_eq!(out.to_vec(), [7.0, 10.0, 15.0, 22.0]);
+    /// ```
+    pub fn matmul_into(&self, other: &Array<T>, out: &mut Array<T>) {
+        self.matmul_write(other, out, false, T::ONE, None);
+    }
+
+    fn matmul_write(
+        &self,
+        other: &Array<T>,
+        output: &mut Array<T>,
+        allocate: bool,
+        alpha: T,
+        map: Option<fn(T) -> T>,
+    ) {
         for (index, array) in [self, other].into_iter().enumerate() {
             assert!(
                 array.ndim() > 0,
@@ -259,51 +282,79 @@ impl<T: Num> Array<T> {
             output_shape.push(n);
         }
 
+        if allocate {
+            *output = Array::from_vec(vec![T::ZERO; output_shape.iter().product()], &output_shape);
+        } else {
+            assert_eq!(
+                output.shape(),
+                output_shape,
+                "matmul: output operand has a mismatch in its core dimension"
+            );
+            assert!(
+                output.is_contiguous(),
+                "matmul: output array is not C-contiguous"
+            );
+        }
         let native =
             TypeId::of::<T>() == TypeId::of::<f64>() || TypeId::of::<T>() == TypeId::of::<f32>();
         let left = operand(self, true, &batch_shape, native);
         let right = operand(other, false, &batch_shape, native);
         let block = m * n;
         let total = batch_shape.iter().product::<usize>() * block;
-        let empty = block == 0 || k == 0;
+        if total == 0 {
+            return;
+        }
         let (a_strides, b_strides) = ((left.row, left.col), (right.row, right.col));
+        let offset = output.offset;
+        let out = Arc::make_mut(&mut output.data);
 
         macro_rules! native_product {
-            ($float:ty, $gemm:path) => {
+            ($float:ty) => {
                 if let (Some(a), Some(b)) = (
                     storage_as::<T, $float>(&left.array),
                     storage_as::<T, $float>(&right.array),
                 ) {
-                    let mut out = vec![0.0 as $float; total];
-                    if !empty {
-                        for_each_batch(&batch_shape, &left, &right, |index, a_start, b_start| {
-                            $gemm(
-                                m,
-                                k,
-                                n,
-                                1.0,
-                                &a[a_start..],
-                                a_strides.0,
-                                a_strides.1,
-                                &b[b_start..],
-                                b_strides.0,
-                                b_strides.1,
-                                0.0,
-                                &mut out[index * block..(index + 1) * block],
-                                n as isize,
-                                1,
-                            )
-                        });
-                    }
-                    return Array::from_vec(vec_as::<$float, T>(out), &output_shape);
+                    let out = (out as &mut dyn Any)
+                        .downcast_mut::<Vec<$float>>()
+                        .expect("same type");
+                    let alpha = *(&alpha as &dyn Any)
+                        .downcast_ref::<$float>()
+                        .expect("same type");
+                    let map = *(&map as &dyn Any)
+                        .downcast_ref::<Option<fn($float) -> $float>>()
+                        .expect("same type");
+                    for_each_batch(&batch_shape, &left, &right, |index, a_start, b_start| {
+                        super::packed_gemm::run(
+                            (m, k, n),
+                            alpha,
+                            super::packed_gemm::Matrix {
+                                data: a,
+                                offset: a_start,
+                                row: a_strides.0,
+                                col: a_strides.1,
+                            },
+                            super::packed_gemm::Matrix {
+                                data: b,
+                                offset: b_start,
+                                row: b_strides.0,
+                                col: b_strides.1,
+                            },
+                            0.0,
+                            &mut out[offset + index * block..offset + (index + 1) * block],
+                            0,
+                            (n as isize, 1),
+                            map,
+                        );
+                    });
+                    return;
                 }
             };
         }
-        native_product!(f64, kernels::gemm_f64);
-        native_product!(f32, kernels::gemm_f32);
-
-        let mut out = vec![T::ZERO; total];
-        if !empty {
+        native_product!(f64);
+        native_product!(f32);
+        let out = &mut out[offset..offset + total];
+        out.fill(T::ZERO);
+        if k != 0 {
             let (a, _, _) = left.array.raw_parts();
             let (b, _, _) = right.array.raw_parts();
             for_each_batch(&batch_shape, &left, &right, |index, a_start, b_start| {
@@ -317,7 +368,6 @@ impl<T: Num> Array<T> {
                 );
             });
         }
-        Array::from_vec(out, &output_shape)
     }
 
     /// Dot product, like `np.dot(a, b)` for arrays of at most two dimensions.
@@ -368,6 +418,95 @@ impl<T: Num> Array<T> {
             )
         })
     }
+}
+
+/// Scaled matrix product plus an addend, like `scipy.linalg.blas.dgemm` / `sgemm`.
+///
+/// Returns `alpha * a @ b + beta * c`. Inputs must be two-dimensional and aligned;
+/// `c` must have the exact product shape. All inputs may be strided views.
+/// Zero alpha ignores A/B values; zero beta ignores C values (including NaNs).
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1.0, 2.0], [3.0, 4.0]];
+/// let c = np::ones::<f64>([2, 2]);
+/// assert_eq!(np::linalg::gemm(2.0, &a, &a, 3.0, &c).to_vec(), [17.0, 23.0, 33.0, 47.0]);
+/// ```
+pub fn gemm<F: LinalgFloat>(
+    alpha: F,
+    a: &Array<F>,
+    b: &Array<F>,
+    beta: F,
+    c: &Array<F>,
+) -> Array<F> {
+    let (m, k) = fail(matrix_shape(a));
+    let (bk, n) = fail(matrix_shape(b));
+    assert_eq!(
+        k, bk,
+        "matmul: Input operand 1 has a mismatch in its core dimension 0"
+    );
+    assert_eq!(
+        c.shape(),
+        [m, n],
+        "gemm: output operand has a mismatch in its core dimension"
+    );
+    let mut out = if beta == <F as Num>::ZERO {
+        vec![<F as Num>::ZERO; m * n]
+    } else {
+        c.to_vec()
+    };
+    macro_rules! typed {
+        ($float:ty) => {
+            if let (Some(ad), Some(bd)) = (storage_as::<F, $float>(a), storage_as::<F, $float>(b)) {
+                let scalar = |x: &F| *(x as &dyn Any).downcast_ref::<$float>().expect("same type");
+                super::packed_gemm::run(
+                    (m, k, n),
+                    scalar(&alpha),
+                    super::packed_gemm::Matrix {
+                        data: ad,
+                        offset: a.offset,
+                        row: a.strides()[0],
+                        col: a.strides()[1],
+                    },
+                    super::packed_gemm::Matrix {
+                        data: bd,
+                        offset: b.offset,
+                        row: b.strides()[0],
+                        col: b.strides()[1],
+                    },
+                    scalar(&beta),
+                    (&mut out as &mut dyn Any)
+                        .downcast_mut::<Vec<$float>>()
+                        .expect("same type"),
+                    0,
+                    (n as isize, 1),
+                    None,
+                );
+                return Array::from_vec(out, &[m, n]);
+            }
+        };
+    }
+    typed!(f64);
+    typed!(f32);
+    unreachable!("LinalgFloat is sealed to f32 and f64")
+}
+
+/// Fused scaled matrix product and map, like `f(alpha * np.matmul(a, b))`.
+///
+/// The function is applied once per output element after the complete reduction,
+/// while its finished tile is in cache. Supports vector promotion and broadcast
+/// batches, and accepts a non-capturing function pointer for f32 or f64.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::array![[1.0f64, 2.0]];
+/// let y = np::linalg::matmul_map(&a, &a.t(), 0.2, f64::tanh);
+/// assert!((y.item() - 1.0f64.tanh()).abs() < 1e-12);
+/// ```
+pub fn matmul_map<F: LinalgFloat>(a: &Array<F>, b: &Array<F>, alpha: F, f: fn(F) -> F) -> Array<F> {
+    let mut out = Array::default();
+    a.matmul_write(b, &mut out, true, alpha, Some(f));
+    out
 }
 
 /// Outer product of two arrays (flattened first), like `np.outer(a, b)`.

@@ -57,7 +57,7 @@ fn matmul_sliced_views_match_contiguous() {
     let b = other.slice(&np::s![2..5, ..;2]);
     assert!(!a.is_contiguous() && !b.is_contiguous());
     assert_close(&a.matmul(&b), &naive(&a.copy(), &b.copy()), 1e-12);
-    // reversed rows (negative strides) fall back to a copy but stay correct
+    // reversed rows (negative strides) are packed directly
     let rev = big.slice(&np::s![..;-1, ..]);
     let sq = sample(12, 3, 6);
     assert_close(&rev.matmul(&sq), &naive(&rev.copy(), &sq), 1e-12);
@@ -391,4 +391,196 @@ fn tiled_parallel_matmul_f32_matches_f64() {
     let single = a.astype::<f32>().matmul(&b.astype::<f32>());
     // Small integers: every product and partial sum is exact in f32 too.
     assert_eq!(single.astype::<f64>().to_vec(), exact.to_vec());
+}
+
+#[test]
+fn packed_gemm_prime_and_degenerate_shapes() {
+    for (m, k, n) in [
+        (1, 1031, 257),
+        (257, 509, 1),
+        (7, 1031, 19),
+        (257, 17, 509),
+        (0, 7, 19),
+        (13, 0, 17),
+        (13, 7, 0),
+    ] {
+        let a = sample(m, k, 21);
+        let b = sample(k, n, 22);
+        let want = naive(&a, &b);
+        assert_close(
+            &linalg::gemm(1.0, &a, &b, 0.0, &np::zeros::<f64>([m, n])),
+            &want,
+            1e-12,
+        );
+        assert_close(&a.matmul(&b), &want, 1e-12);
+        assert_close(
+            &a.astype::<f32>().matmul(&b.astype::<f32>()).astype::<f64>(),
+            &want,
+            1e-5,
+        );
+    }
+}
+
+#[test]
+fn gemm_scales_signed_views_and_strided_addend() {
+    let a = sample(19, 1034, 23).slice(&np::s![..;-2, 1..1033;2]);
+    let b = sample(33, 516, 24).t().slice(&np::s![..;-1, ..;-2]);
+    let c = sample(34, 20, 25).t().slice(&np::s![..;-2, ..;-2]);
+    assert_eq!(c.shape(), [10, 17]);
+    let product = naive(&a, &b);
+    for (alpha, beta) in [
+        (0.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -2.0),
+        (1.5, -0.75),
+        (-1.0, 1.0),
+    ] {
+        let expected = &product * alpha + &c * beta;
+        assert_close(&linalg::gemm(alpha, &a, &b, beta, &c), &expected, 1e-12);
+        let got32 = linalg::gemm(
+            alpha as f32,
+            &a.astype::<f32>(),
+            &b.astype::<f32>(),
+            beta as f32,
+            &c.astype::<f32>(),
+        );
+        assert_close(&got32.astype::<f64>(), &expected, 1e-5);
+    }
+}
+
+#[test]
+fn gemm_zero_coefficients_ignore_nan_and_zero_depth_maps() {
+    let nan = np::full([7, 9], f64::NAN);
+    let b = np::ones::<f64>([9, 11]);
+    let c = np::full([7, 11], f64::NAN);
+    assert_eq!(linalg::gemm(0.0, &nan, &b, 0.0, &c).to_vec(), vec![0.0; 77]);
+    let a = np::ones::<f64>([7, 9]);
+    assert_eq!(linalg::gemm(1.0, &a, &b, 0.0, &c).to_vec(), vec![9.0; 77]);
+    let a = np::zeros::<f64>([7, 0]);
+    let b = np::zeros::<f64>([0, 11]);
+    let c = np::ones::<f64>([7, 11]);
+    assert_eq!(linalg::gemm(2.0, &a, &b, -3.0, &c).to_vec(), vec![-3.0; 77]);
+    assert_eq!(
+        linalg::matmul_map(&a, &b, 2.0, |x| x + 7.0).to_vec(),
+        vec![7.0; 77]
+    );
+}
+
+#[test]
+fn matmul_map_applies_once_after_all_kc_blocks() {
+    let a = sample(127, 1031, 26);
+    let b = sample(1031, 269, 27);
+    let expected = (naive(&a, &b) * 0.003).tanh();
+    assert_close(
+        &linalg::matmul_map(&a, &b, 0.003, f64::tanh),
+        &expected,
+        1e-12,
+    );
+    assert_close(
+        &linalg::matmul_map(&a.astype::<f32>(), &b.astype::<f32>(), 0.003, f32::tanh)
+            .astype::<f64>(),
+        &expected,
+        1e-5,
+    );
+    // Empty core reductions must still execute the nonlinear epilogue in every batch.
+    let batch = np::zeros::<f32>([3, 2, 0]);
+    let right = np::zeros::<f32>([0, 4]);
+    assert_eq!(
+        linalg::matmul_map(&batch, &right, 1.0, |x| x + 1.0).to_vec(),
+        vec![1.0; 24]
+    );
+    let v = np::array![1.0f64, 2.0];
+    assert_eq!(linalg::matmul_map(&v, &v, 2.0, |x| x + 1.0).item(), 11.0);
+}
+
+#[test]
+fn matmul_into_reuses_output_and_preserves_cow() {
+    let a = sample(13, 17, 28);
+    let b = sample(17, 19, 29);
+    let mut out = np::full([13, 19], f64::NAN);
+    let ptr = out.as_slice().unwrap().as_ptr();
+    a.matmul_into(&b, &mut out);
+    assert_eq!(ptr, out.as_slice().unwrap().as_ptr());
+    assert_close(&out, &naive(&a, &b), 1e-12);
+    let saved = out.clone();
+    np::zeros::<f64>([13, 17]).matmul_into(&b, &mut out);
+    assert_eq!(out.to_vec(), vec![0.0; 13 * 19]);
+    assert_close(&saved, &naive(&a, &b), 1e-12);
+    let a = np::ones::<i32>([2, 3, 4]);
+    let b = np::ones::<i32>([4]);
+    let mut out = np::zeros::<i32>([2, 3]);
+    a.matmul_into(&b, &mut out);
+    assert_eq!(out.to_vec(), vec![4; 6]);
+    // A contiguous view with an offset also reuses its unique backing allocation.
+    let mut out = np::zeros::<f64>([15, 19]).slice(&np::s![1..14, ..]);
+    let ptr = out.as_slice().unwrap().as_ptr();
+    sample(13, 17, 28).matmul_into(&sample(17, 19, 29), &mut out);
+    assert_eq!(ptr, out.as_slice().unwrap().as_ptr());
+    assert_close(&out, &saved, 1e-12);
+}
+
+#[test]
+#[should_panic(expected = "output operand has a mismatch")]
+fn matmul_into_rejects_wrong_shape() {
+    np::eye::<f32>(3).matmul_into(&np::eye::<f32>(3), &mut np::zeros::<f32>([9]));
+}
+
+#[test]
+#[should_panic(expected = "not C-contiguous")]
+fn matmul_into_rejects_strided_output() {
+    np::eye::<f64>(3).matmul_into(&np::eye::<f64>(3), &mut np::eye::<f64>(3).t());
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::test_runner::Config::with_cases(64))]
+    #[test]
+    fn gemm_shapes_and_strides(m in 1usize..25, k in 1usize..40, n in 1usize..25,
+        sa in 1usize..4, sb in 1usize..4, reverse_a in proptest::bool::ANY,
+        reverse_b in proptest::bool::ANY, transpose in proptest::bool::ANY) {
+        let step_a = sa as isize * if reverse_a { -1 } else { 1 };
+        let step_b = sb as isize * if reverse_b { -1 } else { 1 };
+        let a = if transpose {
+            sample(k * sa, m, 30).t().slice(&np::s![.., ..;step_a])
+        } else {
+            sample(m, k * sa, 30).slice(&np::s![.., ..;step_a])
+        };
+        let b = sample(k * sb, n, 31).slice(&np::s![..;step_b, ..]);
+        let c = sample(n * 2, m, 32).t().slice(&np::s![.., ..;-2]);
+        let want = naive(&a, &b) * -0.75 + &c * 0.5;
+        assert_close(&linalg::gemm(-0.75, &a, &b, 0.5, &c), &want, 1e-12);
+        assert_close(&a.astype::<f32>().matmul(&b.astype::<f32>()).astype::<f64>(), &naive(&a, &b), 1e-5);
+    }
+}
+
+#[test]
+fn f32_signed_and_transposed_views_and_reversed_batches() {
+    let a = sample(19, 522, 33)
+        .astype::<f32>()
+        .slice(&np::s![..;-2, ..;-2]);
+    let b = sample(35, 261, 34)
+        .astype::<f32>()
+        .t()
+        .slice(&np::s![..;-1, ..;2]);
+    let c = sample(36, 20, 35)
+        .astype::<f32>()
+        .t()
+        .slice(&np::s![..;2, ..;-2]);
+    let expected = naive(&a.astype::<f64>(), &b.astype::<f64>()) * 0.5 + c.astype::<f64>() * -2.0;
+    assert_close(
+        &linalg::gemm(0.5, &a, &b, -2.0, &c).astype::<f64>(),
+        &expected,
+        1e-5,
+    );
+    let batch = np::arange(0.0, 120.0, 1.0)
+        .reshape(&[4, 5, 6])
+        .slice(&np::s![..;-1, ..;-1, ..;-1]);
+    let right = sample(6, 7, 36).slice(&np::s![..;-1, ..]);
+    let got = batch.matmul(&right);
+    for i in 0..4 {
+        assert_close(
+            &got.index_axis(0, i),
+            &naive(&batch.index_axis(0, i), &right),
+            1e-12,
+        );
+    }
 }
