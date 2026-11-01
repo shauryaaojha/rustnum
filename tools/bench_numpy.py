@@ -21,6 +21,9 @@ def median_ms(statement: str, setup: dict[str, object], number: int = 1) -> floa
 def main() -> None:
     rng = np.random.default_rng(42)
     million = rng.standard_normal(1_000_000)
+    pos_million = np.abs(million) + 0.1
+    million_f32 = million.astype(np.float32)
+    pos_million_f32 = pos_million.astype(np.float32)
     ten_million = rng.standard_normal(10_000_000)
     matrix = rng.standard_normal((1_000, 1_000))
     sort_input = rng.standard_normal(1_000_000)
@@ -44,7 +47,30 @@ def main() -> None:
         ("transpose().to_contiguous() [1000,1000]", "np.ascontiguousarray(a.T)", {"a": matrix, "np": np}),
         ("exp (1e6 f64)", "np.exp(a)", {"a": million, "np": np}),
         ("exp (1e6 f64) simd kernel", "np.exp(a)", {"a": million, "np": np}),
+        ("exp2 (1e6 f64) simd kernel", "np.exp2(a)", {"a": million, "np": np}),
+        ("expm1 (1e6 f64) simd kernel", "np.expm1(a)", {"a": million, "np": np}),
+        ("log (1e6 f64) simd kernel", "np.log(a)", {"a": pos_million, "np": np}),
+        ("log2 (1e6 f64) simd kernel", "np.log2(a)", {"a": pos_million, "np": np}),
+        ("log10 (1e6 f64) simd kernel", "np.log10(a)", {"a": pos_million, "np": np}),
+        ("log1p (1e6 f64) simd kernel", "np.log1p(a)", {"a": pos_million, "np": np}),
+        ("sin (1e6 f64) simd kernel", "np.sin(a)", {"a": million, "np": np}),
+        ("cos (1e6 f64) simd kernel", "np.cos(a)", {"a": million, "np": np}),
+        ("tan (1e6 f64) simd kernel", "np.tan(a)", {"a": million, "np": np}),
         ("tanh (1e6 f64) simd kernel", "np.tanh(a)", {"a": million, "np": np}),
+        ("sigmoid (1e6 f64) simd kernel", "1.0 / (1.0 + np.exp(-a))", {"a": million, "np": np}),
+
+        ("exp (1e6 f32) simd kernel", "np.exp(a)", {"a": million_f32, "np": np}),
+        ("exp2 (1e6 f32) simd kernel", "np.exp2(a)", {"a": million_f32, "np": np}),
+        ("expm1 (1e6 f32) simd kernel", "np.expm1(a)", {"a": million_f32, "np": np}),
+        ("log (1e6 f32) simd kernel", "np.log(a)", {"a": pos_million_f32, "np": np}),
+        ("log2 (1e6 f32) simd kernel", "np.log2(a)", {"a": pos_million_f32, "np": np}),
+        ("log10 (1e6 f32) simd kernel", "np.log10(a)", {"a": pos_million_f32, "np": np}),
+        ("log1p (1e6 f32) simd kernel", "np.log1p(a)", {"a": pos_million_f32, "np": np}),
+        ("sin (1e6 f32) simd kernel", "np.sin(a)", {"a": million_f32, "np": np}),
+        ("cos (1e6 f32) simd kernel", "np.cos(a)", {"a": million_f32, "np": np}),
+        ("tan (1e6 f32) simd kernel", "np.tan(a)", {"a": million_f32, "np": np}),
+        ("tanh (1e6 f32) simd kernel", "np.tanh(a)", {"a": million_f32, "np": np}),
+        ("sigmoid (1e6 f32) simd kernel", "1.0 / (1.0 + np.exp(-a))", {"a": million_f32, "np": np}),
         ("standard_normal (4096x4096)", "rng.standard_normal((4096, 4096))", {"rng": rng}),
         ("sort (1e6 f64)", "np.sort(a)", {"a": sort_input, "np": np}),
         ("sort (1e7 f64)", "np.sort(a)", {"a": sort_1e7_input, "np": np}),
