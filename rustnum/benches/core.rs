@@ -322,9 +322,57 @@ fn array_benches(c: &mut Criterion) {
     c.bench_function("inv (200x200)", |b| {
         b.iter(|| black_box(np::linalg::inv(&inv_input).unwrap()))
     });
+    let mut inv_1000_values = array_data(1000 * 1000);
+    for i in 0..1000 {
+        inv_1000_values[i * 1000 + i] += 1250.0;
+    }
+    let inv_1000_input = np::Array::from_vec(inv_1000_values, &[1000, 1000]);
+    c.bench_function("inv (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::inv(&inv_1000_input).unwrap()))
+    });
+
     let svd_input = np::Array::from_vec(array_data(100 * 100), &[100, 100]);
     c.bench_function("svd (100x100)", |b| {
         b.iter(|| black_box(np::linalg::svd(&svd_input)))
+    });
+    let svd_500_input = np::Array::from_vec(array_data(500 * 500), &[500, 500]);
+    c.bench_function("svd (500x500)", |b| {
+        b.iter(|| black_box(np::linalg::svd(&svd_500_input)))
+    });
+
+    let mut sym_500_values = array_data(500 * 500);
+    for i in 0..500 {
+        for j in 0..i {
+            let val = sym_500_values[i * 500 + j];
+            sym_500_values[j * 500 + i] = val;
+        }
+    }
+    let eigh_500_input = np::Array::from_vec(sym_500_values, &[500, 500]);
+    c.bench_function("eigh (500x500)", |b| {
+        b.iter(|| black_box(np::linalg::eigh(&eigh_500_input)))
+    });
+
+    let qr_1000_input = np::Array::from_vec(array_data(1000 * 1000), &[1000, 1000]);
+    c.bench_function("qr (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::qr(&qr_1000_input)))
+    });
+
+    let mut chol_1000_values = array_data(1000 * 1000);
+    for i in 0..1000 {
+        for j in 0..i {
+            let val = chol_1000_values[i * 1000 + j];
+            chol_1000_values[j * 1000 + i] = val;
+        }
+        chol_1000_values[i * 1000 + i] += 2000.0;
+    }
+    let chol_1000_input = np::Array::from_vec(chol_1000_values, &[1000, 1000]);
+    c.bench_function("cholesky (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::cholesky(&chol_1000_input).unwrap()))
+    });
+
+    let solve_1000_b = np::Array::from_vec(array_data(1000), &[1000]);
+    c.bench_function("solve (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::solve(&inv_1000_input, &solve_1000_b).unwrap()))
     });
     for n in [256, 512, 1024, 2048, 4096] {
         let left = np::Array::from_vec(array_data(n * n), &[n, n]);

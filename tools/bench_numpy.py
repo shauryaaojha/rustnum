@@ -29,7 +29,15 @@ def main() -> None:
     sort_input = rng.standard_normal(1_000_000)
     sort_1e7_input = rng.standard_normal(10_000_000)
     inv_input = rng.standard_normal((200, 200)) + np.eye(200) * 250
+    inv_1000_input = rng.standard_normal((1000, 1000)) + np.eye(1000) * 1250
     svd_input = rng.standard_normal((100, 100))
+    svd_500_input = rng.standard_normal((500, 500))
+    sym_500_input = rng.standard_normal((500, 500))
+    sym_500_input = np.ascontiguousarray(sym_500_input + sym_500_input.T)
+    qr_1000_input = rng.standard_normal((1000, 1000))
+    chol_raw = rng.standard_normal((1000, 1000))
+    chol_1000_input = np.ascontiguousarray(chol_raw + chol_raw.T + np.eye(1000) * 2000.0)
+    solve_1000_b = rng.standard_normal(1000)
 
     cases: list[tuple[str, str, dict[str, object]]] = [
         ("add (1e6 f64, contiguous)", "a + b", {"a": million, "b": million}),
@@ -67,7 +75,13 @@ def main() -> None:
         ("sort (1e6 f64)", "np.sort(a)", {"a": sort_input, "np": np}),
         ("sort (1e7 f64)", "np.sort(a)", {"a": sort_1e7_input, "np": np}),
         ("inv (200x200)", "np.linalg.inv(a)", {"a": inv_input, "np": np}),
+        ("inv (1000x1000)", "np.linalg.inv(a)", {"a": inv_1000_input, "np": np}),
         ("svd (100x100)", "np.linalg.svd(a, full_matrices=False)", {"a": svd_input, "np": np}),
+        ("svd (500x500)", "np.linalg.svd(a, full_matrices=False)", {"a": svd_500_input, "np": np}),
+        ("eigh (500x500)", "np.linalg.eigh(a)", {"a": sym_500_input, "np": np}),
+        ("qr (1000x1000)", "np.linalg.qr(a, mode='reduced')", {"a": qr_1000_input, "np": np}),
+        ("cholesky (1000x1000)", "np.linalg.cholesky(a)", {"a": chol_1000_input, "np": np}),
+        ("solve (1000x1000)", "np.linalg.solve(a, b)", {"a": inv_1000_input, "b": solve_1000_b, "np": np}),
     ]
     for n in (256, 512, 1024, 2048, 4096):
         left = rng.standard_normal((n, n))
