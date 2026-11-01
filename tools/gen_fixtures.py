@@ -301,6 +301,23 @@ def main():
     fd3 = np.zeros((3, 3, 3)); np.fill_diagonal(fd3, -1.0)
     save_case("fill_diagonal_3d", "fill_diagonal", [np.zeros((3, 3, 3))], {"val": -1.0}, fd3, "float64", 0.0, 0.0)
 
+    # -- group 4: shape and creation --
+    r90 = rng.standard_normal((3, 4, 5))
+    save_case("rot90_k3_axes12", "rot90", [r90], {"k": 3, "a0": 1, "a1": 2}, np.rot90(r90, 3, axes=(1, 2)), "float64", 0.0, 0.0)
+    save_case("rot90_kneg1_axes02", "rot90", [r90], {"k": -1, "a0": 0, "a1": 2}, np.rot90(r90, -1, axes=(0, 2)), "float64", 0.0, 0.0)
+    ds_a, ds_b = rng.standard_normal((3, 4)), rng.standard_normal((3, 4))
+    save_case("dstack_2d", "dstack", [ds_a, ds_b], {}, np.dstack([ds_a, ds_b]), "float64", 0.0, 0.0)
+    cs_a, cs_b = rng.standard_normal(5), rng.standard_normal((5, 2))
+    save_case("column_stack_mixed", "column_stack", [cs_a, cs_b], {}, np.column_stack([cs_a, cs_b]), "float64", 0.0, 0.0)
+    save_case("geomspace_50", "geomspace", [], {"start": 0.5, "stop": 4096.0, "num": 50}, np.geomspace(0.5, 4096.0, 50), "float64", 1e-12, 0.0)
+    save_case("geomspace_neg", "geomspace", [], {"start": -3.0, "stop": -0.001, "num": 17}, np.geomspace(-3.0, -0.001, 17), "float64", 1e-12, 0.0)
+    van = rng.standard_normal(6)
+    save_case("vander_inc", "vander", [van], {"n": 5, "inc": 1}, np.vander(van, 5, increasing=True), "float64", 1e-12, 0.0)
+    save_case("vander_dec", "vander", [van], {"n": 4, "inc": 0}, np.vander(van, 4), "float64", 1e-12, 0.0)
+    rnd = rng.standard_normal(40) * 100
+    save_case("around_2", "around", [rnd], {"decimals": 2}, np.around(rnd, 2), "float64", 1e-12, 1e-12)
+    save_case("around_neg1", "around", [rnd], {"decimals": -1}, np.around(rnd, -1), "float64", 1e-12, 1e-12)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

@@ -241,3 +241,8 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 - `np::tril_indices(n, k, None)`, `triu_indices`, `tril_indices_from(&a, k)`, `triu_indices_from` -> `(rows, cols)`
 - `np::diag_indices(n, ndim)`, `diag_indices_from(&a)`, `np::fill_diagonal(&mut a, val, wrap)`, `np::mask_indices(n, f, k)`
 - `np::ndindex(&shape)`, `np::ndenumerate(&a)` — iterators
+
+## Shape and creation extras (added after v0.1)
+- `np::rot90(&m, k, (0, 1))`, `np::dstack(&[..])`, `np::column_stack(&[..])`, `np::row_stack(&[..])`, `np::atleast_1d/2d/3d(&a)`
+- `np::geomspace(start, stop, num)`, `np::vander(&x, Some(n), false)`, `np::fromiter(iter, None)`, `np::frombuffer::<T>(&bytes, None, 0)`
+- `np::around(&a, decimals)`, `np::real_if_close(&re, &im, tol)` (pair form), `a.is_posinf()`, `a.is_neginf()`

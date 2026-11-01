@@ -504,6 +504,23 @@ Added after v0.1. Same conventions as above.
 | `np.ndenumerate(a)` | `np::ndenumerate(&a)` | Iterator of `(Vec<usize>, T)` |
 | `np.mask_indices(n, mask_func, k)` | `np::mask_indices(n, f, k)` | `f(&Array<i64>, isize) -> Array<i64>`, applied to `ones((n, n))` |
 
+### Shape and creation extras
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.rot90(m, k, axes)` | `np::rot90(&m, k, (0, 1))` | View. `k` may be negative; panics `Axes must be different.` |
+| `np.dstack(tup)`, `np.column_stack(tup)` | `np::dstack(&[&a, &b])`, `np::column_stack(&[&a, &b])` |  |
+| `np.row_stack(tup)` | `np::row_stack(&[&a, &b])` | Alias of `np::vstack` (deprecated in NumPy 2) |
+| `np.atleast_1d(a)`, `np.atleast_2d(a)`, `np.atleast_3d(a)` | `np::atleast_1d(&a)`, `np::atleast_2d(&a)`, `np::atleast_3d(&a)` | One array at a time; views |
+| `np.geomspace(start, stop, num)` | `np::geomspace(start, stop, num)` | Float only, endpoint always included (like `linspace`). Panics `Geometric sequence cannot include zero` |
+| `np.vander(x, N, increasing)` | `np::vander(&x, Some(n), false)` | `n` is `Option<usize>` (default `x.len()`); integer powers wrap |
+| `np.fromfunction(f, shape)` | `Array::from_shape_fn(shape, f)` | Already existed under this name (not added again) |
+| `np.fromiter(it, dtype, count)` | `np::fromiter(it, Some(count))` | Element type from the iterator; `None` reads everything |
+| `np.frombuffer(buf, dtype, count, offset)` | `np::frombuffer::<T>(&bytes, count, offset)` | dtype is the type parameter; native byte order; copies the data |
+| `np.around(a, decimals)` | `np::around(&a, decimals)` | Float only. `np.round` already existed as `a.round()` / `a.round_decimals(d)` |
+| `np.real_if_close(a, tol)` | `np::real_if_close(&re, &im, tol)` | Works on a `(re, im)` pair of real arrays; returns `(re, Option<im>)`, `None` when `im` is negligible |
+| `np.isposinf(a)`, `np.isneginf(a)` | `a.is_posinf()`, `a.is_neginf()` | Float only |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

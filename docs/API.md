@@ -267,3 +267,10 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `tril_indices(n, k: isize, m: Option<usize>) -> (Array<usize>, Array<usize>)`, `triu_indices(...)`, `tril_indices_from(&a, k)`, `triu_indices_from(&a, k)`.
 - `diag_indices(n, ndim) -> Vec<Array<usize>>`, `diag_indices_from(&a)`, `fill_diagonal(&mut a, val: impl IntoArray<T>, wrap: bool)`.
 - `ndindex(&[usize]) -> impl Iterator<Item = Vec<usize>>`, `ndenumerate(&a) -> impl Iterator<Item = (Vec<usize>, T)>`, `mask_indices(n, mask_func: impl Fn(&Array<i64>, isize) -> Array<i64>, k)`.
+
+## 25. Shape and creation extras
+
+- `rot90(&a, k: isize, axes: (isize, isize))`, `dstack(&[&Array<T>])`, `column_stack(&[&Array<T>])`, `row_stack(&[&Array<T>])`, `atleast_1d/2d/3d(&a)`.
+- `geomspace<F: Float>(start, stop, num)`, `vander<T: Num>(&x, n: Option<usize>, increasing: bool)`, `fromiter(iter, count: Option<usize>)`, `frombuffer::<T>(&[u8], count: Option<usize>, offset: usize)`.
+- `around<F: Float>(&a, decimals: i32)`, `real_if_close(&re, &im, tol) -> (Array<F>, Option<Array<F>>)`, `Array<F>::is_posinf()`, `is_neginf()`.
+- Already present, not re-added: `fromfunction` (`Array::from_shape_fn`), `round` (`Array::round`, `round_decimals`).

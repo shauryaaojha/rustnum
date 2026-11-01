@@ -41,6 +41,7 @@ mod npz;
 mod ops;
 mod pool;
 mod reduce;
+mod shapeextra;
 mod simd_math;
 mod slicing;
 mod sortsearch;
@@ -73,6 +74,10 @@ pub use misc::{
     logaddexp, logaddexp2, nextafter, remainder,
 };
 pub use ops::*;
+pub use shapeextra::{
+    around, atleast_1d, atleast_2d, atleast_3d, column_stack, dstack, frombuffer, fromiter,
+    geomspace, real_if_close, rot90, row_stack, vander,
+};
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
 pub use ufunc::*;

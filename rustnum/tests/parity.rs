@@ -672,6 +672,27 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
             np::fill_diagonal(&mut a, param_f64(case, "val"), op == "fill_diagonal_wrap");
             Ok(RunResult::F64(a))
         }
+        "rot90" => Ok(RunResult::F64(np::rot90(
+            &i[0],
+            param_isize(case, "k"),
+            (param_isize(case, "a0"), param_isize(case, "a1")),
+        ))),
+        "dstack" => Ok(RunResult::F64(np::dstack(&[&i[0], &i[1]]))),
+        "column_stack" => Ok(RunResult::F64(np::column_stack(&[&i[0], &i[1]]))),
+        "geomspace" => Ok(RunResult::F64(np::geomspace(
+            param_f64(case, "start"),
+            param_f64(case, "stop"),
+            param_usize(case, "num"),
+        ))),
+        "vander" => Ok(RunResult::F64(np::vander(
+            &i[0],
+            Some(param_usize(case, "n")),
+            param_usize(case, "inc") == 1,
+        ))),
+        "around" => Ok(RunResult::F64(np::around(
+            &i[0],
+            param_isize(case, "decimals") as i32,
+        ))),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }
