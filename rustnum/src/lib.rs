@@ -29,6 +29,7 @@ mod creation;
 mod display;
 mod element;
 mod extra;
+mod indexing;
 mod kernels_mem;
 mod lanes;
 mod layout;
@@ -60,6 +61,10 @@ pub use extra::api::{
     cov, cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges,
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
+};
+pub use indexing::{
+    diag_indices, diag_indices_from, fill_diagonal, mask_indices, ndenumerate, ndindex,
+    tril_indices, tril_indices_from, triu_indices, triu_indices_from,
 };
 pub use manip::*;
 pub use misc::{

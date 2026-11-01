@@ -236,3 +236,8 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 - `np::lexsort(&[&k0,&k1], axis)` (last key primary), `np::flatnonzero(&a)`, `a.partition(kth, axis)`, `a.argpartition(kth, axis)`
 - `np::select(&[&c..], &[&x..], default)`, `np::piecewise(&x, &[&c..], &[&f..])` (`&dyn Fn(T)->T`), `np::extract(&cond, &a)`
 - `np::place(&mut a, &mask, &[v..])`, `np::copyto(&mut dst, src, Some(&mask))`, `np::trim_zeros(&a, "fb")`
+
+## Index helpers (added after v0.1)
+- `np::tril_indices(n, k, None)`, `triu_indices`, `tril_indices_from(&a, k)`, `triu_indices_from` -> `(rows, cols)`
+- `np::diag_indices(n, ndim)`, `diag_indices_from(&a)`, `np::fill_diagonal(&mut a, val, wrap)`, `np::mask_indices(n, f, k)`
+- `np::ndindex(&shape)`, `np::ndenumerate(&a)` — iterators

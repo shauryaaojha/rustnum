@@ -491,6 +491,19 @@ Added after v0.1. Same conventions as above.
 | `np.copyto(dst, src, where=mask)` | `np::copyto(&mut dst, src, Some(&mask))` | `src` is array-like and broadcasts to `dst`; pass `None` for no mask. No `casting` |
 | `np.trim_zeros(filt, trim='fb')` | `np::trim_zeros(&a, "fb")` | Returns a view. N-d input is trimmed to the bounding box of the non-zeros |
 
+### Index helpers
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.tril_indices(n, k, m)`, `np.triu_indices(n, k, m)` | `np::tril_indices(n, k, None)`, `np::triu_indices(n, k, Some(m))` | Returns `(rows, cols)` as `Array<usize>`; `m` is `Option<usize>` |
+| `np.tril_indices_from(a, k)`, `np.triu_indices_from(a, k)` | `np::tril_indices_from(&a, k)`, `np::triu_indices_from(&a, k)` | Panics `input array must be 2-d` |
+| `np.diag_indices(n, ndim)` | `np::diag_indices(n, ndim)` | `ndim` is required (NumPy default 2). Returns `Vec<Array<usize>>` |
+| `np.diag_indices_from(a)` | `np::diag_indices_from(&a)` | Panics unless all axes are equal and `ndim >= 2` |
+| `np.fill_diagonal(a, val, wrap=False)` | `np::fill_diagonal(&mut a, val, wrap)` | `val` is array-like, cycled. In place (copy-on-write) |
+| `np.ndindex(*shape)` | `np::ndindex(&shape)` | Iterator of `Vec<usize>` in C order |
+| `np.ndenumerate(a)` | `np::ndenumerate(&a)` | Iterator of `(Vec<usize>, T)` |
+| `np.mask_indices(n, mask_func, k)` | `np::mask_indices(n, f, k)` | `f(&Array<i64>, isize) -> Array<i64>`, applied to `ones((n, n))` |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

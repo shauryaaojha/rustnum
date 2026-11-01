@@ -261,3 +261,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `lexsort(keys: &[&Array<T>], axis) -> Array<usize>`, `flatnonzero(&a) -> Array<usize>`, `Array::partition(kth: isize, axis) -> Array<T>`, `Array::argpartition(kth: isize, axis) -> Array<usize>`.
 - `select(condlist: &[&Array<bool>], choicelist: &[&Array<T>], default: T) -> Array<T>`, `piecewise<T: Num>(x, condlist: &[&Array<bool>], funclist: &[&dyn Fn(T) -> T]) -> Array<T>`, `extract(&cond, &a) -> Array<T>`.
 - `place(&mut a, &mask, vals: &[T])`, `copyto(&mut dst, src: impl IntoArray<T>, where_: Option<&Array<bool>>)`, `trim_zeros(&a, trim: &str) -> Array<T>` (view).
+
+## 24. Index helpers
+
+- `tril_indices(n, k: isize, m: Option<usize>) -> (Array<usize>, Array<usize>)`, `triu_indices(...)`, `tril_indices_from(&a, k)`, `triu_indices_from(&a, k)`.
+- `diag_indices(n, ndim) -> Vec<Array<usize>>`, `diag_indices_from(&a)`, `fill_diagonal(&mut a, val: impl IntoArray<T>, wrap: bool)`.
+- `ndindex(&[usize]) -> impl Iterator<Item = Vec<usize>>`, `ndenumerate(&a) -> impl Iterator<Item = (Vec<usize>, T)>`, `mask_indices(n, mask_func: impl Fn(&Array<i64>, isize) -> Array<i64>, k)`.

@@ -291,6 +291,16 @@ def main():
     save_case("select_two", "select", [sel_x], {"lo": -0.5, "hi": 0.5, "default": 99.0}, np.select([sel_x < -0.5, sel_x > 0.5], [sel_x * 2, sel_x * 3], 99.0), "float64", 0.0, 0.0)
     save_case("extract_2d", "extract", [sel_x], {}, np.extract(sel_x > 0, sel_x), "float64", 0.0, 0.0)
 
+    # -- group 3: index helpers --
+    tl = np.tril_indices(6, -1, 8)
+    save_case("tril_indices_6_8", "tril_indices", [], {"n": 6, "k": -1, "m": 8}, np.stack(tl).astype(np.int64), "int64")
+    tu = np.triu_indices(5, 2)
+    save_case("triu_indices_5", "triu_indices", [], {"n": 5, "k": 2, "m": 0}, np.stack(tu).astype(np.int64), "int64")
+    fd = np.zeros((9, 4)); np.fill_diagonal(fd, 3.5, wrap=True)
+    save_case("fill_diagonal_wrap", "fill_diagonal_wrap", [np.zeros((9, 4))], {"val": 3.5}, fd, "float64", 0.0, 0.0)
+    fd3 = np.zeros((3, 3, 3)); np.fill_diagonal(fd3, -1.0)
+    save_case("fill_diagonal_3d", "fill_diagonal", [np.zeros((3, 3, 3))], {"val": -1.0}, fd3, "float64", 0.0, 0.0)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

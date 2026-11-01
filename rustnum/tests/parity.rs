@@ -652,6 +652,26 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
             )))
         }
         "extract" => Ok(RunResult::F64(np::extract(&i[0].gt(0.0), &i[0]))),
+        "tril_indices" | "triu_indices" => {
+            let (n, k) = (param_usize(case, "n"), param_isize(case, "k"));
+            let m = param_usize(case, "m");
+            let m = if m == 0 { None } else { Some(m) };
+            let (r, c) = if op == "tril_indices" {
+                np::tril_indices(n, k, m)
+            } else {
+                np::triu_indices(n, k, m)
+            };
+            Ok(RunResult::I64(
+                np::concatenate(&[&r, &c], 0)
+                    .map(|x| x as i64)
+                    .reshape(&[2, r.size()]),
+            ))
+        }
+        "fill_diagonal_wrap" | "fill_diagonal" => {
+            let mut a = i[0].clone();
+            np::fill_diagonal(&mut a, param_f64(case, "val"), op == "fill_diagonal_wrap");
+            Ok(RunResult::F64(a))
+        }
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }
