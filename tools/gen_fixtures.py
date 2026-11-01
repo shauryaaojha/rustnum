@@ -276,6 +276,21 @@ def main():
     save_case("nanargmax_axis1", "nanargmax_axis", [nan_ok], {"axis": 1}, np.nanargmax(nan_ok, axis=1).astype(np.int64), "int64")
     save_case("nanargmin_all", "nanargmin", [nan_ok], {}, np.array(np.nanargmin(nan_ok), dtype=np.int64), "int64")
 
+    # -- group 2: sorting / searching --
+    lex_a = rng.integers(0, 4, size=(3, 25)).astype(np.float64)
+    lex_a[0, ::7] = np.nan
+    save_case("lexsort_3keys", "lexsort", [lex_a], {"axis": 1}, np.lexsort(lex_a).astype(np.int64), "int64")
+    part_in = rng.integers(0, 50, size=(6, 40)).astype(np.float64)
+    save_case("partition_kth_axis1", "partition_kth", [part_in], {"axis": 1, "kth": 11}, np.partition(part_in, 11, axis=1)[:, 11], "float64", 0.0, 0.0)
+    save_case("partition_kth_axis0", "partition_kth", [part_in], {"axis": 0, "kth": -2}, np.partition(part_in, -2, axis=0)[-2], "float64", 0.0, 0.0)
+    nz_in = np.where(rng.random((7, 9)) < 0.4, rng.standard_normal((7, 9)), 0.0)
+    save_case("flatnonzero_2d", "flatnonzero", [nz_in], {}, np.flatnonzero(nz_in).astype(np.int64), "int64")
+    tz_in = np.zeros((6, 8)); tz_in[2:5, 3:7] = rng.standard_normal((3, 4)); tz_in[3, 4] = 0.0
+    save_case("trim_zeros_2d", "trim_zeros", [tz_in], {}, np.trim_zeros(tz_in), "float64", 0.0, 0.0)
+    sel_x = rng.standard_normal((5, 6))
+    save_case("select_two", "select", [sel_x], {"lo": -0.5, "hi": 0.5, "default": 99.0}, np.select([sel_x < -0.5, sel_x > 0.5], [sel_x * 2, sel_x * 3], 99.0), "float64", 0.0, 0.0)
+    save_case("extract_2d", "extract", [sel_x], {}, np.extract(sel_x > 0, sel_x), "float64", 0.0, 0.0)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

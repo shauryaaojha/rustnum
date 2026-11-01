@@ -231,3 +231,8 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 ## NaN-aware reductions (added after v0.1)
 - `nanvar nanstd` (+ `_ddof(ddof)`, `_axis(axis)`, `_ddof_axis(axis, ddof)`), `nanmedian`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` — floats
 - `nanargmax nanargmin` (flat usize; all-NaN panics), `nanargmax_axis nanargmin_axis`; `nanprod nancumsum nancumprod` (+ `_axis`)
+
+## Sorting, searching and conditional selection (added after v0.1)
+- `np::lexsort(&[&k0,&k1], axis)` (last key primary), `np::flatnonzero(&a)`, `a.partition(kth, axis)`, `a.argpartition(kth, axis)`
+- `np::select(&[&c..], &[&x..], default)`, `np::piecewise(&x, &[&c..], &[&f..])` (`&dyn Fn(T)->T`), `np::extract(&cond, &a)`
+- `np::place(&mut a, &mask, &[v..])`, `np::copyto(&mut dst, src, Some(&mask))`, `np::trim_zeros(&a, "fb")`

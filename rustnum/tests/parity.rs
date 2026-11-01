@@ -616,6 +616,42 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
                 .map(|x| x as i64),
         )),
         "nanargmin" => Ok(RunResult::I64(Array::scalar(i[0].nanargmin() as i64))),
+        "lexsort" => {
+            let rows: Vec<Array<f64>> = (0..i[0].shape()[0])
+                .map(|r| i[0].index_axis(0, r))
+                .collect();
+            let keys: Vec<&Array<f64>> = rows.iter().collect();
+            Ok(RunResult::I64(np::lexsort(&keys, -1).map(|x| x as i64)))
+        }
+        "partition_kth" => {
+            let axis = param_isize(case, "axis");
+            let kth = param_isize(case, "kth");
+            let n = i[0].shape()[if axis < 0 {
+                (axis + 2) as usize
+            } else {
+                axis as usize
+            }] as isize;
+            let k = if kth < 0 { kth + n } else { kth };
+            Ok(RunResult::F64(
+                i[0].partition(kth, axis).index_axis(axis, k as usize),
+            ))
+        }
+        "flatnonzero" => Ok(RunResult::I64(np::flatnonzero(&i[0]).map(|x| x as i64))),
+        "trim_zeros" => Ok(RunResult::F64(np::trim_zeros(&i[0], "fb"))),
+        "select" => {
+            let (lo, hi, def) = (
+                param_f64(case, "lo"),
+                param_f64(case, "hi"),
+                param_f64(case, "default"),
+            );
+            let x = &i[0];
+            Ok(RunResult::F64(np::select(
+                &[&x.lt(lo), &x.gt(hi)],
+                &[&(x * 2.0), &(x * 3.0)],
+                def,
+            )))
+        }
+        "extract" => Ok(RunResult::F64(np::extract(&i[0].gt(0.0), &i[0]))),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

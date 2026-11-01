@@ -42,6 +42,7 @@ mod pool;
 mod reduce;
 mod simd_math;
 mod slicing;
+mod sortsearch;
 mod ufunc;
 
 pub mod fft;
@@ -68,6 +69,7 @@ pub use misc::{
 };
 pub use ops::*;
 pub use slicing::{NEW_AXIS, SliceArg};
+pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
 pub use ufunc::*;
 /// A data error, like NumPy's I/O, parsing, or linear algebra exceptions.
 /// ```

@@ -255,3 +255,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `nanmedian()`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` (q in 0..=100).
 - `nanargmax()`, `nanargmin()` return `usize`; `nanargmax_axis(axis)`, `nanargmin_axis(axis)` return `Array<usize>`; an all-NaN lane panics with `All-NaN slice encountered`.
 - `nanprod()`, `nanprod_axis(axis)`, `nancumsum()`, `nancumprod()`, `nancumsum_axis(axis)`, `nancumprod_axis(axis)`.
+
+## 23. Sorting, searching and conditional selection
+
+- `lexsort(keys: &[&Array<T>], axis) -> Array<usize>`, `flatnonzero(&a) -> Array<usize>`, `Array::partition(kth: isize, axis) -> Array<T>`, `Array::argpartition(kth: isize, axis) -> Array<usize>`.
+- `select(condlist: &[&Array<bool>], choicelist: &[&Array<T>], default: T) -> Array<T>`, `piecewise<T: Num>(x, condlist: &[&Array<bool>], funclist: &[&dyn Fn(T) -> T]) -> Array<T>`, `extract(&cond, &a) -> Array<T>`.
+- `place(&mut a, &mask, vals: &[T])`, `copyto(&mut dst, src: impl IntoArray<T>, where_: Option<&Array<bool>>)`, `trim_zeros(&a, trim: &str) -> Array<T>` (view).

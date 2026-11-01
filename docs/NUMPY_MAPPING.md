@@ -476,6 +476,21 @@ Added after v0.1. Same conventions as above.
 | `np.nancumprod(a)`, `np.nancumprod(a, axis=0)` | `a.nancumprod()`, `a.nancumprod_axis(0)` | NaN counts as 1; flat result without axis |
 | `np.nanquantile` | `np::nanquantile`, `np::nanquantile_axis` | Already existed (see Statistics section) |
 
+### Sorting, searching and conditional selection
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.lexsort(keys, axis=-1)` | `np::lexsort(&[&k0, &k1], -1)` | Last key is primary. `Array<usize>`. Keys must have equal shape |
+| `np.partition(a, kth, axis=-1)` | `a.partition(kth, -1)` | Introselect, O(n). `kth` may be negative; panics `kth(=k) out of bounds (n)`. Single `kth` only |
+| `np.argpartition(a, kth, axis=-1)` | `a.argpartition(kth, -1)` | Returns `Array<usize>` |
+| `np.flatnonzero(a)` | `np::flatnonzero(&a)` | `Array<usize>` |
+| `np.select(condlist, choicelist, default)` | `np::select(&[&c0, &c1], &[&x0, &x1], default)` | First true condition wins; all inputs broadcast |
+| `np.piecewise(x, condlist, funclist)` | `np::piecewise(&x, &[&c0, &c1], &[&f0, &f1])` | Functions are `&dyn Fn(T) -> T`; use `&|_| c` for a constant. One extra function means "otherwise" |
+| `np.extract(condition, arr)` | `np::extract(&cond, &a)` | `cond` is `Array<bool>` |
+| `np.place(arr, mask, vals)` | `np::place(&mut a, &mask, &[v0, v1])` | `vals` repeats cyclically |
+| `np.copyto(dst, src, where=mask)` | `np::copyto(&mut dst, src, Some(&mask))` | `src` is array-like and broadcasts to `dst`; pass `None` for no mask. No `casting` |
+| `np.trim_zeros(filt, trim='fb')` | `np::trim_zeros(&a, "fb")` | Returns a view. N-d input is trimmed to the bounding box of the non-zeros |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

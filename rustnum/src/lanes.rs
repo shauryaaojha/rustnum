@@ -34,3 +34,45 @@ pub(crate) fn map_lanes<T: Element, U: Element>(
     }
     Array::from_owned_shape(out, out_shape)
 }
+
+/// Python-style tuple repr of a shape, as used in NumPy error messages: `(3,)`, `(2, 3)`.
+pub(crate) fn pyshape(shape: &[usize]) -> String {
+    match shape {
+        [] => "()".to_string(),
+        [n] => format!("({n},)"),
+        _ => format!(
+            "({})",
+            shape
+                .iter()
+                .map(|d| d.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+/// Visit every element in C order with its flat index, writing through copy-on-write.
+pub(crate) fn for_each_mut<T: Element>(a: &mut Array<T>, mut f: impl FnMut(usize, &mut T)) {
+    a.prepare_write();
+    let offsets = crate::layout::Offsets::new(&a.shape, &a.strides, a.offset);
+    let data = std::sync::Arc::make_mut(&mut a.data);
+    for (i, off) in offsets.enumerate() {
+        f(i, &mut data[off]);
+    }
+}
+
+/// A view of `a`'s storage with a new shape, strides and offset (no bounds check: callers verify).
+pub(crate) fn view<T: Element>(
+    a: &Array<T>,
+    shape: Vec<usize>,
+    strides: Vec<isize>,
+    offset: usize,
+) -> Array<T> {
+    Array {
+        data: a.data.clone(),
+        recycle: a.recycle,
+        shape,
+        strides,
+        offset,
+    }
+}
