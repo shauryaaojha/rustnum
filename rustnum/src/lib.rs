@@ -45,6 +45,7 @@ mod shapeextra;
 mod simd_math;
 mod slicing;
 mod sortsearch;
+mod stride;
 mod ufunc;
 
 pub mod fft;
@@ -80,6 +81,7 @@ pub use shapeextra::{
 };
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
+pub use stride::{as_strided, sliding_window_view};
 pub use ufunc::*;
 /// A data error, like NumPy's I/O, parsing, or linear algebra exceptions.
 /// ```

@@ -521,6 +521,13 @@ Added after v0.1. Same conventions as above.
 | `np.real_if_close(a, tol)` | `np::real_if_close(&re, &im, tol)` | Works on a `(re, im)` pair of real arrays; returns `(re, Option<im>)`, `None` when `im` is negligible |
 | `np.isposinf(a)`, `np.isneginf(a)` | `a.is_posinf()`, `a.is_neginf()` | Float only |
 
+### Stride tricks
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `sliding_window_view(x, window_shape, axis)` | `np::sliding_window_view(&x, &[3], None)` | Zero-copy overlapping view. `axis` is `Option<&[isize]>`. Writing to it copies first (copy-on-write) |
+| `as_strided(x, shape, strides)` | `np::as_strided(&x, &[3, 2], &[1, 1])` | Strides are in elements, not bytes. Bounds-checked: panics if any element would lie outside the buffer |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

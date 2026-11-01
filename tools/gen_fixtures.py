@@ -318,6 +318,16 @@ def main():
     save_case("around_2", "around", [rnd], {"decimals": 2}, np.around(rnd, 2), "float64", 1e-12, 1e-12)
     save_case("around_neg1", "around", [rnd], {"decimals": -1}, np.around(rnd, -1), "float64", 1e-12, 1e-12)
 
+    # -- group 5: stride tricks --
+    from numpy.lib.stride_tricks import sliding_window_view as swv, as_strided as asd
+    sw = rng.standard_normal((6, 7))
+    save_case("swv_2d_window", "sliding_window_view", [sw], {"w0": 3, "w1": 2}, swv(sw, (3, 2)), "float64", 0.0, 0.0)
+    save_case("swv_axis0", "sliding_window_view_axis", [sw], {"w": 4, "axis": 0}, swv(sw, 4, axis=0), "float64", 0.0, 0.0)
+    sw3 = rng.standard_normal((4, 5, 6))
+    save_case("swv_3d_two_axes", "sliding_window_view_axes", [sw3], {"w0": 2, "w1": 3, "a0": -1, "a1": 0}, swv(sw3, (2, 3), axis=(-1, 0)), "float64", 0.0, 0.0)
+    flat = rng.standard_normal(20)
+    save_case("as_strided_overlap", "as_strided", [flat], {"s0": 3, "s1": 1, "n0": 6, "n1": 4}, asd(flat, (6, 4), (3 * 8, 8)), "float64", 0.0, 0.0)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

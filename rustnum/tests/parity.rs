@@ -693,6 +693,26 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
             &i[0],
             param_isize(case, "decimals") as i32,
         ))),
+        "sliding_window_view" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w0"), param_usize(case, "w1")],
+            None,
+        ))),
+        "sliding_window_view_axis" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w")],
+            Some(&[param_isize(case, "axis")]),
+        ))),
+        "sliding_window_view_axes" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w0"), param_usize(case, "w1")],
+            Some(&[param_isize(case, "a0"), param_isize(case, "a1")]),
+        ))),
+        "as_strided" => Ok(RunResult::F64(np::as_strided(
+            &i[0],
+            &[param_usize(case, "n0"), param_usize(case, "n1")],
+            &[param_isize(case, "s0"), param_isize(case, "s1")],
+        ))),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

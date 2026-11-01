@@ -274,3 +274,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `geomspace<F: Float>(start, stop, num)`, `vander<T: Num>(&x, n: Option<usize>, increasing: bool)`, `fromiter(iter, count: Option<usize>)`, `frombuffer::<T>(&[u8], count: Option<usize>, offset: usize)`.
 - `around<F: Float>(&a, decimals: i32)`, `real_if_close(&re, &im, tol) -> (Array<F>, Option<Array<F>>)`, `Array<F>::is_posinf()`, `is_neginf()`.
 - Already present, not re-added: `fromfunction` (`Array::from_shape_fn`), `round` (`Array::round`, `round_decimals`).
+
+## 26. Stride tricks
+
+- `sliding_window_view(&x, window_shape: &[usize], axis: Option<&[isize]>) -> Array<T>` is a view with shape `x.shape` (windowed axes shortened to `n - w + 1`) followed by the window shape.
+- `as_strided(&x, shape: &[usize], strides: &[isize]) -> Array<T>` is bounds-checked (element strides, from `x`'s first element) and panics instead of reading outside the buffer.
+- Writes to a view whose elements overlap in memory first copy the view, so logical elements stay independent.

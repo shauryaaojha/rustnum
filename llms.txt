@@ -246,3 +246,6 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 - `np::rot90(&m, k, (0, 1))`, `np::dstack(&[..])`, `np::column_stack(&[..])`, `np::row_stack(&[..])`, `np::atleast_1d/2d/3d(&a)`
 - `np::geomspace(start, stop, num)`, `np::vander(&x, Some(n), false)`, `np::fromiter(iter, None)`, `np::frombuffer::<T>(&bytes, None, 0)`
 - `np::around(&a, decimals)`, `np::real_if_close(&re, &im, tol)` (pair form), `a.is_posinf()`, `a.is_neginf()`
+
+## Stride tricks (added after v0.1)
+- `np::sliding_window_view(&x, &[w], None)` — zero-copy view; `np::as_strided(&x, &shape, &strides)` — element strides, bounds-checked
