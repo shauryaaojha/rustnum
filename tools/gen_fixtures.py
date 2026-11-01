@@ -258,6 +258,24 @@ def main():
     save_case("outer_product", "outer", [v1, v2], {}, np.outer(v1, v2), "float64")
     save_case("trace_matrix", "trace", [m3], {}, np.array(np.trace(m3)), "float64")
 
+    # =========================================================================
+    # 10. numpy-extra groups (nan-functions, sorting, indices, shapes, ...)
+    # =========================================================================
+    nan_in = rng.standard_normal((4, 5, 3))
+    nan_in[rng.random(nan_in.shape) < 0.25] = np.nan
+    nan_in[:, 2, 0] = np.nan  # an all-NaN lane along axis 1
+    nan_ok = nan_in.copy()
+    nan_ok[:, 2, :] = rng.standard_normal((4, 3))  # no all-NaN lane (for arg*)
+    save_case("nanvar_axis1", "nanvar_ddof_axis", [nan_in], {"axis": 1, "ddof": 1}, np.nanvar(nan_in, axis=1, ddof=1), "float64", 1e-10, 1e-12)
+    save_case("nanstd_all", "nanstd", [nan_in], {}, np.array(np.nanstd(nan_in)), "float64", 1e-10, 1e-12)
+    save_case("nanmedian_axis0", "nanmedian_axis", [nan_in], {"axis": 0}, np.nanmedian(nan_in, axis=0), "float64", 1e-10, 1e-12)
+    save_case("nanpercentile_axis2", "nanpercentile_axis", [nan_in], {"axis": 2, "q": 37.0}, np.nanpercentile(nan_in, 37.0, axis=2), "float64", 1e-10, 1e-12)
+    save_case("nancumsum_axis1", "nancumsum_axis", [nan_in], {"axis": 1}, np.nancumsum(nan_in, axis=1), "float64", 1e-10, 1e-12)
+    save_case("nancumprod_axis2", "nancumprod_axis", [nan_in], {"axis": 2}, np.nancumprod(nan_in, axis=2), "float64", 1e-10, 1e-12)
+    save_case("nanprod_axis0", "nanprod_axis", [nan_in], {"axis": 0}, np.nanprod(nan_in, axis=0), "float64", 1e-10, 1e-12)
+    save_case("nanargmax_axis1", "nanargmax_axis", [nan_ok], {"axis": 1}, np.nanargmax(nan_ok, axis=1).astype(np.int64), "int64")
+    save_case("nanargmin_all", "nanargmin", [nan_ok], {}, np.array(np.nanargmin(nan_ok), dtype=np.int64), "int64")
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

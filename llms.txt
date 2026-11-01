@@ -227,3 +227,7 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 - docs/API.md — binding API contract
 - docs/ARCHITECTURE.md — internals and how to add a function
 - rustnum/examples/ — quickstart, linear_regression, pca, kmeans, image_ops
+
+## NaN-aware reductions (added after v0.1)
+- `nanvar nanstd` (+ `_ddof(ddof)`, `_axis(axis)`, `_ddof_axis(axis, ddof)`), `nanmedian`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` — floats
+- `nanargmax nanargmin` (flat usize; all-NaN panics), `nanargmax_axis nanargmin_axis`; `nanprod nancumsum nancumprod` (+ `_axis`)

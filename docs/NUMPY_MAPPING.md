@@ -457,6 +457,25 @@ use `a.take(&np::nonzero(&cond)[0].to_vec(), 0)` or `a.compress(&cond, 0)`.
 **15. Complex data is represented as `(re, im)` pairs.** `Array` does not yet have a complex element type; `np::fft::fft`,
 `np::poly::roots`, and `np::linalg::eig` take or return pairs of real arrays `(re, im)`. Scalar complex arithmetic is available via `np::Complex<F>`.
 
+## More NumPy functions
+
+Added after v0.1. Same conventions as above.
+
+### NaN-aware reductions
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.nanvar(a)`, `np.nanvar(a, axis=0)` | `a.nanvar()`, `a.nanvar_axis(0)` | Float only. `ddof`: `a.nanvar_ddof(1)`, `a.nanvar_ddof_axis(0, 1)` |
+| `np.nanstd(a)`, `np.nanstd(a, axis=0)` | `a.nanstd()`, `a.nanstd_axis(0)` | Float only. `ddof`: `a.nanstd_ddof(1)`, `a.nanstd_ddof_axis(0, 1)` |
+| `np.nanmedian(a)`, `np.nanmedian(a, axis=0)` | `a.nanmedian()`, `a.nanmedian_axis(0)` | All-NaN lane gives NaN |
+| `np.nanpercentile(a, q)`, `np.nanpercentile(a, q, axis=0)` | `a.nanpercentile(q)`, `a.nanpercentile_axis(q, 0)` | `q` in 0..=100, else panics `Percentiles must be in the range [0, 100]` |
+| `np.nanargmax(a)`, `np.nanargmin(a)` | `a.nanargmax()`, `a.nanargmin()` | Flat index. All-NaN input panics `All-NaN slice encountered` |
+| `np.nanargmax(a, axis=0)`, `np.nanargmin(a, axis=0)` | `a.nanargmax_axis(0)`, `a.nanargmin_axis(0)` | `Array<usize>` |
+| `np.nanprod(a)`, `np.nanprod(a, axis=0)` | `a.nanprod()`, `a.nanprod_axis(0)` | NaN counts as 1 |
+| `np.nancumsum(a)`, `np.nancumsum(a, axis=0)` | `a.nancumsum()`, `a.nancumsum_axis(0)` | NaN counts as 0; flat result without axis |
+| `np.nancumprod(a)`, `np.nancumprod(a, axis=0)` | `a.nancumprod()`, `a.nancumprod_axis(0)` | NaN counts as 1; flat result without axis |
+| `np.nanquantile` | `np::nanquantile`, `np::nanquantile_axis` | Already existed (see Statistics section) |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

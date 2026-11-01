@@ -586,6 +586,36 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
             Ok(RunResult::F64(Array::scalar(i[0].trace())))
         }
 
+        _ => run_extra_case(fixture_dir, case, op),
+    }
+}
+
+/// Cases added by the numpy-extra groups.
+fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult, String> {
+    let i = load_f64_inputs(fixture_dir, case);
+    match op {
+        "nanvar_ddof_axis" => Ok(RunResult::F64(
+            i[0].nanvar_ddof_axis(param_isize(case, "axis"), param_usize(case, "ddof")),
+        )),
+        "nanstd" => Ok(RunResult::F64(Array::scalar(i[0].nanstd()))),
+        "nanmedian_axis" => Ok(RunResult::F64(
+            i[0].nanmedian_axis(param_isize(case, "axis")),
+        )),
+        "nanpercentile_axis" => Ok(RunResult::F64(
+            i[0].nanpercentile_axis(param_f64(case, "q"), param_isize(case, "axis")),
+        )),
+        "nancumsum_axis" => Ok(RunResult::F64(
+            i[0].nancumsum_axis(param_isize(case, "axis")),
+        )),
+        "nancumprod_axis" => Ok(RunResult::F64(
+            i[0].nancumprod_axis(param_isize(case, "axis")),
+        )),
+        "nanprod_axis" => Ok(RunResult::F64(i[0].nanprod_axis(param_isize(case, "axis")))),
+        "nanargmax_axis" => Ok(RunResult::I64(
+            i[0].nanargmax_axis(param_isize(case, "axis"))
+                .map(|x| x as i64),
+        )),
+        "nanargmin" => Ok(RunResult::I64(Array::scalar(i[0].nanargmin() as i64))),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

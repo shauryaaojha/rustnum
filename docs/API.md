@@ -248,3 +248,10 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - The private cache uses thread-safe `(TypeId, exact capacity)` buckets for buffers of at least 1 MiB. A buffer exceeding remaining capacity is dropped immediately. Cached payload capacities count against the cap; small bookkeeping allocations do not.
 - Final unique array owners return buffers to the cache. Views and clones never release live shared storage. An iterator can outlive its array; if it is the final Arc owner, that storage goes directly to the allocator when the iterator ends.
 - Creation, element-wise output, and copying kernels obtain cached initialized buffers. Kernels overwrite every output before it is observable; no uninitialized reads or unsafe pool code are used. `from_vec` adopts the supplied Vec directly, so producers outside these kernels (including the existing GEMM implementation) do not acquire pooled buffers.
+
+## 22. NaN-aware reductions
+
+- `Array<F: Float>` methods `nanvar`, `nanvar_ddof(ddof)`, `nanvar_axis(axis)`, `nanvar_ddof_axis(axis, ddof)`, and the same four for `nanstd`.
+- `nanmedian()`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` (q in 0..=100).
+- `nanargmax()`, `nanargmin()` return `usize`; `nanargmax_axis(axis)`, `nanargmin_axis(axis)` return `Array<usize>`; an all-NaN lane panics with `All-NaN slice encountered`.
+- `nanprod()`, `nanprod_axis(axis)`, `nancumsum()`, `nancumprod()`, `nancumsum_axis(axis)`, `nancumprod_axis(axis)`.
