@@ -33,11 +33,30 @@ pub trait KernelFloat:
     fn is_finite(self) -> bool;
     fn sin_cos(self) -> (Self, Self);
     fn atan2(self, other: Self) -> Self;
+    fn hypot(self, other: Self) -> Self;
     fn from_usize(value: usize) -> Self;
+
+    #[allow(clippy::too_many_arguments)]
+    fn gemm_stride(
+        m: usize,
+        k: usize,
+        n: usize,
+        alpha: Self,
+        a: &[Self],
+        a_row_stride: isize,
+        a_col_stride: isize,
+        b: &[Self],
+        b_row_stride: isize,
+        b_col_stride: isize,
+        beta: Self,
+        c: &mut [Self],
+        c_row_stride: isize,
+        c_col_stride: isize,
+    );
 }
 
 macro_rules! impl_kernel_float {
-    ($type:ty) => {
+    ($type:ty, $gemm_fn:ident) => {
         impl KernelFloat for $type {
             const ZERO: Self = 0.0;
             const ONE: Self = 1.0;
@@ -65,15 +84,51 @@ macro_rules! impl_kernel_float {
             fn atan2(self, other: Self) -> Self {
                 self.atan2(other)
             }
+            fn hypot(self, other: Self) -> Self {
+                self.hypot(other)
+            }
             fn from_usize(value: usize) -> Self {
                 value as Self
+            }
+            fn gemm_stride(
+                m: usize,
+                k: usize,
+                n: usize,
+                alpha: Self,
+                a: &[Self],
+                a_row_stride: isize,
+                a_col_stride: isize,
+                b: &[Self],
+                b_row_stride: isize,
+                b_col_stride: isize,
+                beta: Self,
+                c: &mut [Self],
+                c_row_stride: isize,
+                c_col_stride: isize,
+            ) {
+                $gemm_fn(
+                    m,
+                    k,
+                    n,
+                    alpha,
+                    a,
+                    a_row_stride,
+                    a_col_stride,
+                    b,
+                    b_row_stride,
+                    b_col_stride,
+                    beta,
+                    c,
+                    c_row_stride,
+                    c_col_stride,
+                );
             }
         }
     };
 }
 
-impl_kernel_float!(f32);
-impl_kernel_float!(f64);
+impl_kernel_float!(f32, gemm_f32);
+impl_kernel_float!(f64, gemm_f64);
 
 /// Failure returned by a numerical kernel before it is mapped to `rustnum::Error`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -330,32 +385,146 @@ impl<T: KernelFloat> Lu<T> {
         let mut lu = a.to_vec();
         let mut pivots = (0..n).collect::<Vec<_>>();
         let mut swaps = 0;
-        for col in 0..n {
-            let mut pivot = col;
-            let mut largest = lu[col * n + col].abs();
-            for row in col + 1..n {
-                let candidate = lu[row * n + col].abs();
-                if candidate > largest {
-                    largest = candidate;
-                    pivot = row;
+        if n <= 32 {
+            for col in 0..n {
+                let mut pivot = col;
+                let mut largest = lu[col * n + col].abs();
+                for row in col + 1..n {
+                    let candidate = lu[row * n + col].abs();
+                    if candidate > largest {
+                        largest = candidate;
+                        pivot = row;
+                    }
+                }
+                if largest == T::ZERO {
+                    return Err(KernelError::Singular);
+                }
+                pivots[col] = pivot;
+                if pivot != col {
+                    for j in 0..n {
+                        lu.swap(col * n + j, pivot * n + j);
+                    }
+                    swaps += 1;
+                }
+                let diagonal = lu[col * n + col];
+                for row in col + 1..n {
+                    let multiplier = lu[row * n + col] / diagonal;
+                    lu[row * n + col] = multiplier;
+                    for j in col + 1..n {
+                        lu[row * n + j] = lu[row * n + j] - multiplier * lu[col * n + j];
+                    }
                 }
             }
-            if largest == T::ZERO {
-                return Err(KernelError::Singular);
-            }
-            pivots[col] = pivot;
-            if pivot != col {
-                for j in 0..n {
-                    lu.swap(col * n + j, pivot * n + j);
+        } else {
+            let nb = if n >= 256 { 64 } else { 32 };
+            let mut l21 = Vec::new();
+            for j_block in (0..n).step_by(nb) {
+                let jb = (n - j_block).min(nb);
+                // Unblocked panel factorisation for columns j_block .. j_block + jb
+                for k in 0..jb {
+                    let col = j_block + k;
+                    let mut pivot = col;
+                    let mut largest = lu[col * n + col].abs();
+                    for row in col + 1..n {
+                        let candidate = lu[row * n + col].abs();
+                        if candidate > largest {
+                            largest = candidate;
+                            pivot = row;
+                        }
+                    }
+                    if largest == T::ZERO {
+                        return Err(KernelError::Singular);
+                    }
+                    pivots[col] = pivot;
+                    if pivot != col {
+                        for j in 0..j_block + jb {
+                            lu.swap(col * n + j, pivot * n + j);
+                        }
+                        swaps += 1;
+                    }
+                    let diagonal = lu[col * n + col];
+                    let inv_diagonal = T::ONE / diagonal;
+                    for row in col + 1..n {
+                        let multiplier = lu[row * n + col] * inv_diagonal;
+                        lu[row * n + col] = multiplier;
+                        if multiplier != T::ZERO {
+                            for j in col + 1..j_block + jb {
+                                lu[row * n + j] = lu[row * n + j] - multiplier * lu[col * n + j];
+                            }
+                        }
+                    }
                 }
-                swaps += 1;
-            }
-            let diagonal = lu[col * n + col];
-            for row in col + 1..n {
-                let multiplier = lu[row * n + col] / diagonal;
-                lu[row * n + col] = multiplier;
-                for j in col + 1..n {
-                    lu[row * n + j] = lu[row * n + j] - multiplier * lu[col * n + j];
+                // Apply panel row swaps to the trailing columns
+                if j_block + jb < n {
+                    for k in 0..jb {
+                        let col = j_block + k;
+                        let pivot = pivots[col];
+                        if pivot != col {
+                            let (first, second) = if col < pivot {
+                                let (h, t) = lu.split_at_mut(pivot * n);
+                                (
+                                    &mut h[col * n + j_block + jb..col * n + n],
+                                    &mut t[j_block + jb..n],
+                                )
+                            } else {
+                                let (h, t) = lu.split_at_mut(col * n);
+                                (
+                                    &mut h[pivot * n + j_block + jb..pivot * n + n],
+                                    &mut t[j_block + jb..n],
+                                )
+                            };
+                            first.swap_with_slice(second);
+                        }
+                    }
+                    // Triangular solve for U12 (rows j_block..j_block+jb, cols j_block+jb..n)
+                    let trailing_cols = n - j_block - jb;
+                    for i in 0..jb {
+                        let row = j_block + i;
+                        for k in 0..i {
+                            let mult = lu[row * n + j_block + k];
+                            if mult != T::ZERO {
+                                let src_offset = (j_block + k) * n + j_block + jb;
+                                let dst_offset = row * n + j_block + jb;
+                                let (src, dst) = {
+                                    let (h, t) = lu.split_at_mut(dst_offset);
+                                    (
+                                        &h[src_offset..src_offset + trailing_cols],
+                                        &mut t[..trailing_cols],
+                                    )
+                                };
+                                for (d, &s) in dst.iter_mut().zip(src) {
+                                    *d = *d - mult * s;
+                                }
+                            }
+                        }
+                    }
+                    // Trailing update A22 -= L21 * U12 through gemm
+                    let m = n - j_block - jb;
+                    let k_dim = jb;
+                    let n_dim = n - j_block - jb;
+                    l21.clear();
+                    l21.reserve(m * k_dim);
+                    for row in j_block + jb..n {
+                        l21.extend_from_slice(&lu[row * n + j_block..row * n + j_block + jb]);
+                    }
+                    let (top, bottom) = lu.split_at_mut((j_block + jb) * n);
+                    let u12 = &top[j_block * n + j_block + jb..];
+                    T::gemm_stride(
+                        m,
+                        k_dim,
+                        n_dim,
+                        -T::ONE,
+                        &l21,
+                        k_dim as isize,
+                        1,
+                        u12,
+                        n as isize,
+                        1,
+                        T::ONE,
+                        &mut bottom[j_block + jb..],
+                        n as isize,
+                        1,
+                    );
                 }
             }
         }
@@ -383,44 +552,162 @@ impl<T: KernelFloat> Lu<T> {
             return Err(KernelError::Shape);
         }
         let mut x = rhs.to_vec();
+        self.solve_in_place(&mut x, rhs_cols)?;
+        Ok(x)
+    }
+
+    /// Solves `AX=B` in-place, overwriting `x`.
+    pub(crate) fn solve_in_place(&self, x: &mut [T], rhs_cols: usize) -> Result<(), KernelError> {
+        let n = self.pivots.len();
+        if x.len() != n * rhs_cols {
+            return Err(KernelError::Shape);
+        }
         for col in 0..n {
             let pivot = self.pivots[col];
             if pivot != col {
+                let (first, second) = if col < pivot {
+                    let (h, t) = x.split_at_mut(pivot * rhs_cols);
+                    (
+                        &mut h[col * rhs_cols..(col + 1) * rhs_cols],
+                        &mut t[..rhs_cols],
+                    )
+                } else {
+                    let (h, t) = x.split_at_mut(col * rhs_cols);
+                    (
+                        &mut h[pivot * rhs_cols..(pivot + 1) * rhs_cols],
+                        &mut t[..rhs_cols],
+                    )
+                };
+                first.swap_with_slice(second);
+            }
+        }
+        if rhs_cols <= 16 || n <= 32 {
+            for row in 0..n {
                 for j in 0..rhs_cols {
-                    x.swap(col * rhs_cols + j, pivot * rhs_cols + j);
+                    let mut value = x[row * rhs_cols + j];
+                    for k in 0..row {
+                        value = value - self.lu[row * n + k] * x[k * rhs_cols + j];
+                    }
+                    x[row * rhs_cols + j] = value;
+                }
+            }
+            for row in (0..n).rev() {
+                let diag = self.lu[row * n + row];
+                let inv_diag = T::ONE / diag;
+                for j in 0..rhs_cols {
+                    let mut value = x[row * rhs_cols + j];
+                    for k in row + 1..n {
+                        value = value - self.lu[row * n + k] * x[k * rhs_cols + j];
+                    }
+                    x[row * rhs_cols + j] = value * inv_diag;
+                }
+            }
+        } else {
+            let nb = if n >= 256 { 64 } else { 32 };
+            // Solve L Y = P B (unit lower triangular)
+            for j_block in (0..n).step_by(nb) {
+                let jb = (n - j_block).min(nb);
+                for i in 0..jb {
+                    let row = j_block + i;
+                    for k in 0..i {
+                        let mult = self.lu[row * n + j_block + k];
+                        if mult != T::ZERO {
+                            let src_offset = (j_block + k) * rhs_cols;
+                            let dst_offset = row * rhs_cols;
+                            let (src, dst) = {
+                                let (h, t) = x.split_at_mut(dst_offset);
+                                (&h[src_offset..src_offset + rhs_cols], &mut t[..rhs_cols])
+                            };
+                            for (d, &s) in dst.iter_mut().zip(src) {
+                                *d = *d - mult * s;
+                            }
+                        }
+                    }
+                }
+                let m = n - j_block - jb;
+                if m > 0 {
+                    let (solved, trailing) = x.split_at_mut((j_block + jb) * rhs_cols);
+                    T::gemm_stride(
+                        m,
+                        jb,
+                        rhs_cols,
+                        -T::ONE,
+                        &self.lu[(j_block + jb) * n + j_block..],
+                        n as isize,
+                        1,
+                        &solved[j_block * rhs_cols..],
+                        rhs_cols as isize,
+                        1,
+                        T::ONE,
+                        trailing,
+                        rhs_cols as isize,
+                        1,
+                    );
+                }
+            }
+            // Solve U X = Y (upper triangular)
+            let n_blocks = n.div_ceil(nb);
+            for block_idx in (0..n_blocks).rev() {
+                let j_block = block_idx * nb;
+                let jb = (n - j_block).min(nb);
+                for i in (0..jb).rev() {
+                    let row = j_block + i;
+                    let diag = self.lu[row * n + row];
+                    let inv_diag = T::ONE / diag;
+                    for k in i + 1..jb {
+                        let mult = self.lu[row * n + j_block + k];
+                        if mult != T::ZERO {
+                            let src_offset = (j_block + k) * rhs_cols;
+                            let dst_offset = row * rhs_cols;
+                            let (dst, src) = {
+                                let (h, t) = x.split_at_mut(src_offset);
+                                (&mut h[dst_offset..dst_offset + rhs_cols], &t[..rhs_cols])
+                            };
+                            for (d, &s) in dst.iter_mut().zip(src) {
+                                *d = *d - mult * s;
+                            }
+                        }
+                    }
+                    let row_slice = &mut x[row * rhs_cols..row * rhs_cols + rhs_cols];
+                    for d in row_slice.iter_mut() {
+                        *d = *d * inv_diag;
+                    }
+                }
+                let m = j_block;
+                if m > 0 {
+                    let (leading, current) = x.split_at_mut(j_block * rhs_cols);
+                    T::gemm_stride(
+                        m,
+                        jb,
+                        rhs_cols,
+                        -T::ONE,
+                        &self.lu[j_block..],
+                        n as isize,
+                        1,
+                        &current[..jb * rhs_cols],
+                        rhs_cols as isize,
+                        1,
+                        T::ONE,
+                        leading,
+                        rhs_cols as isize,
+                        1,
+                    );
                 }
             }
         }
-        for row in 0..n {
-            for j in 0..rhs_cols {
-                let mut value = x[row * rhs_cols + j];
-                for k in 0..row {
-                    value = value - self.lu[row * n + k] * x[k * rhs_cols + j];
-                }
-                x[row * rhs_cols + j] = value;
-            }
-        }
-        for row in (0..n).rev() {
-            for j in 0..rhs_cols {
-                let mut value = x[row * rhs_cols + j];
-                for k in row + 1..n {
-                    value = value - self.lu[row * n + k] * x[k * rhs_cols + j];
-                }
-                x[row * rhs_cols + j] = value / self.lu[row * n + row];
-            }
-        }
-        Ok(x)
+        Ok(())
     }
 }
 
 /// Computes a matrix inverse through LU factorisation.
 pub(crate) fn inv<T: KernelFloat>(a: &[T], n: usize) -> Result<Vec<T>, KernelError> {
     let lu = Lu::factor(a, n)?;
-    let mut identity = vec![T::ZERO; n * n];
+    let mut x = vec![T::ZERO; n * n];
     for i in 0..n {
-        identity[i * n + i] = T::ONE;
+        x[i * n + i] = T::ONE;
     }
-    lu.solve(&identity, n)
+    lu.solve_in_place(&mut x, n)?;
+    Ok(x)
 }
 
 /// Computes the lower Cholesky factor of a positive-definite square matrix.
@@ -428,21 +715,91 @@ pub(crate) fn cholesky<T: KernelFloat>(a: &[T], n: usize) -> Result<Vec<T>, Kern
     if a.len() != n * n {
         return Err(KernelError::Shape);
     }
+    if n <= 32 {
+        let mut lower = vec![T::ZERO; n * n];
+        for i in 0..n {
+            for j in 0..=i {
+                let mut sum = a[i * n + j];
+                for k in 0..j {
+                    sum = sum - lower[i * n + k] * lower[j * n + k];
+                }
+                if i == j {
+                    if sum <= T::ZERO {
+                        return Err(KernelError::NotPositiveDefinite);
+                    }
+                    lower[i * n + j] = sum.sqrt();
+                } else {
+                    lower[i * n + j] = sum / lower[j * n + j];
+                }
+            }
+        }
+        return Ok(lower);
+    }
     let mut lower = vec![T::ZERO; n * n];
     for i in 0..n {
         for j in 0..=i {
-            let mut sum = a[i * n + j];
-            for k in 0..j {
-                sum = sum - lower[i * n + k] * lower[j * n + k];
-            }
-            if i == j {
-                if sum <= T::ZERO {
-                    return Err(KernelError::NotPositiveDefinite);
+            lower[i * n + j] = a[i * n + j];
+            lower[j * n + i] = a[i * n + j];
+        }
+    }
+    let nb = if n >= 128 { 64 } else { 32 };
+    for j_block in (0..n).step_by(nb) {
+        let jb = (n - j_block).min(nb);
+        for i in 0..jb {
+            let row = j_block + i;
+            for j in 0..=i {
+                let col = j_block + j;
+                let mut sum = lower[row * n + col];
+                for k in 0..j {
+                    sum = sum - lower[row * n + j_block + k] * lower[col * n + j_block + k];
                 }
-                lower[i * n + j] = sum.sqrt();
-            } else {
-                lower[i * n + j] = sum / lower[j * n + j];
+                if i == j {
+                    if sum <= T::ZERO {
+                        return Err(KernelError::NotPositiveDefinite);
+                    }
+                    lower[row * n + col] = sum.sqrt();
+                } else {
+                    lower[row * n + col] = sum / lower[col * n + col];
+                }
             }
+        }
+        let m = n - j_block - jb;
+        if m > 0 {
+            for row in j_block + jb..n {
+                for j in 0..jb {
+                    let col = j_block + j;
+                    let mut sum = lower[row * n + col];
+                    for k in 0..j {
+                        sum = sum - lower[row * n + j_block + k] * lower[col * n + j_block + k];
+                    }
+                    lower[row * n + col] = sum / lower[col * n + col];
+                }
+            }
+            let mut l21 = Vec::with_capacity(m * jb);
+            for row in j_block + jb..n {
+                l21.extend_from_slice(&lower[row * n + j_block..row * n + j_block + jb]);
+            }
+            T::gemm_stride(
+                m,
+                jb,
+                m,
+                -T::ONE,
+                &l21,
+                jb as isize,
+                1,
+                &l21,
+                1,
+                jb as isize,
+                T::ONE,
+                &mut lower[(j_block + jb) * n + j_block + jb..],
+                n as isize,
+                1,
+            );
+        }
+    }
+    for i in 0..n {
+        for j in i + 1..n {
+            lower[i * n + j] = T::ZERO;
         }
     }
     Ok(lower)
@@ -458,72 +815,290 @@ pub(crate) fn qr<T: KernelFloat>(
         return Err(KernelError::Shape);
     }
     let reduced = rows.min(cols);
-    let mut r = a.to_vec();
-    let mut q_full = vec![T::ZERO; rows * rows];
-    for i in 0..rows {
-        q_full[i * rows + i] = T::ONE;
-    }
-    for k in 0..reduced {
-        // Like LAPACK's dlarfg: when everything below the diagonal is already zero the
-        // reflector is the identity (this also covers zero columns and the last column of a
-        // square matrix), so R keeps its sign and Q is untouched.
-        let mut scale = T::ZERO;
-        let mut below = T::ZERO;
-        for row in k..rows {
-            let magnitude = r[row * cols + k].abs();
-            if magnitude > scale {
-                scale = magnitude;
-            }
-            if row > k && magnitude > below {
-                below = magnitude;
-            }
+    if reduced <= 32 {
+        let mut r = a.to_vec();
+        let mut q_full = vec![T::ZERO; rows * rows];
+        for i in 0..rows {
+            q_full[i * rows + i] = T::ONE;
         }
-        if below == T::ZERO {
-            continue;
-        }
-        // Scaled 2-norm so tiny or huge columns neither underflow nor overflow.
-        let mut norm_sq = T::ZERO;
-        for row in k..rows {
-            let scaled = r[row * cols + k] / scale;
-            norm_sq = norm_sq + scaled * scaled;
-        }
-        let norm = norm_sq.sqrt() * scale;
-        let leading = r[k * cols + k];
-        let signed_norm = if leading >= T::ZERO { norm } else { -norm };
-        let mut v = vec![T::ZERO; rows - k];
-        v[0] = leading + signed_norm;
-        for row in k + 1..rows {
-            v[row - k] = r[row * cols + k];
-        }
-        let beta = T::ONE / (signed_norm * v[0]);
-        for col in k..cols {
-            let mut dot = T::ZERO;
+        for k in 0..reduced {
+            let mut scale = T::ZERO;
+            let mut below = T::ZERO;
             for row in k..rows {
-                dot = dot + v[row - k] * r[row * cols + col];
+                let magnitude = r[row * cols + k].abs();
+                if magnitude > scale {
+                    scale = magnitude;
+                }
+                if row > k && magnitude > below {
+                    below = magnitude;
+                }
             }
+            if below == T::ZERO {
+                continue;
+            }
+            let mut norm_sq = T::ZERO;
             for row in k..rows {
-                r[row * cols + col] = r[row * cols + col] - beta * v[row - k] * dot;
+                let scaled = r[row * cols + k] / scale;
+                norm_sq = norm_sq + scaled * scaled;
+            }
+            let norm = norm_sq.sqrt() * scale;
+            let leading = r[k * cols + k];
+            let signed_norm = if leading >= T::ZERO { norm } else { -norm };
+            let mut v = vec![T::ZERO; rows - k];
+            v[0] = leading + signed_norm;
+            for row in k + 1..rows {
+                v[row - k] = r[row * cols + k];
+            }
+            let beta = T::ONE / (signed_norm * v[0]);
+            for col in k..cols {
+                let mut dot = T::ZERO;
+                for row in k..rows {
+                    dot = dot + v[row - k] * r[row * cols + col];
+                }
+                for row in k..rows {
+                    r[row * cols + col] = r[row * cols + col] - beta * v[row - k] * dot;
+                }
+            }
+            for row in 0..rows {
+                let mut dot = T::ZERO;
+                for col in k..rows {
+                    dot = dot + q_full[row * rows + col] * v[col - k];
+                }
+                for col in k..rows {
+                    q_full[row * rows + col] = q_full[row * rows + col] - beta * dot * v[col - k];
+                }
             }
         }
+        let mut q = vec![T::ZERO; rows * reduced];
         for row in 0..rows {
-            let mut dot = T::ZERO;
-            for col in k..rows {
-                dot = dot + q_full[row * rows + col] * v[col - k];
-            }
-            for col in k..rows {
-                q_full[row * rows + col] = q_full[row * rows + col] - beta * dot * v[col - k];
+            for col in 0..reduced {
+                q[row * reduced + col] = q_full[row * rows + col];
             }
         }
+        let mut reduced_r = vec![T::ZERO; reduced * cols];
+        for row in 0..reduced {
+            for col in row..cols {
+                reduced_r[row * cols + col] = r[row * cols + col];
+            }
+        }
+        return Ok((q, reduced_r, reduced));
     }
+
+    // Blocked Householder QR in compact WY form (V, T) with trailing update through GEMM
+    let mut r = a.to_vec();
+    let nb = if reduced >= 128 { 64 } else { 32 };
+    let mut v_blocks = Vec::new();
+    let mut t_blocks = Vec::new();
+
+    for j_block in (0..reduced).step_by(nb) {
+        let jb = (reduced - j_block).min(nb);
+        let nrows = rows - j_block;
+        let mut v_mat = vec![T::ZERO; nrows * jb];
+        let mut tau = vec![T::ZERO; jb];
+
+        for k in 0..jb {
+            let col = j_block + k;
+            let mut scale = T::ZERO;
+            let mut below = T::ZERO;
+            for row in col..rows {
+                let mag = r[row * cols + col].abs();
+                if mag > scale {
+                    scale = mag;
+                }
+                if row > col && mag > below {
+                    below = mag;
+                }
+            }
+            if below == T::ZERO {
+                tau[k] = T::ZERO;
+                v_mat[k * jb + k] = T::ONE;
+                continue;
+            }
+            let mut norm_sq = T::ZERO;
+            for row in col..rows {
+                let scaled = r[row * cols + col] / scale;
+                norm_sq = norm_sq + scaled * scaled;
+            }
+            let norm = norm_sq.sqrt() * scale;
+            let leading = r[col * cols + col];
+            let signed_norm = if leading >= T::ZERO { norm } else { -norm };
+            let v0 = leading + signed_norm;
+            tau[k] = v0 / signed_norm;
+            r[col * cols + col] = -signed_norm;
+            v_mat[k * jb + k] = T::ONE;
+            for row in col + 1..rows {
+                let val = r[row * cols + col] / v0;
+                r[row * cols + col] = val;
+                v_mat[(row - j_block) * jb + k] = val;
+            }
+            // Apply reflector to rest of panel
+            if k + 1 < jb {
+                let tau_k = tau[k];
+                for c in col + 1..j_block + jb {
+                    let mut dot = r[col * cols + c];
+                    for row in col + 1..rows {
+                        dot = dot + v_mat[(row - j_block) * jb + k] * r[row * cols + c];
+                    }
+                    let factor = tau_k * dot;
+                    r[col * cols + c] = r[col * cols + c] - factor;
+                    for row in col + 1..rows {
+                        r[row * cols + c] =
+                            r[row * cols + c] - factor * v_mat[(row - j_block) * jb + k];
+                    }
+                }
+            }
+        }
+
+        // Build T (jb x jb upper triangular)
+        let mut t_mat = vec![T::ZERO; jb * jb];
+        for i in 0..jb {
+            let tau_i = tau[i];
+            if tau_i == T::ZERO {
+                continue;
+            }
+            t_mat[i * jb + i] = tau_i;
+            if i > 0 {
+                let mut z = vec![T::ZERO; i];
+                for j in 0..i {
+                    let mut dot = T::ZERO;
+                    for row in j..nrows {
+                        dot = dot + v_mat[row * jb + j] * v_mat[row * jb + i];
+                    }
+                    z[j] = dot;
+                }
+                for r_idx in 0..i {
+                    let mut sum = T::ZERO;
+                    for c_idx in r_idx..i {
+                        sum = sum + t_mat[r_idx * jb + c_idx] * z[c_idx];
+                    }
+                    t_mat[r_idx * jb + i] = -tau_i * sum;
+                }
+            }
+        }
+
+        // Trailing update through GEMM
+        if j_block + jb < cols {
+            let ncols = cols - j_block - jb;
+            let mut w1 = vec![T::ZERO; jb * ncols];
+            T::gemm_stride(
+                jb,
+                nrows,
+                ncols,
+                T::ONE,
+                &v_mat,
+                1,
+                jb as isize,
+                &r[j_block * cols + j_block + jb..],
+                cols as isize,
+                1,
+                T::ZERO,
+                &mut w1,
+                ncols as isize,
+                1,
+            );
+            let mut w2 = vec![T::ZERO; jb * ncols];
+            T::gemm_stride(
+                jb,
+                jb,
+                ncols,
+                T::ONE,
+                &t_mat,
+                1,
+                jb as isize,
+                &w1,
+                ncols as isize,
+                1,
+                T::ZERO,
+                &mut w2,
+                ncols as isize,
+                1,
+            );
+            T::gemm_stride(
+                nrows,
+                jb,
+                ncols,
+                -T::ONE,
+                &v_mat,
+                jb as isize,
+                1,
+                &w2,
+                ncols as isize,
+                1,
+                T::ONE,
+                &mut r[j_block * cols + j_block + jb..],
+                cols as isize,
+                1,
+            );
+        }
+        v_blocks.push((j_block, nrows, jb, v_mat));
+        t_blocks.push(t_mat);
+    }
+
+    // Accumulate Q (rows x reduced) backwards through GEMM
     let mut q = vec![T::ZERO; rows * reduced];
-    for row in 0..rows {
-        for col in 0..reduced {
-            q[row * reduced + col] = q_full[row * rows + col];
-        }
+    for i in 0..reduced {
+        q[i * reduced + i] = T::ONE;
     }
+    for ((j_block, nrows, jb, v_mat), t_mat) in v_blocks.into_iter().zip(t_blocks).rev() {
+        let ncols = reduced - j_block;
+        let mut w1 = vec![T::ZERO; jb * ncols];
+        T::gemm_stride(
+            jb,
+            nrows,
+            ncols,
+            T::ONE,
+            &v_mat,
+            1,
+            jb as isize,
+            &q[j_block * reduced + j_block..],
+            reduced as isize,
+            1,
+            T::ZERO,
+            &mut w1,
+            ncols as isize,
+            1,
+        );
+        let mut w2 = vec![T::ZERO; jb * ncols];
+        T::gemm_stride(
+            jb,
+            jb,
+            ncols,
+            T::ONE,
+            &t_mat,
+            jb as isize,
+            1,
+            &w1,
+            ncols as isize,
+            1,
+            T::ZERO,
+            &mut w2,
+            ncols as isize,
+            1,
+        );
+        T::gemm_stride(
+            nrows,
+            jb,
+            ncols,
+            -T::ONE,
+            &v_mat,
+            jb as isize,
+            1,
+            &w2,
+            ncols as isize,
+            1,
+            T::ONE,
+            &mut q[j_block * reduced + j_block..],
+            reduced as isize,
+            1,
+        );
+    }
+
+    // Zero lower triangle of R
     let mut reduced_r = vec![T::ZERO; reduced * cols];
     for row in 0..reduced {
-        reduced_r[row * cols..(row + 1) * cols].copy_from_slice(&r[row * cols..(row + 1) * cols]);
+        for col in row..cols {
+            reduced_r[row * cols + col] = r[row * cols + col];
+        }
     }
     Ok((q, reduced_r, reduced))
 }
@@ -619,8 +1194,11 @@ fn largest_component<T: KernelFloat>(column: &[T]) -> T {
     selected
 }
 
-/// Cyclic Jacobi eigensolver for a real symmetric matrix.
-pub(crate) fn eigh<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>), KernelError> {
+/// Cyclic Jacobi eigensolver for a real symmetric matrix (fallback for small n <= 16).
+pub(crate) fn eigh_jacobi<T: KernelFloat>(
+    a: &[T],
+    n: usize,
+) -> Result<(Vec<T>, Vec<T>), KernelError> {
     if a.len() != n * n {
         return Err(KernelError::Shape);
     }
@@ -715,20 +1293,271 @@ pub(crate) fn eigh<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>)
     Ok((values, sorted_vectors))
 }
 
-/// One-sided Jacobi SVD returning reduced `(U, singular_values, Vt, rank_dim)`.
-type Svd<T> = (Vec<T>, Vec<T>, Vec<T>, usize);
-
-pub(crate) fn svd<T: KernelFloat>(
-    a: &[T],
-    rows: usize,
-    cols: usize,
-) -> Result<Svd<T>, KernelError> {
-    if a.len() != rows * cols {
+/// Eigensolver for a real symmetric matrix: Householder tridiagonalisation,
+/// then implicit-shift symmetric QR on the tridiagonal, back-transformation through GEMM.
+pub(crate) fn eigh<T: KernelFloat>(a: &[T], n: usize) -> Result<(Vec<T>, Vec<T>), KernelError> {
+    if a.len() != n * n {
         return Err(KernelError::Shape);
     }
     if !a.iter().all(|value| value.is_finite()) {
         return Err(KernelError::NoConvergence);
     }
+    if n <= 16 {
+        return eigh_jacobi(a, n);
+    }
+
+    // 1. Householder tridiagonalisation: A = Q0 T Q0^T
+    let mut work = a.to_vec();
+    let mut reflectors = Vec::with_capacity(n.saturating_sub(2));
+    let mut d = vec![T::ZERO; n];
+    let mut e = vec![T::ZERO; n.saturating_sub(1)];
+
+    for k in 0..n - 2 {
+        let mut scale = T::ZERO;
+        let mut below = T::ZERO;
+        for i in k + 1..n {
+            let mag = work[i * n + k].abs();
+            if mag > scale {
+                scale = mag;
+            }
+            if i > k + 1 && mag > below {
+                below = mag;
+            }
+        }
+        if below == T::ZERO {
+            e[k] = work[(k + 1) * n + k];
+            reflectors.push(None);
+            continue;
+        }
+        let mut norm_sq = T::ZERO;
+        for i in k + 1..n {
+            let s = work[i * n + k] / scale;
+            norm_sq = norm_sq + s * s;
+        }
+        let norm = norm_sq.sqrt() * scale;
+        let leading = work[(k + 1) * n + k];
+        let signed_norm = if leading >= T::ZERO { norm } else { -norm };
+        let v0 = leading + signed_norm;
+        let tau = v0 / signed_norm;
+        let len_v = n - 1 - k;
+        let mut v = vec![T::ZERO; len_v];
+        v[0] = T::ONE;
+        for i in 1..len_v {
+            v[i] = work[(k + 1 + i) * n + k] / v0;
+        }
+        e[k] = -signed_norm;
+
+        let mut u = vec![T::ZERO; len_v];
+        for i in 0..len_v {
+            let mut sum = T::ZERO;
+            for j in 0..len_v {
+                sum = sum + work[(k + 1 + i) * n + k + 1 + j] * v[j];
+            }
+            u[i] = tau * sum;
+        }
+        let mut v_dot_u = T::ZERO;
+        for i in 0..len_v {
+            v_dot_u = v_dot_u + v[i] * u[i];
+        }
+        let half = T::ONE / (T::ONE + T::ONE);
+        let alpha = half * tau * v_dot_u;
+        let mut w = vec![T::ZERO; len_v];
+        for i in 0..len_v {
+            w[i] = u[i] - alpha * v[i];
+        }
+        // Full (both triangles) rank-2 update: contiguous rows vectorise better than mirroring.
+        for i in 0..len_v {
+            let row = (k + 1 + i) * n + k + 1;
+            let (vi, wi) = (v[i], w[i]);
+            for ((a, &vj), &wj) in work[row..row + len_v].iter_mut().zip(&v).zip(&w) {
+                *a = *a - (vi * wj + wi * vj);
+            }
+        }
+        reflectors.push(Some((k, v, tau)));
+    }
+    for i in 0..n {
+        d[i] = work[i * n + i];
+    }
+    if n >= 2 {
+        e[n - 2] = work[(n - 1) * n + n - 2];
+    }
+
+    // Accumulate Q0 (n x n) backwards from reflectors
+    let mut q0 = vec![T::ZERO; n * n];
+    for i in 0..n {
+        q0[i * n + i] = T::ONE;
+    }
+    for (k, v, tau) in reflectors.into_iter().rev().flatten() {
+        let cols = n - 1 - k;
+        // w = tau * v^T Q[k+1.., k+1..], accumulated row by row so every access is contiguous.
+        let mut w = vec![T::ZERO; cols];
+        for (row, &v_row) in v.iter().enumerate() {
+            let start = (k + 1 + row) * n + k + 1;
+            for (w_col, &q) in w.iter_mut().zip(&q0[start..start + cols]) {
+                *w_col = *w_col + v_row * q;
+            }
+        }
+        for w_col in &mut w {
+            *w_col = tau * *w_col;
+        }
+        for (row, &v_row) in v.iter().enumerate() {
+            let start = (k + 1 + row) * n + k + 1;
+            for (q, &w_col) in q0[start..start + cols].iter_mut().zip(&w) {
+                *q = *q - v_row * w_col;
+            }
+        }
+    }
+
+    // 2. Implicit QL with Wilkinson-style shifts on the tridiagonal (d, e), as in EISPACK tql2.
+    // Rotations are accumulated into `zt`, whose rows are the columns of Z, so each one touches
+    // two contiguous rows.
+    let mut e_ext = vec![T::ZERO; n];
+    e_ext[..n - 1].copy_from_slice(&e);
+    let mut zt = vec![T::ZERO; n * n];
+    for i in 0..n {
+        zt[i * n + i] = T::ONE;
+    }
+    tql2(&mut d, &mut e_ext, &mut zt, n)?;
+    let eigenvalues = d;
+
+    // 3. Back-transformation: V = Q0 @ Z = Q0 @ zt^T through GEMM
+    let mut v = vec![T::ZERO; n * n];
+    T::gemm_stride(
+        n,
+        n,
+        n,
+        T::ONE,
+        &q0,
+        n as isize,
+        1,
+        &zt,
+        1,
+        n as isize,
+        T::ZERO,
+        &mut v,
+        n as isize,
+        1,
+    );
+
+    // 4. Sort eigenvalues ascending, permute columns of V
+    let mut ordering = (0..n).collect::<Vec<_>>();
+    ordering.sort_by(|&i, &j| {
+        eigenvalues[i]
+            .partial_cmp(&eigenvalues[j])
+            .unwrap_or(core::cmp::Ordering::Equal)
+    });
+    let mut sorted_vals = vec![T::ZERO; n];
+    let mut sorted_vectors = vec![T::ZERO; n * n];
+    for (new_col, &old_col) in ordering.iter().enumerate() {
+        sorted_vals[new_col] = eigenvalues[old_col];
+        for row in 0..n {
+            sorted_vectors[row * n + new_col] = v[row * n + old_col];
+        }
+        let sign = largest_component(
+            &(0..n)
+                .map(|row| sorted_vectors[row * n + new_col])
+                .collect::<Vec<_>>(),
+        );
+        if sign < T::ZERO {
+            for row in 0..n {
+                sorted_vectors[row * n + new_col] = -sorted_vectors[row * n + new_col];
+            }
+        }
+    }
+
+    Ok((sorted_vals, sorted_vectors))
+}
+
+/// Diagonalises the symmetric tridiagonal matrix with diagonal `d` and off-diagonal `e`
+/// (`e[i]` couples `i` and `i + 1`, `e[n - 1] == 0`) by implicit QL, as EISPACK `tql2`.
+/// On return `d` holds the eigenvalues and row `j` of `zt` has been rotated into eigenvector `j`.
+fn tql2<T: KernelFloat>(
+    d: &mut [T],
+    e: &mut [T],
+    zt: &mut [T],
+    n: usize,
+) -> Result<(), KernelError> {
+    let two = T::ONE + T::ONE;
+    let mut f = T::ZERO;
+    let mut tst1 = T::ZERO;
+    for l in 0..n {
+        let mag = d[l].abs() + e[l].abs();
+        if mag > tst1 {
+            tst1 = mag;
+        }
+        let mut m = l;
+        while m < n - 1 && e[m].abs() > T::EPSILON * tst1 {
+            m += 1;
+        }
+        if m > l {
+            let mut iterations = 0;
+            loop {
+                iterations += 1;
+                if iterations > 60 {
+                    return Err(KernelError::NoConvergence);
+                }
+                let mut g = d[l];
+                let mut p = (d[l + 1] - g) / (two * e[l]);
+                let mut r = p.hypot(T::ONE);
+                if p < T::ZERO {
+                    r = -r;
+                }
+                d[l] = e[l] / (p + r);
+                d[l + 1] = e[l] * (p + r);
+                let dl1 = d[l + 1];
+                let mut h = g - d[l];
+                for value in &mut d[l + 2..n] {
+                    *value = *value - h;
+                }
+                f = f + h;
+
+                p = d[m];
+                let mut c = T::ONE;
+                let mut c2 = c;
+                let mut c3 = c;
+                let el1 = e[l + 1];
+                let mut s = T::ZERO;
+                let mut s2 = T::ZERO;
+                for i in (l..m).rev() {
+                    c3 = c2;
+                    c2 = c;
+                    s2 = s;
+                    g = c * e[i];
+                    h = c * p;
+                    r = p.hypot(e[i]);
+                    e[i + 1] = s * r;
+                    s = e[i] / r;
+                    c = p / r;
+                    p = c * d[i] - s * g;
+                    d[i + 1] = h + s * (c * g + s * d[i]);
+                    let (upper, lower) = zt.split_at_mut((i + 1) * n);
+                    let row_i = &mut upper[i * n..];
+                    for (a, b) in row_i.iter_mut().zip(&mut lower[..n]) {
+                        let old = *b;
+                        *b = s * *a + c * old;
+                        *a = c * *a - s * old;
+                    }
+                }
+                p = -s * s2 * c3 * el1 * e[l] / dl1;
+                e[l] = s * p;
+                d[l] = c * p;
+                if e[l].abs() <= T::EPSILON * tst1 {
+                    break;
+                }
+            }
+        }
+        d[l] = d[l] + f;
+        e[l] = T::ZERO;
+    }
+    Ok(())
+}
+
+/// One-sided Jacobi SVD returning reduced `(U, singular_values, Vt, rank_dim)` (fallback for small matrices <= 16).
+pub(crate) fn svd_jacobi<T: KernelFloat>(
+    a: &[T],
+    rows: usize,
+    cols: usize,
+) -> Result<Svd<T>, KernelError> {
     let reduced = rows.min(cols);
     let mut columns = a.to_vec();
     let mut right = vec![T::ZERO; cols * cols];
@@ -798,8 +1627,6 @@ pub(crate) fn svd<T: KernelFloat>(
     let mut u = vec![T::ZERO; rows * reduced];
     let mut s = vec![T::ZERO; reduced];
     let mut vt = vec![T::ZERO; reduced * cols];
-    // Singular values at or below NumPy's rank tolerance have no meaningful direction: their U
-    // columns are completed to an orthonormal basis below instead of dividing rounding noise.
     let largest_singular = ordering.first().map_or(T::ZERO, |&i| singular_all[i]);
     let tolerance = T::EPSILON * T::from_usize(rows.max(cols)) * largest_singular;
     let mut deficient = Vec::new();
@@ -836,6 +1663,447 @@ pub(crate) fn svd<T: KernelFloat>(
     Ok((u, s, vt, reduced))
 }
 
+/// Reduced singular value decomposition: Householder bidiagonalisation +
+/// implicit-shift Golub-Kahan QR on the bidiagonal + back-transformation through GEMM.
+type Svd<T> = (Vec<T>, Vec<T>, Vec<T>, usize);
+
+pub(crate) fn svd<T: KernelFloat>(
+    a: &[T],
+    rows: usize,
+    cols: usize,
+) -> Result<Svd<T>, KernelError> {
+    if a.len() != rows * cols {
+        return Err(KernelError::Shape);
+    }
+    if !a.iter().all(|value| value.is_finite()) {
+        return Err(KernelError::NoConvergence);
+    }
+    if rows <= 16 && cols <= 16 {
+        return svd_jacobi(a, rows, cols);
+    }
+    if rows < cols {
+        let mut a_t = vec![T::ZERO; cols * rows];
+        for i in 0..rows {
+            for j in 0..cols {
+                a_t[j * rows + i] = a[i * cols + j];
+            }
+        }
+        let (u_at, s, vt_at, reduced) = svd(&a_t, cols, rows)?;
+        let mut u = vec![T::ZERO; rows * reduced];
+        for i in 0..reduced {
+            for j in 0..rows {
+                u[j * reduced + i] = vt_at[i * rows + j];
+            }
+        }
+        let mut vt = vec![T::ZERO; reduced * cols];
+        for i in 0..reduced {
+            for j in 0..cols {
+                vt[i * cols + j] = u_at[j * reduced + i];
+            }
+        }
+        for col in 0..reduced {
+            let sign = largest_component(
+                &(0..rows)
+                    .map(|row| u[row * reduced + col])
+                    .collect::<Vec<_>>(),
+            );
+            if sign < T::ZERO {
+                for row in 0..rows {
+                    u[row * reduced + col] = -u[row * reduced + col];
+                }
+                for j in 0..cols {
+                    vt[col * cols + j] = -vt[col * cols + j];
+                }
+            }
+        }
+        return Ok((u, s, vt, reduced));
+    }
+
+    let mut work = a.to_vec();
+    // Left reflectors are kept and applied to a rows x cols block afterwards, so a tall input
+    // never allocates a rows x rows matrix.
+    let mut left_reflectors = Vec::with_capacity(cols);
+    let mut v0 = vec![T::ZERO; cols * cols];
+    for i in 0..cols {
+        v0[i * cols + i] = T::ONE;
+    }
+    let mut d = vec![T::ZERO; cols];
+    let mut e = vec![T::ZERO; cols.saturating_sub(1)];
+
+    // 1. Householder bidiagonalisation
+    for k in 0..cols {
+        let mut scale = T::ZERO;
+        let mut below = T::ZERO;
+        for row in k..rows {
+            let mag = work[row * cols + k].abs();
+            if mag > scale {
+                scale = mag;
+            }
+            if row > k && mag > below {
+                below = mag;
+            }
+        }
+        if below != T::ZERO {
+            let mut norm_sq = T::ZERO;
+            for row in k..rows {
+                let s = work[row * cols + k] / scale;
+                norm_sq = norm_sq + s * s;
+            }
+            let norm = norm_sq.sqrt() * scale;
+            let leading = work[k * cols + k];
+            let signed_norm = if leading >= T::ZERO { norm } else { -norm };
+            let v0_val = leading + signed_norm;
+            let tau = v0_val / signed_norm;
+            d[k] = -signed_norm;
+
+            let len_v = rows - k;
+            let mut v = vec![T::ZERO; len_v];
+            v[0] = T::ONE;
+            for row in k + 1..rows {
+                v[row - k] = work[row * cols + k] / v0_val;
+            }
+            // w = tau * v^T A[k.., k+1..], accumulated row by row so every access is contiguous.
+            let width = cols - k - 1;
+            let mut w = vec![T::ZERO; width];
+            for (row, &v_row) in v.iter().enumerate() {
+                let start = (k + row) * cols + k + 1;
+                for (acc, &value) in w.iter_mut().zip(&work[start..start + width]) {
+                    *acc = *acc + v_row * value;
+                }
+            }
+            for acc in &mut w {
+                *acc = tau * *acc;
+            }
+            for (row, &v_row) in v.iter().enumerate() {
+                let start = (k + row) * cols + k + 1;
+                for (value, &acc) in work[start..start + width].iter_mut().zip(&w) {
+                    *value = *value - v_row * acc;
+                }
+            }
+            left_reflectors.push((k, v, tau));
+        } else {
+            d[k] = work[k * cols + k];
+        }
+
+        if k < cols - 2 {
+            let mut scale = T::ZERO;
+            let mut right_mag = T::ZERO;
+            for col in k + 1..cols {
+                let mag = work[k * cols + col].abs();
+                if mag > scale {
+                    scale = mag;
+                }
+                if col > k + 1 && mag > right_mag {
+                    right_mag = mag;
+                }
+            }
+            if right_mag != T::ZERO {
+                let mut norm_sq = T::ZERO;
+                for col in k + 1..cols {
+                    let s = work[k * cols + col] / scale;
+                    norm_sq = norm_sq + s * s;
+                }
+                let norm = norm_sq.sqrt() * scale;
+                let leading = work[k * cols + k + 1];
+                let signed_norm = if leading >= T::ZERO { norm } else { -norm };
+                let w0_val = leading + signed_norm;
+                let tau = w0_val / signed_norm;
+                e[k] = -signed_norm;
+
+                let len_w = cols - 1 - k;
+                let mut w = vec![T::ZERO; len_w];
+                w[0] = T::ONE;
+                for col in k + 2..cols {
+                    w[col - k - 1] = work[k * cols + col] / w0_val;
+                }
+                for row in k + 1..rows {
+                    let mut dot = T::ZERO;
+                    for col in 0..len_w {
+                        dot = dot + work[row * cols + k + 1 + col] * w[col];
+                    }
+                    let factor = tau * dot;
+                    for col in 0..len_w {
+                        work[row * cols + k + 1 + col] =
+                            work[row * cols + k + 1 + col] - factor * w[col];
+                    }
+                }
+                for i in 0..cols {
+                    let mut dot = T::ZERO;
+                    for col in 0..len_w {
+                        dot = dot + v0[i * cols + k + 1 + col] * w[col];
+                    }
+                    let factor = tau * dot;
+                    for col in 0..len_w {
+                        v0[i * cols + k + 1 + col] = v0[i * cols + k + 1 + col] - factor * w[col];
+                    }
+                }
+            } else {
+                e[k] = work[k * cols + k + 1];
+            }
+        } else if k == cols - 2 {
+            e[k] = work[k * cols + k + 1];
+        }
+    }
+
+    // 2. Golub-Kahan QR on upper bidiagonal B
+    let mut b_mat = vec![T::ZERO; cols * cols];
+    for i in 0..cols {
+        b_mat[i * cols + i] = d[i];
+    }
+    for i in 0..cols - 1 {
+        b_mat[i * cols + i + 1] = e[i];
+    }
+    let mut u_t = vec![T::ZERO; cols * cols];
+    for i in 0..cols {
+        u_t[i * cols + i] = T::ONE;
+    }
+    let mut v_t = vec![T::ZERO; cols * cols];
+    for i in 0..cols {
+        v_t[i * cols + i] = T::ONE;
+    }
+
+    let mut m = cols;
+    let mut iter_total = 0;
+    let max_iter = cols * 50;
+
+    while m > 1 {
+        iter_total += 1;
+        if iter_total > max_iter {
+            return Err(KernelError::NoConvergence);
+        }
+        let sub = b_mat[(m - 2) * cols + m - 1].abs();
+        let diag_sum = b_mat[(m - 2) * cols + m - 2].abs() + b_mat[(m - 1) * cols + m - 1].abs();
+        if sub <= T::EPSILON * diag_sum {
+            b_mat[(m - 2) * cols + m - 1] = T::ZERO;
+            m -= 1;
+            continue;
+        }
+
+        let mut start = 0;
+        for l in (1..m - 1).rev() {
+            let interior_sub = b_mat[(l - 1) * cols + l].abs();
+            let sum_diag = b_mat[(l - 1) * cols + l - 1].abs() + b_mat[l * cols + l].abs();
+            if interior_sub <= T::EPSILON * sum_diag {
+                b_mat[(l - 1) * cols + l] = T::ZERO;
+                start = l;
+                break;
+            }
+        }
+
+        let b11 = b_mat[(m - 2) * cols + m - 2];
+        let b12 = b_mat[(m - 2) * cols + m - 1];
+        let b22 = b_mat[(m - 1) * cols + m - 1];
+        let b01 = if m - 2 > start {
+            b_mat[(m - 3) * cols + m - 2]
+        } else {
+            T::ZERO
+        };
+
+        let t11 = b11 * b11 + b01 * b01;
+        let t12 = b11 * b12;
+        let t22 = b22 * b22 + b12 * b12;
+
+        let half = T::ONE / (T::ONE + T::ONE);
+        let d_diff = (t11 - t22) * half;
+        let sgn = if d_diff >= T::ZERO { T::ONE } else { -T::ONE };
+        let denom = d_diff + sgn * d_diff.hypot(t12);
+        let mu = t22 - (t12 * t12) / denom;
+
+        let mut x = b_mat[start * cols + start] * b_mat[start * cols + start] - mu;
+        let mut z = b_mat[start * cols + start] * b_mat[start * cols + start + 1];
+
+        for k in start..m - 1 {
+            let r_col = x.hypot(z);
+            if r_col == T::ZERO {
+                continue;
+            }
+            let c_col = x / r_col;
+            let s_col = -z / r_col;
+
+            if k > start {
+                b_mat[(k - 1) * cols + k] = r_col;
+                b_mat[(k - 1) * cols + k + 1] = T::ZERO;
+            }
+
+            let bk_k = b_mat[k * cols + k];
+            let bk_kp1 = b_mat[k * cols + k + 1];
+            let bkp1_kp1 = b_mat[(k + 1) * cols + k + 1];
+            let col_k_k = c_col * bk_k - s_col * bk_kp1;
+            let col_k_kp1 = s_col * bk_k + c_col * bk_kp1;
+            let col_kp1_k = -s_col * bkp1_kp1;
+            let col_kp1_kp1 = c_col * bkp1_kp1;
+
+            {
+                let (h, t) = v_t.split_at_mut((k + 1) * cols);
+                let vk = &mut h[k * cols..];
+                let vk1 = &mut t[..cols];
+                for (d0, d1) in vk.iter_mut().zip(vk1) {
+                    let old0 = *d0;
+                    let old1 = *d1;
+                    *d0 = c_col * old0 - s_col * old1;
+                    *d1 = s_col * old0 + c_col * old1;
+                }
+            }
+
+            let r_row = col_k_k.hypot(col_kp1_k);
+            if r_row == T::ZERO {
+                continue;
+            }
+            let c_row = col_k_k / r_row;
+            let s_row = -col_kp1_k / r_row;
+
+            b_mat[k * cols + k] = r_row;
+            b_mat[k * cols + k + 1] = c_row * col_k_kp1 - s_row * col_kp1_kp1;
+            b_mat[(k + 1) * cols + k + 1] = s_row * col_k_kp1 + c_row * col_kp1_kp1;
+
+            {
+                let (h, t) = u_t.split_at_mut((k + 1) * cols);
+                let uk = &mut h[k * cols..];
+                let uk1 = &mut t[..cols];
+                for (d0, d1) in uk.iter_mut().zip(uk1) {
+                    let old0 = *d0;
+                    let old1 = *d1;
+                    *d0 = c_row * old0 - s_row * old1;
+                    *d1 = s_row * old0 + c_row * old1;
+                }
+            }
+
+            if k + 2 < m {
+                let bkp1_kp2 = b_mat[(k + 1) * cols + k + 2];
+                b_mat[k * cols + k + 2] = -s_row * bkp1_kp2;
+                b_mat[(k + 1) * cols + k + 2] = c_row * bkp1_kp2;
+                x = b_mat[k * cols + k + 1];
+                z = b_mat[k * cols + k + 2];
+            }
+        }
+    }
+
+    let mut singular_all = vec![T::ZERO; cols];
+    for i in 0..cols {
+        let val = b_mat[i * cols + i];
+        if val < T::ZERO {
+            singular_all[i] = -val;
+            for cell in &mut u_t[i * cols..(i + 1) * cols] {
+                *cell = -*cell;
+            }
+        } else {
+            singular_all[i] = val;
+        }
+    }
+
+    // 3. Back-transformation: U = U0[:, :cols] @ Ub, V = V0 @ Vb through GEMM.
+    // U0[:, :cols] = H_0 ... H_{cols-1} [I; 0], accumulated backwards; before H_k is applied only
+    // columns k.. differ from the identity.
+    let mut u0 = vec![T::ZERO; rows * cols];
+    for i in 0..cols {
+        u0[i * cols + i] = T::ONE;
+    }
+    for (k, v, tau) in left_reflectors.into_iter().rev() {
+        let width = cols - k;
+        let mut w = vec![T::ZERO; width];
+        for (row, &v_row) in v.iter().enumerate() {
+            let start = (k + row) * cols + k;
+            for (acc, &value) in w.iter_mut().zip(&u0[start..start + width]) {
+                *acc = *acc + v_row * value;
+            }
+        }
+        for acc in &mut w {
+            *acc = tau * *acc;
+        }
+        for (row, &v_row) in v.iter().enumerate() {
+            let start = (k + row) * cols + k;
+            for (value, &acc) in u0[start..start + width].iter_mut().zip(&w) {
+                *value = *value - v_row * acc;
+            }
+        }
+    }
+    let mut u = vec![T::ZERO; rows * cols];
+    T::gemm_stride(
+        rows,
+        cols,
+        cols,
+        T::ONE,
+        &u0,
+        cols as isize,
+        1,
+        &u_t,
+        1,
+        cols as isize,
+        T::ZERO,
+        &mut u,
+        cols as isize,
+        1,
+    );
+    let mut v = vec![T::ZERO; cols * cols];
+    T::gemm_stride(
+        cols,
+        cols,
+        cols,
+        T::ONE,
+        &v0,
+        cols as isize,
+        1,
+        &v_t,
+        1,
+        cols as isize,
+        T::ZERO,
+        &mut v,
+        cols as isize,
+        1,
+    );
+
+    // 4. Sort descending, permute U and Vt
+    let mut ordering = (0..cols).collect::<Vec<_>>();
+    ordering.sort_by(|&i, &j| {
+        singular_all[j]
+            .partial_cmp(&singular_all[i])
+            .unwrap_or(core::cmp::Ordering::Equal)
+    });
+
+    let mut sorted_u = vec![T::ZERO; rows * cols];
+    let mut s = vec![T::ZERO; cols];
+    let mut vt = vec![T::ZERO; cols * cols];
+
+    let largest_singular = ordering.first().map_or(T::ZERO, |&i| singular_all[i]);
+    let tolerance = T::EPSILON * T::from_usize(rows.max(cols)) * largest_singular;
+    let mut deficient = Vec::new();
+
+    for new_col in 0..cols {
+        let old_col = ordering[new_col];
+        s[new_col] = singular_all[old_col];
+        if s[new_col] > tolerance {
+            for row in 0..rows {
+                sorted_u[row * cols + new_col] = u[row * cols + old_col];
+            }
+        } else {
+            deficient.push(new_col);
+        }
+        for j in 0..cols {
+            vt[new_col * cols + j] = v[j * cols + old_col];
+        }
+    }
+    complete_orthonormal_columns(&mut sorted_u, rows, cols, &deficient);
+
+    // Sign rule on U
+    for new_col in 0..cols {
+        let sign = largest_component(
+            &(0..rows)
+                .map(|row| sorted_u[row * cols + new_col])
+                .collect::<Vec<_>>(),
+        );
+        if sign < T::ZERO {
+            for row in 0..rows {
+                sorted_u[row * cols + new_col] = -sorted_u[row * cols + new_col];
+            }
+            for j in 0..cols {
+                vt[new_col * cols + j] = -vt[new_col * cols + j];
+            }
+        }
+    }
+
+    Ok((sorted_u, s, vt, cols))
+}
+
 /// Fills the listed (all-zero) columns of the `rows x cols` matrix `u` so that every column is
 /// unit length and orthogonal to the others (Gram-Schmidt against the standard basis).
 fn complete_orthonormal_columns<T: KernelFloat>(
@@ -844,38 +2112,57 @@ fn complete_orthonormal_columns<T: KernelFloat>(
     cols: usize,
     missing: &[usize],
 ) {
+    if missing.is_empty() {
+        return;
+    }
+    let mut active = vec![true; cols];
     for &target in missing {
-        let mut best_residual: Vec<T> = Vec::new();
-        let mut best_norm = T::ZERO;
-        for axis in 0..rows {
-            let mut candidate = vec![T::ZERO; rows];
-            candidate[axis] = T::ONE;
-            // Two passes keep the result orthogonal to working precision.
-            for _ in 0..2 {
-                for other in 0..cols {
-                    if other == target || (missing.contains(&other) && other > target) {
-                        continue;
-                    }
-                    let mut dot = T::ZERO;
-                    for row in 0..rows {
-                        dot = dot + candidate[row] * u[row * cols + other];
-                    }
-                    for row in 0..rows {
-                        candidate[row] = candidate[row] - dot * u[row * cols + other];
-                    }
+        active[target] = false;
+    }
+    // For an orthonormal set, the residual of unit vector e_axis after projecting the set out has
+    // squared norm 1 - leverage[axis], so the axis with the smallest leverage gives the largest
+    // residual: the same choice as trying every axis, in O(rows * cols) per completed column.
+    let mut leverage = vec![T::ZERO; rows];
+    for (row, lev) in leverage.iter_mut().enumerate() {
+        for (value, _) in u[row * cols..(row + 1) * cols]
+            .iter()
+            .zip(&active)
+            .filter(|(_, is_active)| **is_active)
+        {
+            *lev = *lev + *value * *value;
+        }
+    }
+    let mut candidate = vec![T::ZERO; rows];
+    for &target in missing {
+        let mut axis = 0;
+        for (row, &lev) in leverage.iter().enumerate() {
+            if lev < leverage[axis] {
+                axis = row;
+            }
+        }
+        candidate.fill(T::ZERO);
+        candidate[axis] = T::ONE;
+        // Two passes keep the result orthogonal to working precision.
+        for _ in 0..2 {
+            for other in (0..cols).filter(|&other| active[other]) {
+                let mut dot = T::ZERO;
+                for (row, &c) in candidate.iter().enumerate() {
+                    dot = dot + c * u[row * cols + other];
+                }
+                for (row, c) in candidate.iter_mut().enumerate() {
+                    *c = *c - dot * u[row * cols + other];
                 }
             }
-            let length = norm(&candidate);
-            if length > best_norm {
-                best_norm = length;
-                best_residual = candidate;
+        }
+        let length = norm(&candidate);
+        if length > T::ZERO {
+            for (row, (&c, lev)) in candidate.iter().zip(&mut leverage).enumerate() {
+                let value = c / length;
+                u[row * cols + target] = value;
+                *lev = *lev + value * value;
             }
         }
-        if best_norm > T::ZERO {
-            for row in 0..rows {
-                u[row * cols + target] = best_residual[row] / best_norm;
-            }
-        }
+        active[target] = true;
     }
 }
 
