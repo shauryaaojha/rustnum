@@ -138,10 +138,66 @@ fn array_benches(c: &mut Criterion) {
     c.bench_function("exp (1e6 f64)", |b| b.iter(|| black_box(million.exp())));
 
     let raw_million = array_data(1_000_000);
+    let raw_pos: Vec<f64> = raw_million.iter().map(|&x| x.abs() + 0.1).collect();
     let mut raw_out = vec![0.0f64; 1_000_000];
+
     c.bench_function("exp (1e6 f64) simd kernel", |b| {
         b.iter(|| {
             simd_math::exp_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("exp2 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp2_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("expm1 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::expm1_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log2 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log2_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log10 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log10_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log1p (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log1p_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("sin (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sin_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("cos (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::cos_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("tan (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tan_f64(&raw_million, &mut raw_out);
             black_box(&raw_out);
         })
     });
@@ -149,6 +205,89 @@ fn array_benches(c: &mut Criterion) {
         b.iter(|| {
             simd_math::tanh_f64(&raw_million, &mut raw_out);
             black_box(&raw_out);
+        })
+    });
+    c.bench_function("sigmoid (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sigmoid_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+
+    let raw_million_f32: Vec<f32> = raw_million.iter().map(|&x| x as f32).collect();
+    let raw_pos_f32: Vec<f32> = raw_pos.iter().map(|&x| x as f32).collect();
+    let mut raw_out_f32 = vec![0.0f32; 1_000_000];
+
+    c.bench_function("exp (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("exp2 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp2_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("expm1 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::expm1_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log2 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log2_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log10 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log10_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log1p (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log1p_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("sin (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sin_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("cos (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::cos_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("tan (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tan_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("tanh (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tanh_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("sigmoid (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sigmoid_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
         })
     });
     let mut rng = np::random::Rng::seed(42);
