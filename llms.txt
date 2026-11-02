@@ -249,3 +249,7 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 
 ## Stride tricks (added after v0.1)
 - `np::sliding_window_view(&x, &[w], None)` — zero-copy view; `np::as_strided(&x, &shape, &strides)` — element strides, bounds-checked
+
+## Bit operations (added after v0.1)
+- `np::bitwise_and/or/xor(&a, &b)`, `np::bitwise_not(&a)`, `np::invert(&a)`, `np::left_shift(&a, n)`, `np::right_shift(&a, n)`; operators `& | ^ ! << >>` on i32/i64/u8/usize arrays
+- `np::packbits(&a, axis, "big")`, `np::unpackbits(&a, axis, count, "big")`, `np::bitwise_count(&a)`; trait `np::Integer`

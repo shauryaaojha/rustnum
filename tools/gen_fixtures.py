@@ -328,6 +328,19 @@ def main():
     flat = rng.standard_normal(20)
     save_case("as_strided_overlap", "as_strided", [flat], {"s0": 3, "s1": 1, "n0": 6, "n1": 4}, asd(flat, (6, 4), (3 * 8, 8)), "float64", 0.0, 0.0)
 
+    # -- group 6: bit operations (values are small non-negative integers stored as float64) --
+    bi_a = rng.integers(0, 1000, size=(4, 6))
+    bi_b = rng.integers(0, 9, size=(4, 6))
+    save_case("bitwise_xor_2d", "bitwise_xor", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a ^ bi_b).astype(np.int64), "int64")
+    save_case("left_shift_2d", "left_shift", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a << bi_b).astype(np.int64), "int64")
+    save_case("right_shift_2d", "right_shift", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a >> bi_b).astype(np.int64), "int64")
+    save_case("bitwise_count_2d", "bitwise_count", [bi_a.astype(np.float64)], {}, np.bitwise_count(bi_a).astype(np.int64), "int64")
+    pk = rng.integers(0, 2, size=(5, 21))
+    save_case("packbits_axis1", "packbits", [pk.astype(np.float64)], {"axis": 1}, np.packbits(pk, axis=1).astype(np.int64), "int64")
+    save_case("packbits_little_axis0", "packbits_little", [pk.astype(np.float64)], {"axis": 0}, np.packbits(pk, axis=0, bitorder="little").astype(np.int64), "int64")
+    ub = rng.integers(0, 256, size=(3, 4))
+    save_case("unpackbits_axis1_count", "unpackbits", [ub.astype(np.float64)], {"axis": 1, "count": 27}, np.unpackbits(ub.astype(np.uint8), axis=1, count=27).astype(np.int64), "int64")
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

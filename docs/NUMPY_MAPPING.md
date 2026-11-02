@@ -528,6 +528,18 @@ Added after v0.1. Same conventions as above.
 | `sliding_window_view(x, window_shape, axis)` | `np::sliding_window_view(&x, &[3], None)` | Zero-copy overlapping view. `axis` is `Option<&[isize]>`. Writing to it copies first (copy-on-write) |
 | `as_strided(x, shape, strides)` | `np::as_strided(&x, &[3, 2], &[1, 1])` | Strides are in elements, not bytes. Bounds-checked: panics if any element would lie outside the buffer |
 
+### Bit operations
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.bitwise_and(a, b)`, `a & b` | `np::bitwise_and(&a, &b)`, `&a & &b` | `i32`, `i64`, `u8`, `usize` arrays (trait `np::Integer`). Operators also accept a scalar |
+| `np.bitwise_or`, `np.bitwise_xor` | `np::bitwise_or`, `np::bitwise_xor`, `\|`, `^` |  |
+| `np.bitwise_not(a)`, `np.invert(a)`, `~a` | `np::bitwise_not(&a)`, `np::invert(&a)`, `!&a` |  |
+| `np.left_shift(a, n)`, `np.right_shift(a, n)` | `np::left_shift(&a, n)`, `np::right_shift(&a, n)`, `<<`, `>>` | A count that is negative or >= the bit width gives 0 (or -1 for negative values when shifting right), as in NumPy |
+| `np.packbits(a, axis, bitorder)` | `np::packbits(&a, None, "big")` | Bool or integer input; float input panics. `axis: Option<isize>` |
+| `np.unpackbits(a, axis, count, bitorder)` | `np::unpackbits(&a, None, None, "big")` | `Array<u8>` input |
+| `np.bitwise_count(a)` | `np::bitwise_count(&a)` | Returns `Array<u8>` (popcount of the absolute value) |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

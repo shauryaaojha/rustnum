@@ -280,3 +280,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `sliding_window_view(&x, window_shape: &[usize], axis: Option<&[isize]>) -> Array<T>` is a view with shape `x.shape` (windowed axes shortened to `n - w + 1`) followed by the window shape.
 - `as_strided(&x, shape: &[usize], strides: &[isize]) -> Array<T>` is bounds-checked (element strides, from `x`'s first element) and panics instead of reading outside the buffer.
 - Writes to a view whose elements overlap in memory first copy the view, so logical elements stay independent.
+
+## 27. Bit operations
+
+- `Integer` is implemented for `i32`, `i64`, `u8` and `usize`. Free functions `bitwise_and`, `bitwise_or`, `bitwise_xor`, `left_shift`, `right_shift` (array-like arguments, broadcasting), `bitwise_not`, `invert`, `bitwise_count -> Array<u8>`.
+- Operators `&`, `|`, `^`, `<<`, `>>` for `Array<i32/i64/u8/usize>` (owned and borrowed, array or scalar right side) and unary `!`.
+- `packbits<T: Element>(&a, axis: Option<isize>, bitorder: &str) -> Array<u8>`, `unpackbits(&a: &Array<u8>, axis: Option<isize>, count: Option<isize>, bitorder: &str) -> Array<u8>`; `bitorder` starts with `b` (big) or `l` (little), else panics `'order' must begin with 'l' or 'b'`.

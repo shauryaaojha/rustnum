@@ -24,6 +24,7 @@
 #![deny(missing_docs)]
 
 mod array;
+mod bitops;
 mod broadcast;
 mod creation;
 mod display;
@@ -55,6 +56,10 @@ pub mod poly;
 pub mod random;
 
 pub use array::Array;
+pub use bitops::{
+    Integer, bitwise_and, bitwise_count, bitwise_not, bitwise_or, bitwise_xor, invert, left_shift,
+    packbits, right_shift, unpackbits,
+};
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
 pub use creation::*;
 pub use element::{Element, Float, Num};

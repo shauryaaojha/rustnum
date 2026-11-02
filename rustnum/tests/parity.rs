@@ -713,6 +713,31 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
             &[param_usize(case, "n0"), param_usize(case, "n1")],
             &[param_isize(case, "s0"), param_isize(case, "s1")],
         ))),
+        "bitwise_xor" | "left_shift" | "right_shift" | "bitwise_count" | "packbits"
+        | "packbits_little" | "unpackbits" => {
+            let ints: Vec<Array<i64>> = i.iter().map(|a| a.astype::<i64>()).collect();
+            let out: Array<i64> = match op {
+                "bitwise_xor" => np::bitwise_xor(&ints[0], &ints[1]),
+                "left_shift" => np::left_shift(&ints[0], &ints[1]),
+                "right_shift" => np::right_shift(&ints[0], &ints[1]),
+                "bitwise_count" => np::bitwise_count(&ints[0]).astype::<i64>(),
+                "packbits" => {
+                    np::packbits(&ints[0], Some(param_isize(case, "axis")), "big").astype::<i64>()
+                }
+                "packbits_little" => {
+                    np::packbits(&ints[0], Some(param_isize(case, "axis")), "little")
+                        .astype::<i64>()
+                }
+                _ => np::unpackbits(
+                    &i[0].astype::<u8>(),
+                    Some(param_isize(case, "axis")),
+                    Some(param_isize(case, "count")),
+                    "big",
+                )
+                .astype::<i64>(),
+            };
+            Ok(RunResult::I64(out))
+        }
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }
