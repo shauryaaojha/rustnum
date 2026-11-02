@@ -303,3 +303,7 @@ datetime/struct dtypes, memory-mapped files, string arrays. (Complex arrays are 
 - `rustnum::record! { pub struct Point { x: f64, y: f64 } }` makes `Point` an array element (fields: numbers, complex, f16, datetimes, nested records)
 - `a.field::<f64>("x")` -> `Array<f64>` (`a['x']`), `a.set_field("x", v)`, `a.argsort_order(&["x", "y"])`, `a.sort_order(&["x"])` (1-d, stable, unnamed fields break ties)
 - `.npy`/`.npz` store the structured `descr` `[('x', '<f8'), ('y', '<f8')]`, readable by NumPy; `<Point as np::Record>::FIELDS` / `descr()`
+
+## Python bindings (rustnum-py, v0.2)
+- `rustnum-py/` is a PyO3 (`abi3-py39`) workspace crate, not a default member: `cargo build --release -p rustnum-py` or `maturin build --release`; `import rustnum_py as rn`
+- `rn.ndarray` over float64/float32/int64/bool with NumPy-style creation, operators, indexing, reductions, `@`, `rn.linalg`, `rn.random`; `numpy.asarray(x)` is zero-copy via `__array_interface__`

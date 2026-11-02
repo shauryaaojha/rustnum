@@ -390,3 +390,14 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - I/O: `.npy`/`.npz` carry the structured `descr` (`{'descr': [('x', '<f8'), ('y', '<f8')], ...}`) both ways, nested dtypes included, packed (no alignment padding), little-endian. Loading checks the `descr` and returns `Error::DType` when it differs.
 - Display follows NumPy: `[(3., 1.) (1., 2.)]`, and `Debug` prints `array([...], dtype=[('x', '<f8'), ('y', '<f8')])` (bool fields appear as `'?'`).
 - Not done: byte-string / unicode fields, subarray fields (`('v', 'f8', (3,))`), aligned dtypes (`align=True`), field titles and offsets, multi-field index `a[['x', 'y']]`, record arrays attribute access (`np.recarray`), `argsort_order` on n-d arrays, and `Array<R>` arithmetic (records are not numbers).
+
+## 39. Python bindings, `rustnum-py` (v0.2)
+
+- Workspace crate `rustnum-py/` (PyO3 0.30, `abi3-py39`, `generate-import-lib` so the windows-gnu toolchain links without a Python development install). It is a workspace member but not a default member: `cargo fmt/clippy/test/doc` at the root never need Python. Build it with `cargo build --release -p rustnum-py` or `maturin build --release` in `rustnum-py/`; the Python module is `rustnum_py` (`import rustnum_py as rn`).
+- `rn.ndarray` wraps `Array<f64>`, `Array<f32>`, `Array<i64>` or `Array<bool>` (dtypes `float64 float32 int64 bool`). `rn.array`/`asarray` accept lists, NumPy arrays (float32 stays float32) and scalars.
+- Creation: `zeros ones empty full eye arange linspace`. Operators `+ - * / ** < <= > >= == !=` with NumPy promotion and broadcasting, `@`, indexing and slicing (ints, slices, `...`, `None`, integer-array fancy indexing) with assignment, `astype`, `reshape`, `T`, `transpose`, `ravel`, `flatten`, `squeeze`, `copy`, `clip`, `item`, `tolist`.
+- Reductions (method and function forms, `axis=`): `sum prod mean std var min max argmin argmax cumsum all any`; functions `exp log sqrt sin cos tan tanh abs floor ceil maximum minimum where concatenate stack dot matmul`.
+- `rn.linalg`: `solve inv det norm cholesky qr svd eigh pinv`. `rn.random`: `seed rand randn normal uniform randint`.
+- `numpy.asarray(x)` works without copying through `__array_interface__` (read-only view that keeps `x` alive). The buffer protocol is not offered because PyO3 supports `__getbuffer__` on the stable ABI only from Python 3.11, and the crate targets `abi3-py39`.
+- Rust panics (NumPy-style misuse messages) become `ValueError` (`IndexError` for out-of-bounds); data errors (singular matrix) become `ValueError`.
+- Not done: dtypes other than the four above (no complex, float16, datetimes or structured arrays yet), `numpy` crate interop, and most of `np.linalg`/`np.random` beyond the lists above.
