@@ -263,7 +263,8 @@ fn repr_dtype<T: Element>() -> String {
     if T::DTYPE.starts_with("datetime64[") || T::DTYPE.starts_with("timedelta64[") {
         format!("'{}'", T::DTYPE)
     } else if let Some(d) = T::npy_descr().filter(|d| d.starts_with('[')) {
-        d
+        // NumPy's repr spells bool as '?' where the .npy descr says '|b1'.
+        d.replace("'|b1'", "'?'")
     } else {
         T::DTYPE.to_string()
     }

@@ -298,3 +298,8 @@ datetime/struct dtypes, memory-mapped files, string arrays. (Complex arrays are 
 - `DateTime64::<D>::parse("2024-03-05")?`, `::new(count)`, `.value()`, `.cast::<V>()`, `::NAT`, `np::isnat(&a)`, `np::datetime_as_string(&a)`
 - `&a - &b` (td), `&a + &t`, `&t * 3`, `&t / &u` (f64), `t.floor_div(&u)`, `&t % &u`; `t.sum()/mean()/cumsum()`; same unit only, `astype::<DateTime64<s>>()` converts units; `NaT` sorts last
 - `Array::<DateTime64<D>>::arange(start, stop, step)`; `.npy` `<M8[D]` / `<m8[s]` round trip with NumPy
+
+## Structured dtypes (v0.2)
+- `rustnum::record! { pub struct Point { x: f64, y: f64 } }` makes `Point` an array element (fields: numbers, complex, f16, datetimes, nested records)
+- `a.field::<f64>("x")` -> `Array<f64>` (`a['x']`), `a.set_field("x", v)`, `a.argsort_order(&["x", "y"])`, `a.sort_order(&["x"])` (1-d, stable, unnamed fields break ties)
+- `.npy`/`.npz` store the structured `descr` `[('x', '<f8'), ('y', '<f8')]`, readable by NumPy; `<Point as np::Record>::FIELDS` / `descr()`

@@ -616,6 +616,19 @@ The unit is a type parameter: `np::DateTime64<np::datetime::D>` is `datetime64[D
 | `td.sum()`, `td.mean()`, `td.cumsum()` | `t.sum()`, `t.mean()`, `t.cumsum()` | `NaT` propagates |
 | `np.save('a.npy', dt)` | `np::io::save_npy(path, &a)?` | Header `<M8[D]` / `<m8[ns]` |
 
+## Structured dtypes (v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.dtype([('x', 'f8'), ('y', 'f8')])` | `rustnum::record! { pub struct Point { x: f64, y: f64 } }` | Declarative macro; the struct is the element type. Nested records work |
+| `a = np.array([(1., 2.)], dtype=dt)` | `np::Array::from(vec![Point { x: 1., y: 2. }])` |  |
+| `a['x']` | `a.field::<f64>("x")` | Returns an `Array<f64>` copy; panics on an unknown name or a wrong type |
+| `a['x'] = v` | `a.set_field("x", v)` | `v` broadcasts to the array's shape |
+| `np.argsort(a, order=['x', 'y'])` | `a.argsort_order(&["x", "y"])` | 1-d, stable; unnamed fields break ties in dtype order, like NumPy |
+| `np.sort(a, order='x')` | `a.sort_order(&["x"])` |  |
+| `dt.descr`, `dt.names` | `<Point as np::Record>::descr()`, `<Point as np::Record>::FIELDS` |  |
+| `np.save('a.npy', a)` / `np.load` | `np::io::save_npy(path, &a)?` / `np::io::load_npy::<Point>(path)?` | Structured `descr` both ways; loading another layout is `Error::DType` |
+
 ## More NumPy functions
 
 Added after v0.1. Same conventions as above.
@@ -736,4 +749,4 @@ Added after v0.1. Same conventions as above.
 ## Not in v0.1
 
 memory-mapped files and string arrays.
-(Complex arrays, float16/bfloat16, multi-axis fancy indexing, masked arrays and datetime64/timedelta64 arrived in v0.2.)
+(Complex arrays, float16/bfloat16, multi-axis fancy indexing, masked arrays, datetime64/timedelta64 and structured dtypes arrived in v0.2.)

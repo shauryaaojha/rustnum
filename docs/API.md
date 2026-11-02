@@ -380,3 +380,13 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - I/O: `.npy`/`.npz` `<M8[unit]` and `<m8[unit]` both ways; reading with the wrong unit or kind is an `Error::DType`.
 - Not done: `busday_*`, `datetime64` with a unit multiplier (`m8[3D]`), timezone-free generic units, `np.datetime64('now')`, timedelta `min/max`, and automatic unit promotion in mixed-unit arithmetic.
 - `repr` of any array now moves `dtype=...` to its own line and wraps rows one column earlier when the line passes `linewidth`, like `numpy.array_repr`.
+
+## 38. Structured dtypes, `record!` (v0.2)
+
+- `rustnum::record! { pub struct Point { x: f64, y: f64 } }` defines a plain `Copy` struct and makes it an array element, like `np.dtype([('x', 'f8'), ('y', 'f8')])`. It is a declarative macro (no proc-macro crate). Field types are array elements with a `.npy` encoding: `f32 f64 i32 i64 u8 usize bool`, `Complex<f32|f64>`, `f16`, `DateTime64<U>`, `TimeDelta64<U>`, or another record (nested dtypes). The struct derives `Clone Copy Debug Default PartialEq`, and `PartialOrd` is lexicographic in field order (NumPy's structured comparison). Attributes and doc comments on the struct and its fields are kept.
+- The generated type implements `np::Record`: `FIELDS` (names in order) and `descr()` (`"[('x', '<f8'), ('y', '<f8')]"`).
+- Field access on `Array<R>`: `a.field::<f64>("x")` returns an `Array<f64>` copy, like `a['x']`; `a.set_field("x", values)` assigns a whole field and broadcasts, like `a['x'] = values`. An unknown name or a wrong field type panics. (Per-element access is the struct field: `a.get(&[i]).x`.)
+- Sorting: `a.argsort_order(&["x", "y"])` and `a.sort_order(&["x"])` are `np.argsort(a, order=[...], kind='stable')` / `np.sort(a, order=[...])` for 1-d arrays. Fields not named still break ties in declaration order, as in NumPy; NaN sorts last. Plain `a.sort()` / `a.argsort()` compare all fields in order.
+- I/O: `.npy`/`.npz` carry the structured `descr` (`{'descr': [('x', '<f8'), ('y', '<f8')], ...}`) both ways, nested dtypes included, packed (no alignment padding), little-endian. Loading checks the `descr` and returns `Error::DType` when it differs.
+- Display follows NumPy: `[(3., 1.) (1., 2.)]`, and `Debug` prints `array([...], dtype=[('x', '<f8'), ('y', '<f8')])` (bool fields appear as `'?'`).
+- Not done: byte-string / unicode fields, subarray fields (`('v', 'f8', (3,))`), aligned dtypes (`align=True`), field titles and offsets, multi-field index `a[['x', 'y']]`, record arrays attribute access (`np.recarray`), `argsort_order` on n-d arrays, and `Array<R>` arithmetic (records are not numbers).

@@ -48,6 +48,7 @@ mod npz;
 mod ops;
 mod pool;
 mod printopts;
+mod record;
 mod reduce;
 mod shapeextra;
 mod simd_math;
@@ -102,6 +103,11 @@ pub use ops::*;
 pub use polynomial::{Chebyshev, Hermite, HermiteE, Laguerre, Legendre, Polynomial};
 pub use printopts::{
     PrintOptions, PrintOptionsGuard, get_printoptions, printoptions, set_printoptions,
+};
+pub use record::Record;
+#[doc(hidden)]
+pub use record::{
+    __column_text, __compare, __element_text, __npy_descr, __npy_itemsize, __npy_read, __npy_write,
 };
 pub use shapeextra::{
     around, atleast_1d, atleast_2d, atleast_3d, column_stack, dstack, frombuffer, fromiter,

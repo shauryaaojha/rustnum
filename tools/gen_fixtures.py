@@ -280,6 +280,11 @@ def main():
     # 14. datetime64 / timedelta64 (stage 5 of v0.2)
     # =========================================================================
     dt_cases(save_case, rng)
+
+    # =========================================================================
+    # 15. Structured dtypes (stage 6 of v0.2)
+    # =========================================================================
+    rec_cases(save_case, rng)
     # =========================================================================
     # 10. numpy-extra groups (nan-functions, sorting, indices, shapes, ...)
     # =========================================================================
@@ -522,6 +527,53 @@ def dt_cases(save_case, rng):
     days = np.arange(-800000, 800000, 997).astype("M8[D]")
     save_case("dt_calendar_days", "dt_as_string", [days], {"unit": "D", "str": "|".join(np.datetime_as_string(days))}, np.array(0), "str")
     save_case("dt_calendar_months", "dt_cast_month_str", [days], {"unit": "D", "str": "|".join(np.datetime_as_string(days.astype("M8[M]")))}, np.array(0), "str")
+
+
+def rec_cases(save_case, rng):
+    """Structured dtype parity cases (ops prefixed `rec_`)."""
+    import io
+
+    dt = np.dtype([("id", "<i4"), ("w", "<f8"), ("ok", "?")])
+    n = 14
+    a = np.zeros(n, dtype=dt)
+    a["id"] = rng.integers(-3, 4, n)
+    a["w"] = np.round(rng.standard_normal(n), 2)
+    a["w"][3] = np.nan
+    a["w"][5] = a["w"][4]
+    a["ok"] = rng.integers(0, 2, n).astype(bool)
+
+    def raw_file(arr):
+        # the bytes after the header: NumPy pads headers with spare room that we do not copy
+        buf = io.BytesIO()
+        np.save(buf, arr)
+        v = buf.getvalue()
+        hlen = int.from_bytes(v[8:10], "little")
+        return np.frombuffer(v[10 + hlen:], dtype=np.uint8).astype(np.int64)
+
+    save_case("rec_fields_id", "rec_field_id", [a], {}, a["id"].astype(np.int64), "int64")
+    save_case("rec_fields_w", "rec_field_w", [a], {}, a["w"].copy(), "float64", 0.0, 0.0)
+    save_case("rec_fields_ok", "rec_field_ok", [a], {}, a["ok"].copy(), "bool")
+    save_case("rec_file_bytes", "rec_file_bytes", [a], {}, raw_file(a), "int64")
+    save_case("rec_str", "rec_str", [a], {"str": str(a)}, np.array(0), "str")
+    save_case("rec_repr", "rec_repr", [a], {"str": repr(a)}, np.array(0), "str")
+    a2 = a[:6].reshape(2, 3)
+    save_case("rec_str_2d", "rec_str", [a2], {"str": str(a2)}, np.array(0), "str")
+    for tag, order in [("id", ["id"]), ("w", ["w"]), ("id_w", ["id", "w"]), ("ok_id", ["ok", "id"]), ("w_ok_id", ["w", "ok", "id"])]:
+        idx = np.argsort(a, order=order, kind="stable").astype(np.int64)
+        save_case(f"rec_argsort_{tag}", "rec_argsort", [a], {"order": order}, idx, "int64")
+        srt = np.sort(a, order=order, kind="stable")
+        save_case(f"rec_sort_{tag}", "rec_sort_id", [a], {"order": order}, srt["id"].astype(np.int64), "int64")
+    # plain argsort uses the field order
+    save_case("rec_argsort_plain", "rec_argsort", [a], {"order": ["id", "w", "ok"]}, np.argsort(a, kind="stable").astype(np.int64), "int64")
+    # nested dtype, file bytes and display
+    nd = np.dtype([("a", "<i4"), ("n", [("p", "<f4"), ("q", "<u1")]), ("c", "<c8")])
+    b = np.zeros(4, dtype=nd)
+    b["a"] = [1, -2, 3, 400]
+    b["n"]["p"] = [0.5, 1.5, -2.25, 8.0]
+    b["n"]["q"] = [1, 2, 3, 255]
+    b["c"] = [1 + 2j, 0, -1j, 3.5 - 1j]
+    save_case("rec_nested_bytes", "rec_nested_bytes", [b], {}, raw_file(b), "int64")
+    save_case("rec_nested_str", "rec_nested_str", [b], {"str": str(b)}, np.array(0), "str")
 
 
 def complex_cases(save_case, rng):

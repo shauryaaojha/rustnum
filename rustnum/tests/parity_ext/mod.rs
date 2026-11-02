@@ -12,6 +12,7 @@ mod dt;
 mod fancy;
 mod half;
 mod ma;
+mod rec;
 
 /// What an extension case computed.
 pub enum Out {
@@ -95,6 +96,9 @@ pub fn run(dir: &Path, case: &Json) -> Option<Result<Out, String>> {
         return Some(r);
     }
     if let Some(r) = fancy::run(dir, case) {
+        return Some(r);
+    }
+    if let Some(r) = rec::run(dir, case) {
         return Some(r);
     }
     if let Some(r) = ma::run(dir, case) {
