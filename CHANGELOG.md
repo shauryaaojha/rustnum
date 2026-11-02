@@ -7,6 +7,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Integer `/` and `%` (operators, `/=`, `%=`, scalar-left and `ma`) no longer panic: a zero divisor gives 0 and `MIN / -1` wraps, like NumPy. Masked integer division masks zero divisors.
+- `svd`, `qr`, `lstsq`, `pinv`, `matrix_rank` and `cond` scale the input first when its entries are near overflow or underflow (as LAPACK does), so matrices of size ~1e±300 give NumPy's answer instead of inf, NaN or 0.
+- `convolve`, `correlate`, `diff`, `cross`, `kron` and `einsum` wrap on integer overflow instead of panicking in debug builds.
+- Structured-array sorting puts NaN fields last field by field, so `partial_cmp` on `record!` types never returns `None`.
+- `np::ma` unary functions keep the original data under masked or out-of-domain positions.
+- `chebroots` / `chebcompanion` of a degree-1 series returned half the root.
+- `np::power` on `f16` / `bf16` panicked or overflowed (it used the integer path); it now computes in f32.
+- Slices with a huge step (`a[::2**63-1]`, accepted by NumPy) no longer panic with "slice step is too large".
+- `.npy` headers with a malformed shape return `Error::Format` instead of panicking.
+- `nanmedian`, `nanpercentile` and `nanvar` no longer copy contiguous input twice; the buffer pool skips buffers with spare capacity.
+
+### Changed
+- `sort` drops its single-threaded radix path (and its `unsafe`): measured slower than the comparison sort at every size, and never reached with rayon on.
+
+### Added
+- `tests/fuzz_io.rs`: 35,500 mutated `.npy`, `.npz` and text files must return `Ok` or `Err`, never panic.
+- `tests/audit_fixes.rs`: overflow, empty-input, NaN, scaling and edge-case probes checked against NumPy 2.3.
+
 ## [0.2.0] - 2026-11-02
 
 ### Added

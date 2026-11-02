@@ -269,16 +269,14 @@ fn extract_shape(s: &str) -> Result<Vec<usize>> {
         .ok_or_else(|| Error::Format("missing ':' after key 'shape'".into()))?;
     let after_colon = after_colon.trim_start();
 
-    // Find the tuple
-    let paren_start = after_colon
-        .find('(')
+    // The value must be a tuple: `(` right after the colon, then the first `)` after it.
+    let rest = after_colon
+        .strip_prefix('(')
         .ok_or_else(|| Error::Format("missing '(' in shape".into()))?;
-    let paren_end = after_colon
+    let paren_end = rest
         .find(')')
         .ok_or_else(|| Error::Format("missing ')' in shape".into()))?;
-
-    let inner = &after_colon[paren_start + 1..paren_end];
-    let inner = inner.trim();
+    let inner = rest[..paren_end].trim();
 
     if inner.is_empty() {
         return Ok(vec![]); // 0-d scalar

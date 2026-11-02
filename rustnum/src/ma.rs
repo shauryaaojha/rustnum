@@ -1148,7 +1148,7 @@ macro_rules! masked_binary {
 masked_binary!(Add, add, add, None);
 masked_binary!(Sub, sub, sub, None);
 masked_binary!(Mul, mul, mul, None);
-masked_binary!(Div, div, |a, b| a / b, Some(&safe_divide::<T>));
+masked_binary!(Div, div, crate::element::div, Some(&safe_divide::<T>));
 
 macro_rules! masked_scalar_left {
     ($($t:ty),*) => {$(
@@ -1234,19 +1234,18 @@ fn unary<F: Float>(
     let mut mask = vec![false; values.len()];
     let mut data = Vec::with_capacity(values.len());
     for (i, &x) in values.iter().enumerate() {
+        // Masked inputs keep their data and skip `f`; with a domain, out-of-domain inputs and
+        // non-finite results are masked too.
         let masked_in = old.as_ref().is_some_and(|m| m[i]);
-        let mut m = masked_in;
-        let mut v = f(x);
-        if domain.is_some() {
-            if domain.is_some_and(|d| d(x)) || !v.is_finite() {
-                m = true;
+        let (m, v) = if masked_in {
+            (true, x)
+        } else {
+            let v = f(x);
+            match domain {
+                Some(d) if d(x) || !v.is_finite() => (true, x),
+                _ => (false, v),
             }
-            if m {
-                v = x;
-            }
-        } else if masked_in {
-            v = x;
-        }
+        };
         mask[i] = m;
         data.push(v);
     }

@@ -40,7 +40,9 @@ impl Pool {
 }
 pub(crate) fn release<T: Element>(data: Vec<T>) {
     let bytes = data.capacity().saturating_mul(std::mem::size_of::<T>());
-    if bytes < MIN_BYTES {
+    // `take(n)` looks buffers up by length, so an over-allocated buffer would never be reused
+    // and would only hold pool budget.
+    if bytes < MIN_BYTES || data.capacity() != data.len() {
         return;
     }
     let mut p = pool().lock().unwrap_or_else(|e| e.into_inner());

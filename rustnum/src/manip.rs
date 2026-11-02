@@ -659,21 +659,9 @@ fn f64_to_sort_key(x: f64) -> u64 {
 }
 
 #[inline(always)]
-fn sort_key_to_f64(k: u64) -> f64 {
-    let mask = (((k ^ (1u64 << 63)) as i64) >> 63) as u64 | (1u64 << 63);
-    f64::from_bits(k ^ mask)
-}
-
-#[inline(always)]
 fn f32_to_sort_key(x: f32) -> u32 {
     let u = x.to_bits();
     u ^ (((u as i32) >> 31) as u32 | (1u32 << 31))
-}
-
-#[inline(always)]
-fn sort_key_to_f32(k: u32) -> f32 {
-    let mask = (((k ^ (1u32 << 31)) as i32) >> 31) as u32 | (1u32 << 31);
-    f32::from_bits(k ^ mask)
 }
 
 #[inline(always)]
@@ -682,18 +670,8 @@ fn i64_to_sort_key(x: i64) -> u64 {
 }
 
 #[inline(always)]
-fn sort_key_to_i64(k: u64) -> i64 {
-    (k ^ (1u64 << 63)) as i64
-}
-
-#[inline(always)]
 fn i32_to_sort_key(x: i32) -> u32 {
     (x as u32) ^ (1u32 << 31)
-}
-
-#[inline(always)]
-fn sort_key_to_i32(k: u32) -> i32 {
-    (k ^ (1u32 << 31)) as i32
 }
 
 pub(crate) fn partition_nans_to_end<T: Element>(slice: &mut [T]) -> usize {
@@ -708,96 +686,6 @@ pub(crate) fn partition_nans_to_end<T: Element>(slice: &mut [T]) -> usize {
         }
     }
     left
-}
-
-pub(crate) fn radix_sort_u64(slice: &mut [u64]) {
-    let n = slice.len();
-    if n <= 1 {
-        return;
-    }
-    let mut buf = vec![0u64; n];
-    let mut in_buf = false;
-
-    for shift in (0..64).step_by(8) {
-        let mut counts = [0usize; 256];
-        let src = if in_buf { buf.as_slice() } else { &*slice };
-        for &val in src {
-            let bucket = ((val >> shift) & 0xFF) as usize;
-            counts[bucket] += 1;
-        }
-
-        let mut offsets = [0usize; 256];
-        let mut sum = 0;
-        for i in 0..256 {
-            offsets[i] = sum;
-            sum += counts[i];
-        }
-
-        if in_buf {
-            for &val in buf.as_slice() {
-                let bucket = ((val >> shift) & 0xFF) as usize;
-                slice[offsets[bucket]] = val;
-                offsets[bucket] += 1;
-            }
-            in_buf = false;
-        } else {
-            for &val in slice.iter() {
-                let bucket = ((val >> shift) & 0xFF) as usize;
-                buf[offsets[bucket]] = val;
-                offsets[bucket] += 1;
-            }
-            in_buf = true;
-        }
-    }
-
-    if in_buf {
-        slice.copy_from_slice(&buf);
-    }
-}
-
-pub(crate) fn radix_sort_u32(slice: &mut [u32]) {
-    let n = slice.len();
-    if n <= 1 {
-        return;
-    }
-    let mut buf = vec![0u32; n];
-    let mut in_buf = false;
-
-    for shift in (0..32).step_by(8) {
-        let mut counts = [0usize; 256];
-        let src = if in_buf { buf.as_slice() } else { &*slice };
-        for &val in src {
-            let bucket = ((val >> shift) & 0xFF) as usize;
-            counts[bucket] += 1;
-        }
-
-        let mut offsets = [0usize; 256];
-        let mut sum = 0;
-        for i in 0..256 {
-            offsets[i] = sum;
-            sum += counts[i];
-        }
-
-        if in_buf {
-            for &val in buf.as_slice() {
-                let bucket = ((val >> shift) & 0xFF) as usize;
-                slice[offsets[bucket]] = val;
-                offsets[bucket] += 1;
-            }
-            in_buf = false;
-        } else {
-            for &val in slice.iter() {
-                let bucket = ((val >> shift) & 0xFF) as usize;
-                buf[offsets[bucket]] = val;
-                offsets[bucket] += 1;
-            }
-            in_buf = true;
-        }
-    }
-
-    if in_buf {
-        slice.copy_from_slice(&buf);
-    }
 }
 
 pub(crate) fn radix_sort_pairs_u64(slice: &mut [(u64, usize)]) {
@@ -910,78 +798,8 @@ pub(crate) fn sort_slice<T: Element>(slice: &mut [T]) {
         }
     }
 
-    if valid_len >= (1 << 16) {
-        use std::any::TypeId;
-        let tid = TypeId::of::<T>();
-        if tid == TypeId::of::<f64>() {
-            // SAFETY: TypeId matches f64, so T is f64 with identical size and alignment.
-            let f_slice: &mut [f64] = unsafe {
-                std::slice::from_raw_parts_mut(valid.as_mut_ptr() as *mut f64, valid_len)
-            };
-            let keys: &mut [u64] = unsafe {
-                std::slice::from_raw_parts_mut(f_slice.as_mut_ptr() as *mut u64, valid_len)
-            };
-            for x in keys.iter_mut() {
-                *x = f64_to_sort_key(f64::from_bits(*x));
-            }
-            radix_sort_u64(keys);
-            for x in keys.iter_mut() {
-                let f = sort_key_to_f64(*x);
-                *x = f.to_bits();
-            }
-            return;
-        } else if tid == TypeId::of::<f32>() {
-            // SAFETY: TypeId matches f32, so T is f32 with identical size and alignment.
-            let f_slice: &mut [f32] = unsafe {
-                std::slice::from_raw_parts_mut(valid.as_mut_ptr() as *mut f32, valid_len)
-            };
-            let keys: &mut [u32] = unsafe {
-                std::slice::from_raw_parts_mut(f_slice.as_mut_ptr() as *mut u32, valid_len)
-            };
-            for x in keys.iter_mut() {
-                *x = f32_to_sort_key(f32::from_bits(*x));
-            }
-            radix_sort_u32(keys);
-            for x in keys.iter_mut() {
-                let f = sort_key_to_f32(*x);
-                *x = f.to_bits();
-            }
-            return;
-        } else if tid == TypeId::of::<i64>() {
-            // SAFETY: TypeId matches i64, so T is i64 with identical size and alignment.
-            let i_slice: &mut [i64] = unsafe {
-                std::slice::from_raw_parts_mut(valid.as_mut_ptr() as *mut i64, valid_len)
-            };
-            let keys: &mut [u64] = unsafe {
-                std::slice::from_raw_parts_mut(i_slice.as_mut_ptr() as *mut u64, valid_len)
-            };
-            for x in keys.iter_mut() {
-                *x = i64_to_sort_key(*x as i64);
-            }
-            radix_sort_u64(keys);
-            for x in keys.iter_mut() {
-                *x = sort_key_to_i64(*x) as u64;
-            }
-            return;
-        } else if tid == TypeId::of::<i32>() {
-            // SAFETY: TypeId matches i32, so T is i32 with identical size and alignment.
-            let i_slice: &mut [i32] = unsafe {
-                std::slice::from_raw_parts_mut(valid.as_mut_ptr() as *mut i32, valid_len)
-            };
-            let keys: &mut [u32] = unsafe {
-                std::slice::from_raw_parts_mut(i_slice.as_mut_ptr() as *mut u32, valid_len)
-            };
-            for x in keys.iter_mut() {
-                *x = i32_to_sort_key(*x as i32);
-            }
-            radix_sort_u32(keys);
-            for x in keys.iter_mut() {
-                *x = sort_key_to_i32(*x) as u32;
-            }
-            return;
-        }
-    }
-
+    // No radix path here: measured on 1e5..4e6 f64/i64, pdqsort beat the LSD radix sort
+    // single-threaded (17 vs 21 ms at 1e6 f64, 14 vs 26 ms i64) and rayon's par_sort beats both.
     valid.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 }
 

@@ -5,7 +5,8 @@ use crate::{Array, Float};
 
 fn finite_sorted<F: Float>(lane: &[F]) -> Vec<F> {
     let mut v: Vec<F> = lane.iter().copied().filter(|x| !x.is_nan()).collect();
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // NaNs are filtered out above, so every pair is ordered.
+    v.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
     v
 }
 /// Linear-interpolated quantile `q` in [0, 1] of an ascending, NaN-free slice (NumPy "linear").
@@ -72,6 +73,15 @@ fn nan_arg<F: Float>(lane: impl Iterator<Item = F>, max: bool) -> usize {
     best.expect("All-NaN slice encountered").0
 }
 impl<F: Float> Array<F> {
+    /// Non-NaN values in ascending order, without copying a contiguous array twice.
+    fn finite_sorted(&self) -> Vec<F> {
+        match self.as_slice() {
+            Some(v) => finite_sorted(v),
+            None => finite_sorted(&self.to_vec()),
+        }
+    }
+}
+impl<F: Float> Array<F> {
     /// Variance ignoring NaNs, like np.nanvar(a).
     ///
     /// An all-NaN input gives NaN (NumPy also warns).
@@ -88,7 +98,10 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1.,f64::NAN,3.].nanvar_ddof(1),2.);
     /// ```
     pub fn nanvar_ddof(&self, ddof: usize) -> F {
-        nan_var(&self.to_vec(), ddof)
+        match self.as_slice() {
+            Some(v) => nan_var(v, ddof),
+            None => nan_var(&self.to_vec(), ddof),
+        }
     }
     /// Standard deviation ignoring NaNs, like np.nanstd(a).
     /// ```
@@ -155,7 +168,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1.,f64::NAN,3.,10.].nanmedian(),3.);
     /// ```
     pub fn nanmedian(&self) -> F {
-        lerp_quantile(&finite_sorted(&self.to_vec()), 0.5)
+        lerp_quantile(&self.finite_sorted(), 0.5)
     }
     /// Median ignoring NaNs along an axis, like np.nanmedian(a, axis=axis).
     /// ```
@@ -180,7 +193,7 @@ impl<F: Float> Array<F> {
     pub fn nanpercentile(&self, q: F) -> F {
         let q = q.to_f64();
         check_percentile(q);
-        lerp_quantile(&finite_sorted(&self.to_vec()), q / 100.0)
+        lerp_quantile(&self.finite_sorted(), q / 100.0)
     }
     /// Percentile ignoring NaNs along an axis, like np.nanpercentile(a, q, axis=axis).
     ///

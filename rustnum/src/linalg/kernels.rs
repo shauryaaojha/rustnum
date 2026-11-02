@@ -25,6 +25,7 @@ pub trait KernelFloat:
     const ONE: Self;
     const EPSILON: Self;
     const INFINITY: Self;
+    const MIN_POSITIVE: Self;
 
     fn abs(self) -> Self;
     fn sqrt(self) -> Self;
@@ -62,6 +63,7 @@ macro_rules! impl_kernel_float {
             const ONE: Self = 1.0;
             const EPSILON: Self = <$type>::EPSILON;
             const INFINITY: Self = <$type>::INFINITY;
+            const MIN_POSITIVE: Self = <$type>::MIN_POSITIVE;
 
             fn abs(self) -> Self {
                 self.abs()
@@ -806,7 +808,52 @@ pub(crate) fn cholesky<T: KernelFloat>(a: &[T], n: usize) -> Result<Vec<T>, Kern
 }
 
 /// Reduced Householder QR factorisation, returning `(Q, R, reduced_columns)`.
+/// Power-of-two factor that brings `max |a|` into LAPACK's safe range `[smlnum, bignum]`
+/// (`smlnum = sqrt(min_positive) / eps`), or `None` when no scaling is needed. Householder
+/// norms square the entries, so without it values near 1e±300 overflow or underflow.
+fn safe_scale<T: KernelFloat>(a: &[T]) -> Option<T> {
+    let anrm = a.iter().fold(T::ZERO, |m, &x| m.max_of(x.abs()));
+    if anrm == T::ZERO || !anrm.is_finite() {
+        return None;
+    }
+    let smlnum = T::MIN_POSITIVE.sqrt() / T::EPSILON;
+    let bignum = T::ONE / smlnum;
+    let p16 = T::from_usize(1 << 16);
+    let step = p16 * p16 * p16 * p16; // 2^64, exact
+    let mut f = T::ONE;
+    if anrm > bignum {
+        while anrm * f > bignum {
+            f = f / step;
+        }
+    } else if anrm < smlnum {
+        while anrm * f < smlnum {
+            f = f * step;
+        }
+    } else {
+        return None;
+    }
+    Some(f)
+}
+
+/// Householder QR, scaled first when the entries are near overflow or underflow (as LAPACK's
+/// drivers do); `Q` is unchanged by the scaling and `R` is scaled back.
 pub(crate) fn qr<T: KernelFloat>(
+    a: &[T],
+    rows: usize,
+    cols: usize,
+) -> Result<(Vec<T>, Vec<T>, usize), KernelError> {
+    match safe_scale(a) {
+        None => qr_unscaled(a, rows, cols),
+        Some(f) => {
+            let scaled: Vec<T> = a.iter().map(|&x| x * f).collect();
+            let (q, mut r, reduced) = qr_unscaled(&scaled, rows, cols)?;
+            r.iter_mut().for_each(|x| *x = *x / f);
+            Ok((q, r, reduced))
+        }
+    }
+}
+
+fn qr_unscaled<T: KernelFloat>(
     a: &[T],
     rows: usize,
     cols: usize,
@@ -1667,6 +1714,8 @@ pub(crate) fn svd_jacobi<T: KernelFloat>(
 /// implicit-shift Golub-Kahan QR on the bidiagonal + back-transformation through GEMM.
 type Svd<T> = (Vec<T>, Vec<T>, Vec<T>, usize);
 
+/// SVD, scaled first when the entries are near overflow or underflow (as LAPACK's `dgesdd`
+/// does); `U` and `Vt` are unchanged by the scaling and the singular values are scaled back.
 pub(crate) fn svd<T: KernelFloat>(
     a: &[T],
     rows: usize,
@@ -1678,6 +1727,18 @@ pub(crate) fn svd<T: KernelFloat>(
     if !a.iter().all(|value| value.is_finite()) {
         return Err(KernelError::NoConvergence);
     }
+    match safe_scale(a) {
+        None => svd_unscaled(a, rows, cols),
+        Some(f) => {
+            let scaled: Vec<T> = a.iter().map(|&x| x * f).collect();
+            let (u, mut singular, vt, reduced) = svd_unscaled(&scaled, rows, cols)?;
+            singular.iter_mut().for_each(|x| *x = *x / f);
+            Ok((u, singular, vt, reduced))
+        }
+    }
+}
+
+fn svd_unscaled<T: KernelFloat>(a: &[T], rows: usize, cols: usize) -> Result<Svd<T>, KernelError> {
     if rows <= 16 && cols <= 16 {
         return svd_jacobi(a, rows, cols);
     }

@@ -676,6 +676,25 @@ macro_rules! arithmetic {
 arithmetic!(add,wrapping_add,+);
 arithmetic!(sub,wrapping_sub,-);
 arithmetic!(mul,wrapping_mul,*);
+macro_rules! division {
+    ($name:ident,$method:ident,$op:tt) => {
+        /// Integer division and remainder never panic, like NumPy: a zero divisor gives 0 and
+        /// `MIN / -1` wraps to `MIN` (`MIN % -1` is 0). Float and complex types use the operator.
+        pub(crate) fn $name<T:Num>(x:T,y:T)->T {
+            use std::any::Any;
+            macro_rules! cast {($t:ty)=> {
+                if let (Some(a),Some(b))=((&x as &dyn Any).downcast_ref::<$t>(),(&y as &dyn Any).downcast_ref::<$t>()) {
+                    let value: $t = if *b == 0 { 0 } else { a.$method(*b) };
+                    return *(&value as &dyn Any).downcast_ref::<T>().expect("same numeric type");
+                }
+            }}
+            cast!(i32);cast!(i64);cast!(u8);cast!(usize);
+            x $op y
+        }
+    };
+}
+division!(div,wrapping_div,/);
+division!(rem,wrapping_rem,%);
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +708,16 @@ mod tests {
     fn bankers_rounding() {
         assert_eq!(Float::round(2.5f64), 2.0);
         assert_eq!(Float::round(3.5f64), 4.0);
+    }
+    #[test]
+    fn integer_division_never_panics() {
+        assert_eq!(div(5i64, 0), 0);
+        assert_eq!(rem(5i64, 0), 0);
+        assert_eq!(div(i32::MIN, -1), i32::MIN);
+        assert_eq!(rem(i32::MIN, -1), 0);
+        assert_eq!(div(7u8, 2), 3);
+        assert!(div(1.0f64, 0.0).is_infinite());
+        assert!(rem(1.0f64, 0.0).is_nan());
     }
     #[test]
     fn nan_extrema() {

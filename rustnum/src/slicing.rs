@@ -181,6 +181,16 @@ pub(crate) fn normalize(
     };
     (a as isize, count as usize)
 }
+/// Stride of a sliced axis. With at most one element the stride is never used, so a huge step
+/// (`a[::2**63-1]`, which NumPy accepts) must not overflow `stride * step`.
+fn step_stride(stride: isize, step: isize, count: usize) -> isize {
+    if count <= 1 {
+        stride
+    } else {
+        stride.checked_mul(step).expect("slice step is too large")
+    }
+}
+
 impl<T: Element> Array<T> {
     /// Implements np.ndarray.__getitem__ with array value semantics.
     ///
@@ -232,11 +242,7 @@ impl<T: Element> Array<T> {
                         offset += start * self.strides[axis];
                     }
                     shape.push(count);
-                    strides.push(
-                        self.strides[axis]
-                            .checked_mul(step)
-                            .expect("slice step is too large"),
-                    );
+                    strides.push(step_stride(self.strides[axis], step, count));
                     axis += 1;
                 }
                 SliceArg::Inclusive { start, end, step } => {
@@ -245,11 +251,7 @@ impl<T: Element> Array<T> {
                         offset += start * self.strides[axis];
                     }
                     shape.push(count);
-                    strides.push(
-                        self.strides[axis]
-                            .checked_mul(step)
-                            .expect("slice step is too large"),
-                    );
+                    strides.push(step_stride(self.strides[axis], step, count));
                     axis += 1;
                 }
             }

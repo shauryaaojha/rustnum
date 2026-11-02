@@ -177,7 +177,8 @@ pub fn __compare<T: Element>(a: &T, b: &T) -> Ordering {
 ///
 /// Field types must be array elements with a `.npy` dtype (`f32 f64 i32 i64 u8 usize bool`,
 /// complex, `f16`, datetimes, other records). The struct derives `Clone`, `Copy`, `Debug`,
-/// `Default` and `PartialEq`; ordering is lexicographic in field order, like NumPy.
+/// `Default` and `PartialEq`; ordering is lexicographic in field order with NaN fields last,
+/// like NumPy's `sort` on structured arrays (so `partial_cmp` never returns `None`).
 #[macro_export]
 macro_rules! record {
     (
@@ -190,10 +191,12 @@ macro_rules! record {
 
         impl ::core::cmp::PartialOrd for $name {
             fn partial_cmp(&self, other: &Self) -> ::core::option::Option<::core::cmp::Ordering> {
+                // Field by field with NaN last (NaN ties with NaN), like NumPy's structured sort,
+                // so a NaN in one field never makes the whole record unordered.
                 $(
-                    match ::core::cmp::PartialOrd::partial_cmp(&self.$field, &other.$field) {
-                        ::core::option::Option::Some(::core::cmp::Ordering::Equal) => {}
-                        o => return o,
+                    match $crate::__compare(&self.$field, &other.$field) {
+                        ::core::cmp::Ordering::Equal => {}
+                        o => return ::core::option::Option::Some(o),
                     }
                 )+
                 ::core::option::Option::Some(::core::cmp::Ordering::Equal)

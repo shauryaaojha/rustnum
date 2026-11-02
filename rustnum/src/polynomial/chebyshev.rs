@@ -91,6 +91,10 @@ pub fn chebcompanion(c: &[f64]) -> Array<f64> {
         c.len() >= 2,
         "Series must have maximum degree of at least 1."
     );
+    if c.len() == 2 {
+        // Degree 1: NumPy returns [[-c0/c1]] directly; the general formula below halves it.
+        return Array::from_vec(vec![-c[0] / c[1]], &[1, 1]);
+    }
     let n = c.len() - 1;
     let mut mat = vec![0.0; n * n];
     let mut scl = vec![1.0];
@@ -139,6 +143,8 @@ pub fn chebfit(x: &[f64], y: &[f64], deg: usize) -> Array<f64> {
 /// // T_2(x) = 2x^2 - 1 = 0 -> roots +-1/sqrt(2) ~ +-0.7071
 /// let (re, _) = chebroots(&[0.0, 0.0, 1.0]);
 /// assert_eq!(re.len(), 2);
+/// // 1 + 2*T_1(x) = 1 + 2x = 0 -> x = -0.5
+/// assert_eq!(chebroots(&[1.0, 2.0]).0.to_vec(), vec![-0.5]);
 /// ```
 pub fn chebroots(c: &[f64]) -> (Array<f64>, Array<f64>) {
     let trimmed = polyutils::trimseq(c, 0.0);

@@ -551,6 +551,21 @@ pub fn power<T: Num>(a: impl IntoArray<T>, b: impl IntoArray<T>) -> Array<T> {
             let v = x.powc(y);
             return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
         }
+        // Half precision computes in f32 and rounds once, like NumPy's float16 loops.
+        if let (Some(&x), Some(&y)) = (
+            (&x as &dyn Any).downcast_ref::<crate::f16>(),
+            (&y as &dyn Any).downcast_ref::<crate::f16>(),
+        ) {
+            let v = crate::f16::from_f32(x.to_f32().powf(y.to_f32()));
+            return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
+        }
+        if let (Some(&x), Some(&y)) = (
+            (&x as &dyn Any).downcast_ref::<crate::bf16>(),
+            (&y as &dyn Any).downcast_ref::<crate::bf16>(),
+        ) {
+            let v = crate::bf16::from_f32(x.to_f32().powf(y.to_f32()));
+            return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
+        }
         assert!(
             y >= T::ZERO,
             "Integers to negative integer powers are not allowed."

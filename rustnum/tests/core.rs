@@ -1048,9 +1048,10 @@ fn panic_compress_rank() {
 }
 
 #[test]
-#[should_panic(expected = "divide by zero")]
-fn panic_integer_zero_division() {
-    let _ = np::array![1i32] / 0;
+fn integer_zero_division_gives_zero_like_numpy() {
+    // np.array([1, -7], np.int32) // 0 == [0, 0] (NumPy warns, never raises)
+    assert_eq!((np::array![1i32, -7] / 0).to_vec(), [0, 0]);
+    assert_eq!((np::array![1i32, -7] % 0).to_vec(), [0, 0]);
 }
 
 #[test]

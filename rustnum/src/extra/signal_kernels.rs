@@ -4,7 +4,8 @@
 //! Buffers are C-ordered slices. See the module docs of `extra` for conventions.
 
 use super::axis_split;
-use std::ops::{Add, Mul, Sub};
+use crate::Num;
+use crate::element::{add, mul, sub};
 
 /// Output size selector of `convolve` / `correlate`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,7 +22,7 @@ pub(crate) enum Mode {
 /// `out[k] = sum_j a[k - n_left + j] * v[j]` with zero padding.
 fn correlate_core<T>(a: &[T], v: &[T], mode: Mode) -> Vec<T>
 where
-    T: Copy + Default + Add<Output = T> + Mul<Output = T>,
+    T: Num,
 {
     let (n1, n2) = (a.len(), v.len());
     let (n_left, len) = match mode {
@@ -37,7 +38,7 @@ where
             let j1 = ((n1 as isize - start).min(n2 as isize)).max(0) as usize;
             let mut acc = T::default();
             for j in j0..j1 {
-                acc = acc + a[(start + j as isize) as usize] * v[j];
+                acc = add(acc, mul(a[(start + j as isize) as usize], v[j]));
             }
             acc
         })
@@ -56,7 +57,7 @@ fn check_nonempty(a: usize, v: usize) {
 /// `np.convolve(a, v, mode)`. When `v` is longer the arguments are swapped, as in NumPy.
 pub(crate) fn convolve<T>(a: &[T], v: &[T], mode: Mode) -> Vec<T>
 where
-    T: Copy + Default + Add<Output = T> + Mul<Output = T>,
+    T: Num,
 {
     check_nonempty(a.len(), v.len());
     let (a, v) = if v.len() > a.len() { (v, a) } else { (a, v) };
@@ -69,7 +70,7 @@ where
 /// When `v` is longer, the arguments are swapped and the result reversed, as in NumPy.
 pub(crate) fn correlate<T>(a: &[T], v: &[T], mode: Mode) -> Vec<T>
 where
-    T: Copy + Default + Add<Output = T> + Mul<Output = T>,
+    T: Num,
 {
     check_nonempty(a.len(), v.len());
     if v.len() > a.len() {
@@ -86,7 +87,7 @@ where
 /// The axis shrinks by `n` (to 0 at most, giving an empty result).
 pub(crate) fn diff<T>(x: &[T], shape: &[usize], n: usize, axis: usize) -> (Vec<T>, Vec<usize>)
 where
-    T: Copy + Sub<Output = T>,
+    T: Num,
 {
     let mut cur = x.to_vec();
     let mut shp = shape.to_vec();
@@ -98,7 +99,7 @@ where
             for k in 0..new_len {
                 for i in 0..inner {
                     let base = (o * len + k) * inner + i;
-                    next.push(cur[base + inner] - cur[base]);
+                    next.push(sub(cur[base + inner], cur[base]));
                 }
             }
         }
@@ -286,7 +287,7 @@ pub(crate) fn trapezoid(y: &[f64], shape: &[usize], axis: usize, spacing: Spacin
 /// row; otherwise each row has 3 components.
 pub(crate) fn cross<T>(a: &[T], da: usize, b: &[T], db: usize) -> Vec<T>
 where
-    T: Copy + Default + Mul<Output = T> + Sub<Output = T>,
+    T: Num,
 {
     if !(da == 2 || da == 3) || !(db == 2 || db == 3) {
         panic!("incompatible dimensions for cross product\n(dimension must be 2 or 3)");
@@ -304,12 +305,12 @@ where
         let (u, v) = (&a[r * da..(r + 1) * da], &b[r * db..(r + 1) * db]);
         let (u0, u1, u2) = (u[0], u[1], if da == 3 { u[2] } else { z });
         let (v0, v1, v2) = (v[0], v[1], if db == 3 { v[2] } else { z });
-        let cz = u0 * v1 - u1 * v0;
+        let cz = sub(mul(u0, v1), mul(u1, v0));
         if da == 2 && db == 2 {
             out.push(cz);
         } else {
-            out.push(u1 * v2 - u2 * v1);
-            out.push(u2 * v0 - u0 * v2);
+            out.push(sub(mul(u1, v2), mul(u2, v1)));
+            out.push(sub(mul(u2, v0), mul(u0, v2)));
             out.push(cz);
         }
     }
@@ -326,7 +327,7 @@ pub(crate) fn kron<T>(
     b_shape: &[usize],
 ) -> (Vec<T>, Vec<usize>)
 where
-    T: Copy + Mul<Output = T>,
+    T: Num,
 {
     let nd = a_shape.len().max(b_shape.len());
     let pad = |s: &[usize]| -> Vec<usize> {
@@ -345,7 +346,7 @@ where
             ia = ia * sa[d] + idx[d] / sb[d];
             ib = ib * sb[d] + idx[d] % sb[d];
         }
-        out.push(a[ia] * b[ib]);
+        out.push(mul(a[ia], b[ib]));
         for d in (0..nd).rev() {
             idx[d] += 1;
             if idx[d] < out_shape[d] {

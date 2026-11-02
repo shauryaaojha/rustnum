@@ -1,4 +1,4 @@
-use crate::element::{add, mul, sub};
+use crate::element::{add, div, mul, rem, sub};
 use crate::{Array, Element, Float, IntoArray, Num};
 use std::ops::*;
 macro_rules! binary {
@@ -44,8 +44,8 @@ macro_rules! binary {
 binary!(Add, add, add);
 binary!(Sub, sub, sub);
 binary!(Mul, mul, mul);
-binary!(Div, div, |a, b| a / b);
-binary!(Rem, rem, |a, b| a % b);
+binary!(Div, div, div);
+binary!(Rem, rem, rem);
 macro_rules! scalar_left {
     ($t:ty,$trait:ident,$method:ident,$f:expr) => {
         impl $trait<Array<$t>> for $t {
@@ -65,8 +65,8 @@ macro_rules! scalar_left {
         scalar_left!($t, Add, add, add);
         scalar_left!($t, Sub, sub, sub);
         scalar_left!($t, Mul, mul, mul);
-        scalar_left!($t, Div, div, |a, b| a / b);
-        scalar_left!($t, Rem, rem, |a, b| a % b);
+        scalar_left!($t, Div, div, div);
+        scalar_left!($t, Rem, rem, rem);
     };
 }
 scalar_left!(f32);
@@ -91,8 +91,8 @@ macro_rules! assign {
 assign!(AddAssign, add_assign, add);
 assign!(SubAssign, sub_assign, sub);
 assign!(MulAssign, mul_assign, mul);
-assign!(DivAssign, div_assign, |a, b| a / b);
-assign!(RemAssign, rem_assign, |a, b| a % b);
+assign!(DivAssign, div_assign, div);
+assign!(RemAssign, rem_assign, rem);
 impl<T: Num + Neg<Output = T>> Neg for Array<T> {
     type Output = Self;
     fn neg(self) -> Self {

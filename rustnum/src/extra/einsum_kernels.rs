@@ -10,8 +10,9 @@
 //! product of every label's size times the number of operands, i.e. no pairwise contraction
 //! ordering is attempted ("correctness first").
 
+use crate::Num;
+use crate::element::{add, mul};
 use std::collections::BTreeMap;
-use std::ops::{Add, Mul};
 
 /// A strided view over a slice: element `index` is `data[offset + sum(index[d] * strides[d])]`.
 #[derive(Clone, Copy, Debug)]
@@ -193,7 +194,7 @@ fn parse(subscripts: &str, ndims: &[usize]) -> (Vec<Vec<Label>>, Vec<Label>) {
 /// Returns the C-ordered result and its shape (empty shape = scalar, one element).
 pub(crate) fn einsum<T>(subscripts: &str, operands: &[Operand<'_, T>]) -> (Vec<T>, Vec<usize>)
 where
-    T: Copy + Default + Add<Output = T> + Mul<Output = T>,
+    T: Num,
 {
     if operands.is_empty() {
         panic!("must provide at least an operand");
@@ -276,9 +277,9 @@ where
         for _ in 0..red_len {
             let mut p = operands[0].data[offs[0] as usize];
             for k in 1..nops {
-                p = p * operands[k].data[offs[k] as usize];
+                p = mul(p, operands[k].data[offs[k] as usize]);
             }
-            acc = acc + p;
+            acc = add(acc, p);
             for ax in (0..red_sizes.len()).rev() {
                 red_idx[ax] += 1;
                 for k in 0..nops {

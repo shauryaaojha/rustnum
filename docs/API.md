@@ -11,6 +11,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Root macros are `np::array!` for literals through three dimensions and `np::s!` for slice arguments.
 - Public APIs contain no explicit lifetime parameters and no public `unsafe` functions.
 - Integer addition, subtraction, multiplication, powers, reductions, and linear-algebra products wrap on overflow like fixed-width NumPy dtypes.
+- Integer `/` and `%` truncate toward zero and never panic: a zero divisor gives `0` (NumPy's integer result) and `MIN / -1` wraps to `MIN`.
 
 ## 1. Element types and errors
 
