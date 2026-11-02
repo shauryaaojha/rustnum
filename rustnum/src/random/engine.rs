@@ -335,6 +335,404 @@ pub(crate) fn poisson(rng: &mut Xoshiro256StarStar, lam: f64) -> u64 {
     }
 }
 
+/// Standard Cauchy variate: standard_normal / standard_normal.
+pub(crate) fn standard_cauchy(rng: &mut Xoshiro256StarStar) -> f64 {
+    standard_normal(rng) / standard_normal(rng)
+}
+
+/// Chi-square(df) variate: 2 * gamma(df / 2, 1).
+pub(crate) fn chisquare(rng: &mut Xoshiro256StarStar, df: f64) -> f64 {
+    2.0 * gamma(rng, df * 0.5, 1.0)
+}
+
+/// Noncentral chi-square(df, nonc) variate.
+pub(crate) fn noncentral_chisquare(rng: &mut Xoshiro256StarStar, df: f64, nonc: f64) -> f64 {
+    if nonc == 0.0 {
+        chisquare(rng, df)
+    } else if df > 1.0 {
+        let z = standard_normal(rng) + nonc.sqrt();
+        z * z + chisquare(rng, df - 1.0)
+    } else {
+        let j = poisson(rng, nonc * 0.5);
+        2.0 * gamma(rng, (df + 2.0 * j as f64) * 0.5, 1.0)
+    }
+}
+
+/// Standard Student's t(df) variate.
+pub(crate) fn standard_t(rng: &mut Xoshiro256StarStar, df: f64) -> f64 {
+    standard_normal(rng) / (chisquare(rng, df) / df).sqrt()
+}
+
+/// F(dfnum, dfden) variate.
+pub(crate) fn f(rng: &mut Xoshiro256StarStar, dfnum: f64, dfden: f64) -> f64 {
+    (chisquare(rng, dfnum) * dfden) / (chisquare(rng, dfden) * dfnum)
+}
+
+/// Noncentral F(dfnum, dfden, nonc) variate.
+pub(crate) fn noncentral_f(rng: &mut Xoshiro256StarStar, dfnum: f64, dfden: f64, nonc: f64) -> f64 {
+    (noncentral_chisquare(rng, dfnum, nonc) * dfden) / (chisquare(rng, dfden) * dfnum)
+}
+
+/// Laplace(loc, scale) variate.
+pub(crate) fn laplace(rng: &mut Xoshiro256StarStar, loc: f64, scale: f64) -> f64 {
+    let u = rng.next_f64() - 0.5;
+    loc - scale * u.signum() * (1.0 - 2.0 * u.abs()).ln()
+}
+
+/// Logistic(loc, scale) variate.
+pub(crate) fn logistic(rng: &mut Xoshiro256StarStar, loc: f64, scale: f64) -> f64 {
+    let u = rng.next_f64();
+    loc + scale * (u / (1.0 - u)).ln()
+}
+
+/// Lognormal(mean, sigma) variate.
+pub(crate) fn lognormal(rng: &mut Xoshiro256StarStar, mean: f64, sigma: f64) -> f64 {
+    (mean + sigma * standard_normal(rng)).exp()
+}
+
+/// Gumbel(loc, scale) variate.
+pub(crate) fn gumbel(rng: &mut Xoshiro256StarStar, loc: f64, scale: f64) -> f64 {
+    loc - scale * standard_exponential(rng).ln()
+}
+
+/// Rayleigh(scale) variate.
+pub(crate) fn rayleigh(rng: &mut Xoshiro256StarStar, scale: f64) -> f64 {
+    scale * (2.0 * standard_exponential(rng)).sqrt()
+}
+
+/// Pareto(a) variate (Pareto II / Lomax).
+pub(crate) fn pareto(rng: &mut Xoshiro256StarStar, a: f64) -> f64 {
+    (standard_exponential(rng) / a).exp() - 1.0
+}
+
+/// Power(a) variate.
+pub(crate) fn power(rng: &mut Xoshiro256StarStar, a: f64) -> f64 {
+    let u = rng.next_f64();
+    u.powf(1.0 / a)
+}
+
+/// Weibull(a) variate.
+pub(crate) fn weibull(rng: &mut Xoshiro256StarStar, a: f64) -> f64 {
+    if a == 0.0 {
+        0.0
+    } else {
+        standard_exponential(rng).powf(1.0 / a)
+    }
+}
+
+/// Wald(mean, scale) variate (Inverse Gaussian).
+pub(crate) fn wald(rng: &mut Xoshiro256StarStar, mean: f64, scale: f64) -> f64 {
+    let v = standard_normal(rng);
+    let y = v * v;
+    let mean2 = mean * mean;
+    let x = mean + (mean2 * y) / (2.0 * scale)
+        - (mean / (2.0 * scale)) * (4.0 * mean * scale * y + mean2 * y * y).sqrt();
+    let z = rng.next_f64();
+    if z <= mean / (mean + x) { x } else { mean2 / x }
+}
+
+/// Triangular(left, mode, right) variate.
+pub(crate) fn triangular(rng: &mut Xoshiro256StarStar, left: f64, mode: f64, right: f64) -> f64 {
+    let u = rng.next_f64();
+    let fc = (mode - left) / (right - left);
+    if u <= fc {
+        left + ((right - left) * (mode - left) * u).sqrt()
+    } else {
+        right - ((right - left) * (right - mode) * (1.0 - u)).sqrt()
+    }
+}
+
+fn wrap_pi(x: f64) -> f64 {
+    use std::f64::consts::PI;
+    let two_pi = 2.0 * PI;
+    let mut v = (x + PI) % two_pi;
+    if v < 0.0 {
+        v += two_pi;
+    }
+    v - PI
+}
+
+/// Von Mises(mu, kappa) variate via Best-Fisher.
+pub(crate) fn vonmises(rng: &mut Xoshiro256StarStar, mu: f64, kappa: f64) -> f64 {
+    use std::f64::consts::PI;
+    if kappa <= 1e-8 {
+        let val = mu + (2.0 * rng.next_f64() - 1.0) * PI;
+        wrap_pi(val)
+    } else {
+        let tau = 1.0 + (1.0 + 4.0 * kappa * kappa).sqrt();
+        let rho = (tau - (2.0 * tau).sqrt()) / (2.0 * kappa);
+        let r = (1.0 + rho * rho) / (2.0 * rho);
+        loop {
+            let u1 = rng.next_f64();
+            let z = (PI * u1).cos();
+            let f = (1.0 + r * z) / (r + z);
+            let c = kappa * (r - f);
+            let u2 = rng.next_f64();
+            if u2 < c * (2.0 - c) || (c / u2).ln() + 1.0 - c >= 0.0 {
+                let u3 = rng.next_f64();
+                let theta = if u3 > 0.5 { f.acos() } else { -f.acos() };
+                return wrap_pi(theta + mu);
+            }
+        }
+    }
+}
+
+/// Geometric(p) variate.
+pub(crate) fn geometric(rng: &mut Xoshiro256StarStar, p: f64) -> i64 {
+    if p >= 1.0 {
+        1
+    } else {
+        let e = standard_exponential(rng);
+        ((-e / (1.0 - p).ln()).floor() as i64) + 1
+    }
+}
+
+/// Negative Binomial(n, p) variate.
+pub(crate) fn negative_binomial(rng: &mut Xoshiro256StarStar, n: f64, p: f64) -> i64 {
+    let y = gamma(rng, n, (1.0 - p) / p);
+    poisson(rng, y) as i64
+}
+
+/// Natural log of gamma function via Lanczos approximation.
+#[allow(clippy::excessive_precision)]
+pub(crate) fn ln_gamma(x: f64) -> f64 {
+    const P: [f64; 9] = [
+        0.99999999999980993,
+        676.5203681218851,
+        -1259.1392167224028,
+        771.32342877765313,
+        -176.61502916214059,
+        12.507343278686905,
+        -0.13857109526572012,
+        9.9843695780195716e-6,
+        1.5056327351493116e-7,
+    ];
+    if x < 0.5 {
+        std::f64::consts::PI.ln() - (std::f64::consts::PI * x).sin().ln() - ln_gamma(1.0 - x)
+    } else {
+        let z = x - 1.0;
+        let mut x_sum = P[0];
+        for (i, &p_val) in P.iter().enumerate().skip(1) {
+            x_sum += p_val / (z + i as f64);
+        }
+        let t = z + 7.5;
+        0.5 * (2.0 * std::f64::consts::PI).ln() + (z + 0.5) * t.ln() - t + x_sum.ln()
+    }
+}
+
+fn log_comb(n: i64, k: i64) -> f64 {
+    if k < 0 || k > n {
+        return f64::NEG_INFINITY;
+    }
+    ln_gamma((n + 1) as f64) - ln_gamma((k + 1) as f64) - ln_gamma((n - k + 1) as f64)
+}
+
+fn log_hypergeom(x: i64, ngood: i64, nbad: i64, nsample: i64) -> f64 {
+    let n_tot = ngood + nbad;
+    log_comb(ngood, x) + log_comb(nbad, nsample - x) - log_comb(n_tot, nsample)
+}
+
+/// Hypergeometric(ngood, nbad, nsample) variate.
+pub(crate) fn hypergeometric(
+    rng: &mut Xoshiro256StarStar,
+    ngood: i64,
+    nbad: i64,
+    nsample: i64,
+) -> i64 {
+    let n_tot = ngood + nbad;
+    if n_tot == 0 || nsample == 0 || ngood == 0 {
+        return 0;
+    }
+    if nsample == n_tot {
+        return ngood;
+    }
+    if ngood > n_tot / 2 {
+        return nsample - hypergeometric(rng, nbad, ngood, nsample);
+    }
+    if nsample > n_tot / 2 {
+        return ngood - hypergeometric(rng, ngood, nbad, n_tot - nsample);
+    }
+    if nsample <= 60 {
+        let mut ans = 0;
+        let mut g = ngood;
+        let mut b = nbad;
+        for _ in 0..nsample {
+            let u = rng.next_f64();
+            if u * ((g + b) as f64) < g as f64 {
+                ans += 1;
+                g -= 1;
+            } else {
+                b -= 1;
+            }
+        }
+        ans
+    } else {
+        let mean = (nsample as f64 * ngood as f64) / n_tot as f64;
+        let var =
+            mean * (nbad as f64 / n_tot as f64) * ((n_tot - nsample) as f64 / (n_tot - 1) as f64);
+        let std = var.sqrt().max(1.0);
+        let mode = ((nsample + 1) * (ngood + 1)) / (n_tot + 2);
+        let log_p_mode = log_hypergeom(mode, ngood, nbad, nsample);
+        loop {
+            let cand = (mode as f64 + 0.5 + 1.2 * std * standard_normal(rng)).round() as i64;
+            if cand < 0 || cand > ngood || cand > nsample || (nsample - cand) > nbad {
+                continue;
+            }
+            let log_prob = log_hypergeom(cand, ngood, nbad, nsample);
+            let dev = (cand as f64 - (mode as f64 + 0.5)) / (1.2 * std);
+            let log_env = -0.5 * dev * dev;
+            let u = rng.next_f64();
+            if u.ln() <= log_prob - log_p_mode - log_env {
+                return cand;
+            }
+        }
+    }
+}
+
+/// Multivariate Hypergeometric variate.
+pub(crate) fn multivariate_hypergeometric(
+    rng: &mut Xoshiro256StarStar,
+    colors: &[i64],
+    nsample: i64,
+) -> Vec<i64> {
+    let k = colors.len();
+    let mut out = vec![0i64; k];
+    let mut rem_sample = nsample;
+    let mut rem_total: i64 = colors.iter().sum();
+    for i in 0..k {
+        if rem_sample == 0 {
+            break;
+        }
+        if i == k - 1 {
+            out[i] = rem_sample;
+            break;
+        }
+        let c = colors[i];
+        let bad = rem_total - c;
+        let drawn = hypergeometric(rng, c, bad, rem_sample);
+        out[i] = drawn;
+        rem_sample -= drawn;
+        rem_total -= c;
+    }
+    out
+}
+
+/// Logseries(p) variate using Kemp's rejection algorithm.
+pub(crate) fn logseries(rng: &mut Xoshiro256StarStar, p: f64) -> i64 {
+    if p == 0.0 {
+        return 1;
+    }
+    let r = (-p).ln_1p();
+    loop {
+        let v = rng.next_f64();
+        if v >= p {
+            return 1;
+        }
+        let u = rng.next_f64();
+        let q = -((r * u).exp_m1());
+        if v <= q * q {
+            let res = (1.0 + v.ln() / q.ln()).floor() as i64;
+            if res < 1 || v == 0.0 {
+                continue;
+            }
+            return res;
+        }
+        if v >= q {
+            return 1;
+        }
+        return 2;
+    }
+}
+
+/// Zipf(a) variate using Devroye's rejection algorithm.
+pub(crate) fn zipf(rng: &mut Xoshiro256StarStar, a: f64) -> i64 {
+    if a >= 1025.0 {
+        return 1;
+    }
+    let am1 = a - 1.0;
+    let b = 2.0f64.powf(am1);
+    loop {
+        let u = rng.next_f64();
+        let v = rng.next_f64();
+        let x = u.powf(-1.0 / am1).floor();
+        if x < 1.0 {
+            continue;
+        }
+        let t = (1.0 + 1.0 / x).powf(am1);
+        if v * x * (t - 1.0) / (b - 1.0) <= t / b {
+            return x as i64;
+        }
+    }
+}
+
+/// Multinomial variate.
+pub(crate) fn multinomial(rng: &mut Xoshiro256StarStar, n: i64, pvals: &[f64]) -> Vec<i64> {
+    let k = pvals.len();
+    let mut out = vec![0i64; k];
+    let sum_p: f64 = pvals.iter().sum();
+    let mut p_rem = if sum_p > 1.0 { 1.0 } else { sum_p };
+    let mut n_rem = n;
+    for i in 0..k {
+        if n_rem == 0 || p_rem <= 0.0 {
+            break;
+        }
+        if i == k - 1 {
+            out[i] = n_rem;
+            break;
+        }
+        let p_curr = if sum_p > 1.0 {
+            pvals[i] / sum_p
+        } else {
+            pvals[i]
+        };
+        let p_cond = (p_curr / p_rem).clamp(0.0, 1.0);
+        let drawn = binomial(rng, n_rem as u64, p_cond) as i64;
+        out[i] = drawn;
+        n_rem -= drawn;
+        p_rem -= p_curr;
+    }
+    out
+}
+
+/// Dirichlet variate.
+pub(crate) fn dirichlet(rng: &mut Xoshiro256StarStar, alpha: &[f64]) -> Vec<f64> {
+    let k = alpha.len();
+    if k == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(k);
+    let mut sum = 0.0;
+    for &a in alpha {
+        let v = if a <= 0.0 { 0.0 } else { gamma(rng, a, 1.0) };
+        sum += v;
+        out.push(v);
+    }
+    if sum == 0.0 {
+        let uniform = 1.0 / k as f64;
+        for val in out.iter_mut() {
+            *val = uniform;
+        }
+    } else {
+        let inv_sum = 1.0 / sum;
+        for val in out.iter_mut() {
+            *val *= inv_sum;
+        }
+    }
+    out
+}
+
+/// Generate random bytes.
+pub(crate) fn bytes_vec(rng: &mut Xoshiro256StarStar, length: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(length);
+    while out.len() < length {
+        let word = rng.next_u64();
+        let bytes = word.to_le_bytes();
+        let take = (length - out.len()).min(8);
+        out.extend_from_slice(&bytes[..take]);
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Parallel Deterministic Chunk Filling
 // ---------------------------------------------------------------------------
@@ -446,12 +844,12 @@ pub(crate) fn exponential_vec(rng: &mut Xoshiro256StarStar, scale: f64, len: usi
 
 /// Fill a Vec with binomial(n, p) values.
 pub(crate) fn binomial_vec(rng: &mut Xoshiro256StarStar, n: u64, p: f64, len: usize) -> Vec<i64> {
-    (0..len).map(|_| binomial(rng, n, p) as i64).collect()
+    fill_deterministic_vec(rng, len, |r| binomial(r, n, p) as i64)
 }
 
 /// Fill a Vec with poisson(lam) values.
 pub(crate) fn poisson_vec(rng: &mut Xoshiro256StarStar, lam: f64, len: usize) -> Vec<i64> {
-    (0..len).map(|_| poisson(rng, lam) as i64).collect()
+    fill_deterministic_vec(rng, len, |r| poisson(r, lam) as i64)
 }
 
 /// Fill a Vec with gamma(shape, scale) values.
@@ -461,12 +859,238 @@ pub(crate) fn gamma_vec(
     scale: f64,
     len: usize,
 ) -> Vec<f64> {
-    (0..len).map(|_| gamma(rng, shape_param, scale)).collect()
+    fill_deterministic_vec(rng, len, |r| gamma(r, shape_param, scale))
 }
 
 /// Fill a Vec with beta(a, b) values.
 pub(crate) fn beta_vec(rng: &mut Xoshiro256StarStar, a: f64, b: f64, len: usize) -> Vec<f64> {
-    (0..len).map(|_| beta(rng, a, b)).collect()
+    fill_deterministic_vec(rng, len, |r| beta(r, a, b))
+}
+
+/// Fill a Vec with standard exponential values.
+pub(crate) fn standard_exponential_vec(rng: &mut Xoshiro256StarStar, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, standard_exponential)
+}
+
+/// Fill a Vec with standard gamma(shape_param) values.
+pub(crate) fn standard_gamma_vec(
+    rng: &mut Xoshiro256StarStar,
+    shape_param: f64,
+    len: usize,
+) -> Vec<f64> {
+    if shape_param == 0.0 {
+        vec![0.0; len]
+    } else {
+        fill_deterministic_vec(rng, len, |r| gamma(r, shape_param, 1.0))
+    }
+}
+
+/// Fill a Vec with standard Cauchy values.
+pub(crate) fn standard_cauchy_vec(rng: &mut Xoshiro256StarStar, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, standard_cauchy)
+}
+
+/// Fill a Vec with standard Student's t values.
+pub(crate) fn standard_t_vec(rng: &mut Xoshiro256StarStar, df: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| standard_t(r, df))
+}
+
+/// Fill a Vec with Chi-square values.
+pub(crate) fn chisquare_vec(rng: &mut Xoshiro256StarStar, df: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| chisquare(r, df))
+}
+
+/// Fill a Vec with noncentral Chi-square values.
+pub(crate) fn noncentral_chisquare_vec(
+    rng: &mut Xoshiro256StarStar,
+    df: f64,
+    nonc: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| noncentral_chisquare(r, df, nonc))
+}
+
+/// Fill a Vec with F values.
+pub(crate) fn f_vec(rng: &mut Xoshiro256StarStar, dfnum: f64, dfden: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| f(r, dfnum, dfden))
+}
+
+/// Fill a Vec with noncentral F values.
+pub(crate) fn noncentral_f_vec(
+    rng: &mut Xoshiro256StarStar,
+    dfnum: f64,
+    dfden: f64,
+    nonc: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| noncentral_f(r, dfnum, dfden, nonc))
+}
+
+/// Fill a Vec with Laplace values.
+pub(crate) fn laplace_vec(
+    rng: &mut Xoshiro256StarStar,
+    loc: f64,
+    scale: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| laplace(r, loc, scale))
+}
+
+/// Fill a Vec with Logistic values.
+pub(crate) fn logistic_vec(
+    rng: &mut Xoshiro256StarStar,
+    loc: f64,
+    scale: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| logistic(r, loc, scale))
+}
+
+/// Fill a Vec with Lognormal values.
+pub(crate) fn lognormal_vec(
+    rng: &mut Xoshiro256StarStar,
+    mean: f64,
+    sigma: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| lognormal(r, mean, sigma))
+}
+
+/// Fill a Vec with Gumbel values.
+pub(crate) fn gumbel_vec(
+    rng: &mut Xoshiro256StarStar,
+    loc: f64,
+    scale: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| gumbel(r, loc, scale))
+}
+
+/// Fill a Vec with Rayleigh values.
+pub(crate) fn rayleigh_vec(rng: &mut Xoshiro256StarStar, scale: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| rayleigh(r, scale))
+}
+
+/// Fill a Vec with Pareto values.
+pub(crate) fn pareto_vec(rng: &mut Xoshiro256StarStar, a: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| pareto(r, a))
+}
+
+/// Fill a Vec with Power values.
+pub(crate) fn power_vec(rng: &mut Xoshiro256StarStar, a: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| power(r, a))
+}
+
+/// Fill a Vec with Weibull values.
+pub(crate) fn weibull_vec(rng: &mut Xoshiro256StarStar, a: f64, len: usize) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| weibull(r, a))
+}
+
+/// Fill a Vec with Wald values.
+pub(crate) fn wald_vec(
+    rng: &mut Xoshiro256StarStar,
+    mean: f64,
+    scale: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| wald(r, mean, scale))
+}
+
+/// Fill a Vec with Triangular values.
+pub(crate) fn triangular_vec(
+    rng: &mut Xoshiro256StarStar,
+    left: f64,
+    mode: f64,
+    right: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| triangular(r, left, mode, right))
+}
+
+/// Fill a Vec with Von Mises values.
+pub(crate) fn vonmises_vec(
+    rng: &mut Xoshiro256StarStar,
+    mu: f64,
+    kappa: f64,
+    len: usize,
+) -> Vec<f64> {
+    fill_deterministic_vec(rng, len, |r| vonmises(r, mu, kappa))
+}
+
+/// Fill a Vec with Geometric values.
+pub(crate) fn geometric_vec(rng: &mut Xoshiro256StarStar, p: f64, len: usize) -> Vec<i64> {
+    fill_deterministic_vec(rng, len, |r| geometric(r, p))
+}
+
+/// Fill a Vec with Negative Binomial values.
+pub(crate) fn negative_binomial_vec(
+    rng: &mut Xoshiro256StarStar,
+    n: f64,
+    p: f64,
+    len: usize,
+) -> Vec<i64> {
+    fill_deterministic_vec(rng, len, |r| negative_binomial(r, n, p))
+}
+
+/// Fill a Vec with Hypergeometric values.
+pub(crate) fn hypergeometric_vec(
+    rng: &mut Xoshiro256StarStar,
+    ngood: i64,
+    nbad: i64,
+    nsample: i64,
+    len: usize,
+) -> Vec<i64> {
+    fill_deterministic_vec(rng, len, |r| hypergeometric(r, ngood, nbad, nsample))
+}
+
+/// Fill a Vec with Multivariate Hypergeometric values.
+pub(crate) fn multivariate_hypergeometric_vec(
+    rng: &mut Xoshiro256StarStar,
+    colors: &[i64],
+    nsample: i64,
+    count: usize,
+) -> Vec<i64> {
+    let k = colors.len();
+    let mut out = Vec::with_capacity(count * k);
+    for _ in 0..count {
+        out.extend(multivariate_hypergeometric(rng, colors, nsample));
+    }
+    out
+}
+
+/// Fill a Vec with Logseries values.
+pub(crate) fn logseries_vec(rng: &mut Xoshiro256StarStar, p: f64, len: usize) -> Vec<i64> {
+    fill_deterministic_vec(rng, len, |r| logseries(r, p))
+}
+
+/// Fill a Vec with Zipf values.
+pub(crate) fn zipf_vec(rng: &mut Xoshiro256StarStar, a: f64, len: usize) -> Vec<i64> {
+    fill_deterministic_vec(rng, len, |r| zipf(r, a))
+}
+
+/// Fill a Vec with Multinomial values.
+pub(crate) fn multinomial_vec(
+    rng: &mut Xoshiro256StarStar,
+    n: i64,
+    pvals: &[f64],
+    count: usize,
+) -> Vec<i64> {
+    let k = pvals.len();
+    let mut out = Vec::with_capacity(count * k);
+    for _ in 0..count {
+        out.extend(multinomial(rng, n, pvals));
+    }
+    out
+}
+
+/// Fill a Vec with Dirichlet values.
+pub(crate) fn dirichlet_vec(rng: &mut Xoshiro256StarStar, alpha: &[f64], count: usize) -> Vec<f64> {
+    let k = alpha.len();
+    let mut out = Vec::with_capacity(count * k);
+    for _ in 0..count {
+        out.extend(dirichlet(rng, alpha));
+    }
+    out
 }
 
 /// Fisher-Yates shuffle in place.

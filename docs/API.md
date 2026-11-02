@@ -7,7 +7,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 ## 0. Crate surface
 
 - Users write `use rustnum as np;`; core items are re-exported once at the crate root.
-- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, `np::memory`, and `np::random`; implementation modules remain private.
+- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, `np::polynomial`, `np::memory`, and `np::random`; implementation modules remain private.
 - Root macros are `np::array!` for literals through three dimensions and `np::s!` for slice arguments.
 - Public APIs contain no explicit lifetime parameters and no public `unsafe` functions.
 - Integer addition, subtraction, multiplication, powers, reductions, and linear-algebra products wrap on overflow like fixed-width NumPy dtypes.
@@ -163,9 +163,14 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `Rng::seed(seed: u64)` and `Rng::from_entropy()` construct the xoshiro256** generator; seeded streams are platform-stable but intentionally differ from NumPy PCG64.
 - `random(&mut self, shape: &[usize])`, `uniform(low, high, shape)`, `normal(mean, std, shape)`, and `standard_normal(shape)` return `Array<f64>`.
 - `integers(low: i64, high: i64, shape: &[usize]) -> Array<i64>` uses an exclusive high bound.
-- `choice<T: Element>(&mut self, a, n, replace) -> Array<T>`, `shuffle<T: Element>(&mut self, a: &mut Array<T>)`, and `permutation(n) -> Array<usize>` provide sampling and permutations.
-- `binomial(n: u64, p: f64, shape: &[usize]) -> Array<i64>` and `poisson(lam: f64, shape: &[usize]) -> Array<i64>` return signed integer arrays.
-- `exponential(scale, shape)`, `beta(a, b, shape)`, and `gamma(shape_param, scale, shape)` return `Array<f64>`.
+- `choice<T: Element>(&mut self, a, n, replace) -> Array<T>`, `shuffle<T: Element>(&mut self, a: &mut Array<T>)`, `permutation(n) -> Array<usize>`, and `permuted<T: Element>(&mut self, a: &Array<T>, axis: Option<isize>) -> Array<T>` provide sampling and permutations.
+- `binomial(n: u64, p: f64, shape: &[usize]) -> Array<i64>`, `poisson(lam: f64, shape: &[usize]) -> Array<i64>`, `geometric(p, shape)`, `negative_binomial(n, p, shape)`, `hypergeometric(ngood, nbad, nsample, shape)`, `logseries(p, shape)`, and `zipf(a, shape)` return signed integer arrays.
+- `multivariate_hypergeometric(colors: &[i64], nsample: i64, shape: &[usize]) -> Array<i64>` and `multinomial(n: i64, pvals: &[f64], shape: &[usize]) -> Array<i64>` return discrete multi-dimensional counts.
+- `standard_exponential(shape)`, `standard_gamma(shape_param, shape)`, `exponential(scale, shape)`, `beta(a, b, shape)`, and `gamma(shape_param, scale, shape)` return `Array<f64>`.
+- `standard_cauchy(shape)`, `standard_t(df, shape)`, `chisquare(df, shape)`, `noncentral_chisquare(df, nonc, shape)`, `f(dfnum, dfden, shape)`, `noncentral_f(dfnum, dfden, nonc, shape)`, `laplace(loc, scale, shape)`, `logistic(loc, scale, shape)`, `lognormal(mean, sigma, shape)`, `gumbel(loc, scale, shape)`, `rayleigh(scale, shape)`, `pareto(a, shape)`, `power(a, shape)`, `weibull(a, shape)`, `wald(mean, scale, shape)`, `triangular(left, mode, right, shape)`, and `vonmises(mu, kappa, shape)` return `Array<f64>`.
+- `dirichlet(alpha: &[f64], shape: &[usize]) -> Array<f64>` draws Dirichlet distribution vectors over simplexes.
+- `multivariate_normal(mean: &[f64], cov: &Array<f64>, shape: &[usize], check_valid: &str, tol: f64, method: &str) -> Array<f64>` draws multivariate normals through rustnum's linalg `cholesky`, `eigh`, or `svd` decompositions.
+- `bytes(length: usize) -> Vec<u8>` returns raw pseudorandom bytes.
 
 ## 13. I/O (`np::io`)
 
@@ -226,7 +231,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 ## 19. Deliberate v0.1 limits
 
 - Not supported as array dtypes: complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
-- Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
+- Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
 
 ## 20. In-place and consuming operations
@@ -309,3 +314,15 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `histogramdd(&sample: &Array<f64>, bins: &[Bins], range: Option<&[(f64, f64)]>, density: bool, weights: Option<&Array<f64>>) -> (Array<f64>, Vec<Array<f64>>)`; `histogram2d(&x, &y, bins: [Bins; 2], range: Option<[(f64, f64); 2]>, density, weights) -> (Array<f64>, Array<f64>, Array<f64>)`.
 - `einsum_path<T: Element>(subscripts: &str, operands: &[&Array<T>], optimize: &str) -> (Vec<Vec<usize>>, String)`; the report text is NumPy's.
 - `linalg::tensorinv<F: LinalgFloat>(&a, ind: usize) -> Result<Array<F>>`, `linalg::tensorsolve<F: LinalgFloat>(&a, &b, axes: Option<&[isize]>) -> Result<Array<F>>`; both call `inv` / `solve`.
+
+## 32. Polynomial classes and packages (`np::polynomial`)
+
+- Convenience classes: `Polynomial`, `Chebyshev`, `Legendre`, `Laguerre`, `Hermite`, `HermiteE`.
+- Default domains and windows: `Laguerre` has domain `[0.0, 1.0]` and window `[0.0, 1.0]`; all other classes have domain `[-1.0, 1.0]` and window `[-1.0, 1.0]`.
+- Constructors and factories: `new(coef: &[f64])`, `with_domain_and_window(coef, domain, window)`, `fit(x, y, deg)` (least squares with domain mapping), `identity()`, `basis(deg)`, and `fromroots(roots)`.
+- Evaluation and calculus: `eval(x: f64) -> f64`, `eval_array(x: &Array<f64>) -> Array<f64>`, `roots() -> (Array<f64>, Array<f64>)` (companion matrix + eigvals with inverse window-to-domain mapping), `deriv(m: usize)`, `integ(m: usize, k: &[f64], lbnd: Option<f64>)`, `linspace(n: usize, domain: Option<[f64; 2]>)`.
+- Arithmetic: operators `+`, `-`, `*`, `/`, `%` between series (with domain/window compatibility check) and scalars, `divmod(&other) -> (Self, Self)`, and `pow(n: usize)`.
+- Conversions: `convert<Target: PolyKind>()` and named `convert_to_polynomial()`, `convert_to_chebyshev()`, `convert_to_legendre()`, `convert_to_laguerre()`, `convert_to_hermite()`, `convert_to_hermite_e()`.
+- Series manipulation: `degree() -> usize`, `cutdeg(deg)`, `trim(tol)`, and `truncate(size)`.
+- Display: formats polynomial terms matching NumPy (e.g., `1.0 + 2.0 x + 3.0 x**2`, `1.0 + 2.0 T_1(x) + 3.0 T_2(x)`).
+- Submodules: `np::polynomial::polynomial`, `chebyshev`, `legendre`, `laguerre`, `hermite`, `hermite_e`, and `polyutils` provide free functions (`*val`, `*fit`, `*der`, `*int`, `*roots`, `*gauss`, `*vander`, `*line`, `*add`, `*sub`, `*mul`, `*div`, `*pow`, `*fromroots`, `*trim`, `*weight`, `poly2*`, `*2poly`).

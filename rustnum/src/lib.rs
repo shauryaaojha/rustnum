@@ -57,6 +57,7 @@ pub mod fft;
 pub mod io;
 pub mod linalg;
 pub mod poly;
+pub mod polynomial;
 pub mod random;
 
 pub use array::Array;
@@ -87,6 +88,7 @@ pub use misc::{
     logaddexp, logaddexp2, nextafter, remainder,
 };
 pub use ops::*;
+pub use polynomial::{Chebyshev, Hermite, HermiteE, Laguerre, Legendre, Polynomial};
 pub use printopts::{
     PrintOptions, PrintOptionsGuard, get_printoptions, printoptions, set_printoptions,
 };
