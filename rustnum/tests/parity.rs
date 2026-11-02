@@ -761,6 +761,40 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
         "vectorize_call2" => Ok(RunResult::F64(
             np::vectorize(|x: f64, y: f64| x * 2.0 + y * y).call2(&i[0], &i[1]),
         )),
+        "histogram2d" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "bx")),
+                np::Bins::Count(param_usize(case, "by")),
+            ];
+            Ok(RunResult::F64(
+                np::histogram2d(&i[0], &i[1], bins, None, false, Some(&i[2])).0,
+            ))
+        }
+        "histogram2d_density" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "bx")),
+                np::Bins::Count(param_usize(case, "by")),
+            ];
+            Ok(RunResult::F64(
+                np::histogram2d(&i[0], &i[1], bins, None, true, None).0,
+            ))
+        }
+        "histogramdd" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "b0")),
+                np::Bins::Count(param_usize(case, "b1")),
+                np::Bins::Count(param_usize(case, "b2")),
+            ];
+            Ok(RunResult::F64(
+                np::histogramdd(&i[0], &bins, None, false, None).0,
+            ))
+        }
+        "tensorinv" => Ok(RunResult::F64(
+            np::linalg::tensorinv(&i[0], param_usize(case, "ind")).map_err(|e| e.to_string())?,
+        )),
+        "tensorsolve" => Ok(RunResult::F64(
+            np::linalg::tensorsolve(&i[0], &i[1], None).map_err(|e| e.to_string())?,
+        )),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

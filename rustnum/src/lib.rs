@@ -28,9 +28,11 @@ mod bitops;
 mod broadcast;
 mod creation;
 mod display;
+mod einsum_path;
 mod element;
 mod extra;
 mod functional;
+mod histext;
 mod indexing;
 mod kernels_mem;
 mod lanes;
@@ -64,6 +66,7 @@ pub use bitops::{
 };
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
 pub use creation::*;
+pub use einsum_path::einsum_path;
 pub use element::{Element, Float, Num};
 pub use extra::api::{
     Bins, ConvolveMode, Spacing, average, average_axis, bincount, convolve, corrcoef, correlate,
@@ -72,6 +75,7 @@ pub use extra::api::{
     setdiff1d, setxor1d, trapezoid, union1d,
 };
 pub use functional::{Vectorize, apply_along_axis, apply_over_axes, vectorize};
+pub use histext::{histogram2d, histogramdd};
 pub use indexing::{
     diag_indices, diag_indices_from, fill_diagonal, mask_indices, ndenumerate, ndindex,
     tril_indices, tril_indices_from, triu_indices, triu_indices_from,

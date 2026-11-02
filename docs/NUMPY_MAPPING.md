@@ -564,6 +564,16 @@ Added after v0.1. Same conventions as above.
 | `np.get_printoptions()` | `np::get_printoptions()` | Returns `np::PrintOptions` |
 | `with np.printoptions(...):` | `let _g = np::printoptions(opts);` | The guard restores the previous options when dropped |
 
+### Histograms, einsum_path, tensor inverse and solve
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.histogram2d(x, y, bins, range, density, weights)` | `np::histogram2d(&x, &y, [Bins::Count(10), Bins::Count(10)], None, false, None)` | Returns `(H, xedges, yedges)` |
+| `np.histogramdd(sample, bins, range, density, weights)` | `np::histogramdd(&sample, &bins, None, false, None)` | `sample` is `(N, D)`; `bins` is `&[Bins]`; returns `(H, Vec<edges>)` |
+| `np.einsum_path(subscripts, *operands, optimize)` | `np::einsum_path("ij,jk,kl->il", &[&a, &b, &c], "greedy")` | Returns `(path, report)` where `path` lists operand positions per step (no leading `"einsum_path"`); `optimize` is "greedy", "optimal" or "false" |
+| `np.linalg.tensorinv(a, ind)` | `np::linalg::tensorinv(&a, 2)?` | NumPy's default `ind` is 2 |
+| `np.linalg.tensorsolve(a, b, axes)` | `np::linalg::tensorsolve(&a, &b, None)?` |  |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

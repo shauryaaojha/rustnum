@@ -303,3 +303,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 - `PrintOptions { precision: usize (8), threshold: usize (1000), edgeitems: usize (3), linewidth: usize (75), suppress: bool (false), sign: char ('-') }` with `Default`.
 - `set_printoptions(PrintOptions)`, `get_printoptions() -> PrintOptions`, `printoptions(PrintOptions) -> PrintOptionsGuard` (restores on drop). Options are per thread and honoured by `Display` and `Debug` of every `Array`.
+
+## 31. Histograms, einsum_path, tensor inverse and solve
+
+- `histogramdd(&sample: &Array<f64>, bins: &[Bins], range: Option<&[(f64, f64)]>, density: bool, weights: Option<&Array<f64>>) -> (Array<f64>, Vec<Array<f64>>)`; `histogram2d(&x, &y, bins: [Bins; 2], range: Option<[(f64, f64); 2]>, density, weights) -> (Array<f64>, Array<f64>, Array<f64>)`.
+- `einsum_path<T: Element>(subscripts: &str, operands: &[&Array<T>], optimize: &str) -> (Vec<Vec<usize>>, String)`; the report text is NumPy's.
+- `linalg::tensorinv<F: LinalgFloat>(&a, ind: usize) -> Result<Array<F>>`, `linalg::tensorsolve<F: LinalgFloat>(&a, &b, axes: Option<&[isize]>) -> Result<Array<F>>`; both call `inv` / `solve`.

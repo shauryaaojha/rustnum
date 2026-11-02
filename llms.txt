@@ -264,3 +264,7 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 
 ## Print options (added after v0.1)
 - `np::set_printoptions(np::PrintOptions { precision: 3, ..np::get_printoptions() })`, `np::get_printoptions()`, `let _g = np::printoptions(opts);` (scoped)
+
+## Histograms, einsum_path, tensor inverse and solve (added after v0.1)
+- `np::histogram2d(&x, &y, [Bins; 2], range, density, weights)` -> `(H, xedges, yedges)`; `np::histogramdd(&sample, &[Bins], range, density, weights)` -> `(H, edges)`
+- `np::einsum_path("ij,jk->ik", &[&a, &b], "greedy")` -> `(path, report)`; `np::linalg::tensorinv(&a, ind)?`, `np::linalg::tensorsolve(&a, &b, axes)?`

@@ -350,6 +350,19 @@ def main():
     vb = rng.standard_normal((3, 1)); vc = rng.standard_normal((1, 4))
     save_case("vectorize_call2", "vectorize_call2", [vb, vc], {}, np.vectorize(lambda x, y: x * 2 + y * y)(vb, vc), "float64", 1e-12, 1e-12)
 
+    # -- group 10: histograms and tensor linear algebra --
+    hx, hy = rng.standard_normal(300), rng.standard_normal(300) * 2
+    hw = rng.random(300)
+    save_case("histogram2d_weighted", "histogram2d", [hx, hy, hw], {"bx": 7, "by": 5}, np.histogram2d(hx, hy, bins=[7, 5], weights=hw)[0], "float64", 1e-12, 1e-12)
+    save_case("histogram2d_density", "histogram2d_density", [hx, hy], {"bx": 6, "by": 4}, np.histogram2d(hx, hy, bins=[6, 4], density=True)[0], "float64", 1e-12, 1e-12)
+    hs = rng.standard_normal((400, 3))
+    save_case("histogramdd_3d", "histogramdd", [hs], {"b0": 4, "b1": 3, "b2": 5}, np.histogramdd(hs, bins=[4, 3, 5])[0], "float64", 1e-12, 1e-12)
+    ti = (np.eye(12) * 4 + rng.standard_normal((12, 12)) * 0.3).reshape(3, 4, 2, 6)
+    save_case("tensorinv_ind2", "tensorinv", [ti], {"ind": 2}, np.linalg.tensorinv(ti, ind=2), "float64", 1e-9, 1e-12)
+    ts = (np.eye(12) * 4 + rng.standard_normal((12, 12)) * 0.3).reshape(3, 4, 12)
+    tb = rng.standard_normal((3, 4))
+    save_case("tensorsolve_basic", "tensorsolve", [ts, tb], {}, np.linalg.tensorsolve(ts, tb), "float64", 1e-9, 1e-12)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
