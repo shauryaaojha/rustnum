@@ -24,22 +24,33 @@
 #![deny(missing_docs)]
 
 mod array;
+mod bitops;
 mod broadcast;
 mod creation;
 mod display;
+mod einsum_path;
 mod element;
 mod extra;
+mod functional;
+mod histext;
+mod indexing;
 mod kernels_mem;
+mod lanes;
 mod layout;
 mod manip;
 pub mod memory;
 mod misc;
+mod nanfn;
 mod npz;
 mod ops;
 mod pool;
+mod printopts;
 mod reduce;
+mod shapeextra;
 mod simd_math;
 mod slicing;
+mod sortsearch;
+mod stride;
 mod ufunc;
 
 pub mod fft;
@@ -50,14 +61,25 @@ pub mod polynomial;
 pub mod random;
 
 pub use array::Array;
+pub use bitops::{
+    Integer, bitwise_and, bitwise_count, bitwise_not, bitwise_or, bitwise_xor, invert, left_shift,
+    packbits, right_shift, unpackbits,
+};
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
 pub use creation::*;
+pub use einsum_path::einsum_path;
 pub use element::{Element, Float, Num};
 pub use extra::api::{
     Bins, ConvolveMode, Spacing, average, average_axis, bincount, convolve, corrcoef, correlate,
     cov, cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges,
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
+};
+pub use functional::{Vectorize, apply_along_axis, apply_over_axes, vectorize};
+pub use histext::{histogram2d, histogramdd};
+pub use indexing::{
+    diag_indices, diag_indices_from, fill_diagonal, mask_indices, ndenumerate, ndindex,
+    tril_indices, tril_indices_from, triu_indices, triu_indices_from,
 };
 pub use manip::*;
 pub use misc::{
@@ -67,7 +89,16 @@ pub use misc::{
 };
 pub use ops::*;
 pub use polynomial::{Chebyshev, Hermite, HermiteE, Laguerre, Legendre, Polynomial};
+pub use printopts::{
+    PrintOptions, PrintOptionsGuard, get_printoptions, printoptions, set_printoptions,
+};
+pub use shapeextra::{
+    around, atleast_1d, atleast_2d, atleast_3d, column_stack, dstack, frombuffer, fromiter,
+    geomspace, real_if_close, rot90, row_stack, vander,
+};
 pub use slicing::{NEW_AXIS, SliceArg};
+pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
+pub use stride::{as_strided, sliding_window_view};
 pub use ufunc::*;
 /// A data error, like NumPy's I/O, parsing, or linear algebra exceptions.
 /// ```

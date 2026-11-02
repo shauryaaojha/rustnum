@@ -24,7 +24,9 @@
 mod api;
 pub(crate) mod csv;
 pub(crate) mod npy;
+mod text;
 
 pub use crate::npz::api::{NpzFile, load_npz, savez, savez_compressed};
 pub(crate) use api::try_npy_bytes;
 pub use api::{from_npy_bytes, load_csv, load_npy, save_csv, save_npy, to_npy_bytes};
+pub use text::{genfromtxt, loadtxt, savetxt};

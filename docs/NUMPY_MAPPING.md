@@ -523,6 +523,123 @@ use `a.take(&np::nonzero(&cond)[0].to_vec(), 0)` or `a.compress(&cond, 0)`.
 **15. Complex data is represented as `(re, im)` pairs.** `Array` does not yet have a complex element type; `np::fft::fft`,
 `np::poly::roots`, and `np::linalg::eig` take or return pairs of real arrays `(re, im)`. Scalar complex arithmetic is available via `np::Complex<F>`.
 
+## More NumPy functions
+
+Added after v0.1. Same conventions as above.
+
+### NaN-aware reductions
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.nanvar(a)`, `np.nanvar(a, axis=0)` | `a.nanvar()`, `a.nanvar_axis(0)` | Float only. `ddof`: `a.nanvar_ddof(1)`, `a.nanvar_ddof_axis(0, 1)` |
+| `np.nanstd(a)`, `np.nanstd(a, axis=0)` | `a.nanstd()`, `a.nanstd_axis(0)` | Float only. `ddof`: `a.nanstd_ddof(1)`, `a.nanstd_ddof_axis(0, 1)` |
+| `np.nanmedian(a)`, `np.nanmedian(a, axis=0)` | `a.nanmedian()`, `a.nanmedian_axis(0)` | All-NaN lane gives NaN |
+| `np.nanpercentile(a, q)`, `np.nanpercentile(a, q, axis=0)` | `a.nanpercentile(q)`, `a.nanpercentile_axis(q, 0)` | `q` in 0..=100, else panics `Percentiles must be in the range [0, 100]` |
+| `np.nanargmax(a)`, `np.nanargmin(a)` | `a.nanargmax()`, `a.nanargmin()` | Flat index. All-NaN input panics `All-NaN slice encountered` |
+| `np.nanargmax(a, axis=0)`, `np.nanargmin(a, axis=0)` | `a.nanargmax_axis(0)`, `a.nanargmin_axis(0)` | `Array<usize>` |
+| `np.nanprod(a)`, `np.nanprod(a, axis=0)` | `a.nanprod()`, `a.nanprod_axis(0)` | NaN counts as 1 |
+| `np.nancumsum(a)`, `np.nancumsum(a, axis=0)` | `a.nancumsum()`, `a.nancumsum_axis(0)` | NaN counts as 0; flat result without axis |
+| `np.nancumprod(a)`, `np.nancumprod(a, axis=0)` | `a.nancumprod()`, `a.nancumprod_axis(0)` | NaN counts as 1; flat result without axis |
+| `np.nanquantile` | `np::nanquantile`, `np::nanquantile_axis` | Already existed (see Statistics section) |
+
+### Sorting, searching and conditional selection
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.lexsort(keys, axis=-1)` | `np::lexsort(&[&k0, &k1], -1)` | Last key is primary. `Array<usize>`. Keys must have equal shape |
+| `np.partition(a, kth, axis=-1)` | `a.partition(kth, -1)` | Introselect, O(n). `kth` may be negative; panics `kth(=k) out of bounds (n)`. Single `kth` only |
+| `np.argpartition(a, kth, axis=-1)` | `a.argpartition(kth, -1)` | Returns `Array<usize>` |
+| `np.flatnonzero(a)` | `np::flatnonzero(&a)` | `Array<usize>` |
+| `np.select(condlist, choicelist, default)` | `np::select(&[&c0, &c1], &[&x0, &x1], default)` | First true condition wins; all inputs broadcast |
+| `np.piecewise(x, condlist, funclist)` | `np::piecewise(&x, &[&c0, &c1], &[&f0, &f1])` | Functions are `&dyn Fn(T) -> T`; use `&|_| c` for a constant. One extra function means "otherwise" |
+| `np.extract(condition, arr)` | `np::extract(&cond, &a)` | `cond` is `Array<bool>` |
+| `np.place(arr, mask, vals)` | `np::place(&mut a, &mask, &[v0, v1])` | `vals` repeats cyclically |
+| `np.copyto(dst, src, where=mask)` | `np::copyto(&mut dst, src, Some(&mask))` | `src` is array-like and broadcasts to `dst`; pass `None` for no mask. No `casting` |
+| `np.trim_zeros(filt, trim='fb')` | `np::trim_zeros(&a, "fb")` | Returns a view. N-d input is trimmed to the bounding box of the non-zeros |
+
+### Index helpers
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.tril_indices(n, k, m)`, `np.triu_indices(n, k, m)` | `np::tril_indices(n, k, None)`, `np::triu_indices(n, k, Some(m))` | Returns `(rows, cols)` as `Array<usize>`; `m` is `Option<usize>` |
+| `np.tril_indices_from(a, k)`, `np.triu_indices_from(a, k)` | `np::tril_indices_from(&a, k)`, `np::triu_indices_from(&a, k)` | Panics `input array must be 2-d` |
+| `np.diag_indices(n, ndim)` | `np::diag_indices(n, ndim)` | `ndim` is required (NumPy default 2). Returns `Vec<Array<usize>>` |
+| `np.diag_indices_from(a)` | `np::diag_indices_from(&a)` | Panics unless all axes are equal and `ndim >= 2` |
+| `np.fill_diagonal(a, val, wrap=False)` | `np::fill_diagonal(&mut a, val, wrap)` | `val` is array-like, cycled. In place (copy-on-write) |
+| `np.ndindex(*shape)` | `np::ndindex(&shape)` | Iterator of `Vec<usize>` in C order |
+| `np.ndenumerate(a)` | `np::ndenumerate(&a)` | Iterator of `(Vec<usize>, T)` |
+| `np.mask_indices(n, mask_func, k)` | `np::mask_indices(n, f, k)` | `f(&Array<i64>, isize) -> Array<i64>`, applied to `ones((n, n))` |
+
+### Shape and creation extras
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.rot90(m, k, axes)` | `np::rot90(&m, k, (0, 1))` | View. `k` may be negative; panics `Axes must be different.` |
+| `np.dstack(tup)`, `np.column_stack(tup)` | `np::dstack(&[&a, &b])`, `np::column_stack(&[&a, &b])` |  |
+| `np.row_stack(tup)` | `np::row_stack(&[&a, &b])` | Alias of `np::vstack` (deprecated in NumPy 2) |
+| `np.atleast_1d(a)`, `np.atleast_2d(a)`, `np.atleast_3d(a)` | `np::atleast_1d(&a)`, `np::atleast_2d(&a)`, `np::atleast_3d(&a)` | One array at a time; views |
+| `np.geomspace(start, stop, num)` | `np::geomspace(start, stop, num)` | Float only, endpoint always included (like `linspace`). Panics `Geometric sequence cannot include zero` |
+| `np.vander(x, N, increasing)` | `np::vander(&x, Some(n), false)` | `n` is `Option<usize>` (default `x.len()`); integer powers wrap |
+| `np.fromfunction(f, shape)` | `Array::from_shape_fn(shape, f)` | Already existed under this name (not added again) |
+| `np.fromiter(it, dtype, count)` | `np::fromiter(it, Some(count))` | Element type from the iterator; `None` reads everything |
+| `np.frombuffer(buf, dtype, count, offset)` | `np::frombuffer::<T>(&bytes, count, offset)` | dtype is the type parameter; native byte order; copies the data |
+| `np.around(a, decimals)` | `np::around(&a, decimals)` | Float only. `np.round` already existed as `a.round()` / `a.round_decimals(d)` |
+| `np.real_if_close(a, tol)` | `np::real_if_close(&re, &im, tol)` | Works on a `(re, im)` pair of real arrays; returns `(re, Option<im>)`, `None` when `im` is negligible |
+| `np.isposinf(a)`, `np.isneginf(a)` | `a.is_posinf()`, `a.is_neginf()` | Float only |
+
+### Stride tricks
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `sliding_window_view(x, window_shape, axis)` | `np::sliding_window_view(&x, &[3], None)` | Zero-copy overlapping view. `axis` is `Option<&[isize]>`. Writing to it copies first (copy-on-write) |
+| `as_strided(x, shape, strides)` | `np::as_strided(&x, &[3, 2], &[1, 1])` | Strides are in elements, not bytes. Bounds-checked: panics if any element would lie outside the buffer |
+
+### Bit operations
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.bitwise_and(a, b)`, `a & b` | `np::bitwise_and(&a, &b)`, `&a & &b` | `i32`, `i64`, `u8`, `usize` arrays (trait `np::Integer`). Operators also accept a scalar |
+| `np.bitwise_or`, `np.bitwise_xor` | `np::bitwise_or`, `np::bitwise_xor`, `\|`, `^` |  |
+| `np.bitwise_not(a)`, `np.invert(a)`, `~a` | `np::bitwise_not(&a)`, `np::invert(&a)`, `!&a` |  |
+| `np.left_shift(a, n)`, `np.right_shift(a, n)` | `np::left_shift(&a, n)`, `np::right_shift(&a, n)`, `<<`, `>>` | A count that is negative or >= the bit width gives 0 (or -1 for negative values when shifting right), as in NumPy |
+| `np.packbits(a, axis, bitorder)` | `np::packbits(&a, None, "big")` | Bool or integer input; float input panics. `axis: Option<isize>` |
+| `np.unpackbits(a, axis, count, bitorder)` | `np::unpackbits(&a, None, None, "big")` | `Array<u8>` input |
+| `np.bitwise_count(a)` | `np::bitwise_count(&a)` | Returns `Array<u8>` (popcount of the absolute value) |
+
+### Functional helpers
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.vectorize(f)(a, b)` | `np::vectorize(f).call2(a, b)` | `call`, `call2`, `call3` for 1, 2, 3 arguments; broadcasts; the closure's output type may differ |
+| `np.apply_along_axis(f, axis, arr)` | `np::apply_along_axis(f, axis, &arr)` | `f(&Array<T>) -> Array<R>` (0-d for a scalar result) |
+| `np.apply_over_axes(f, a, axes)` | `np::apply_over_axes(f, &a, &axes)` | `f(&Array<T>, axis) -> Array<T>` |
+
+### Text I/O (np::io)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.loadtxt(fname, comments, delimiter, skiprows, usecols, max_rows)` | `np::io::loadtxt::<f64>(path, Some("#"), None, 0, None, None)?` | Squeezed like NumPy; element type is the type parameter; returns `Result` |
+| `np.savetxt(fname, X, fmt, delimiter, newline, header, footer, comments)` | `np::io::savetxt(path, &x, "%.18e", " ", "\n", "", "", "# ")?` | printf formats `d i u e E f F g G s`; one per column or one for all |
+| `np.genfromtxt(fname, ..., names=True)` | `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling_values, usecols, names, max_rows)?` | Float only; returns `(Array, names)`; missing or unparsable fields become NaN or `filling_values` |
+
+### Print options
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.set_printoptions(precision=3, ...)` | `np::set_printoptions(np::PrintOptions { precision: 3, ..np::get_printoptions() })` | Fields: `precision`, `threshold`, `edgeitems`, `linewidth`, `suppress`, `sign` (`'-'`, `'+'`, `' '`). Per thread, like NumPy's context-local options |
+| `np.get_printoptions()` | `np::get_printoptions()` | Returns `np::PrintOptions` |
+| `with np.printoptions(...):` | `let _g = np::printoptions(opts);` | The guard restores the previous options when dropped |
+
+### Histograms, einsum_path, tensor inverse and solve
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.histogram2d(x, y, bins, range, density, weights)` | `np::histogram2d(&x, &y, [Bins::Count(10), Bins::Count(10)], None, false, None)` | Returns `(H, xedges, yedges)` |
+| `np.histogramdd(sample, bins, range, density, weights)` | `np::histogramdd(&sample, &bins, None, false, None)` | `sample` is `(N, D)`; `bins` is `&[Bins]`; returns `(H, Vec<edges>)` |
+| `np.einsum_path(subscripts, *operands, optimize)` | `np::einsum_path("ij,jk,kl->il", &[&a, &b, &c], "greedy")` | Returns `(path, report)` where `path` lists operand positions per step (no leading `"einsum_path"`); `optimize` is "greedy", "optimal" or "false" |
+| `np.linalg.tensorinv(a, ind)` | `np::linalg::tensorinv(&a, 2)?` | NumPy's default `ind` is 2 |
+| `np.linalg.tensorsolve(a, b, axes)` | `np::linalg::tensorsolve(&a, &b, None)?` |  |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

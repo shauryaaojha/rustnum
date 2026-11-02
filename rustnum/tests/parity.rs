@@ -586,6 +586,215 @@ fn run_case(fixture_dir: &Path, case: &Json) -> Result<RunResult, String> {
             Ok(RunResult::F64(Array::scalar(i[0].trace())))
         }
 
+        _ => run_extra_case(fixture_dir, case, op),
+    }
+}
+
+/// Cases added by the numpy-extra groups.
+fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult, String> {
+    let i = load_f64_inputs(fixture_dir, case);
+    match op {
+        "nanvar_ddof_axis" => Ok(RunResult::F64(
+            i[0].nanvar_ddof_axis(param_isize(case, "axis"), param_usize(case, "ddof")),
+        )),
+        "nanstd" => Ok(RunResult::F64(Array::scalar(i[0].nanstd()))),
+        "nanmedian_axis" => Ok(RunResult::F64(
+            i[0].nanmedian_axis(param_isize(case, "axis")),
+        )),
+        "nanpercentile_axis" => Ok(RunResult::F64(
+            i[0].nanpercentile_axis(param_f64(case, "q"), param_isize(case, "axis")),
+        )),
+        "nancumsum_axis" => Ok(RunResult::F64(
+            i[0].nancumsum_axis(param_isize(case, "axis")),
+        )),
+        "nancumprod_axis" => Ok(RunResult::F64(
+            i[0].nancumprod_axis(param_isize(case, "axis")),
+        )),
+        "nanprod_axis" => Ok(RunResult::F64(i[0].nanprod_axis(param_isize(case, "axis")))),
+        "nanargmax_axis" => Ok(RunResult::I64(
+            i[0].nanargmax_axis(param_isize(case, "axis"))
+                .map(|x| x as i64),
+        )),
+        "nanargmin" => Ok(RunResult::I64(Array::scalar(i[0].nanargmin() as i64))),
+        "lexsort" => {
+            let rows: Vec<Array<f64>> = (0..i[0].shape()[0])
+                .map(|r| i[0].index_axis(0, r))
+                .collect();
+            let keys: Vec<&Array<f64>> = rows.iter().collect();
+            Ok(RunResult::I64(np::lexsort(&keys, -1).map(|x| x as i64)))
+        }
+        "partition_kth" => {
+            let axis = param_isize(case, "axis");
+            let kth = param_isize(case, "kth");
+            let n = i[0].shape()[if axis < 0 {
+                (axis + 2) as usize
+            } else {
+                axis as usize
+            }] as isize;
+            let k = if kth < 0 { kth + n } else { kth };
+            Ok(RunResult::F64(
+                i[0].partition(kth, axis).index_axis(axis, k as usize),
+            ))
+        }
+        "flatnonzero" => Ok(RunResult::I64(np::flatnonzero(&i[0]).map(|x| x as i64))),
+        "trim_zeros" => Ok(RunResult::F64(np::trim_zeros(&i[0], "fb"))),
+        "select" => {
+            let (lo, hi, def) = (
+                param_f64(case, "lo"),
+                param_f64(case, "hi"),
+                param_f64(case, "default"),
+            );
+            let x = &i[0];
+            Ok(RunResult::F64(np::select(
+                &[&x.lt(lo), &x.gt(hi)],
+                &[&(x * 2.0), &(x * 3.0)],
+                def,
+            )))
+        }
+        "extract" => Ok(RunResult::F64(np::extract(&i[0].gt(0.0), &i[0]))),
+        "tril_indices" | "triu_indices" => {
+            let (n, k) = (param_usize(case, "n"), param_isize(case, "k"));
+            let m = param_usize(case, "m");
+            let m = if m == 0 { None } else { Some(m) };
+            let (r, c) = if op == "tril_indices" {
+                np::tril_indices(n, k, m)
+            } else {
+                np::triu_indices(n, k, m)
+            };
+            Ok(RunResult::I64(
+                np::concatenate(&[&r, &c], 0)
+                    .map(|x| x as i64)
+                    .reshape(&[2, r.size()]),
+            ))
+        }
+        "fill_diagonal_wrap" | "fill_diagonal" => {
+            let mut a = i[0].clone();
+            np::fill_diagonal(&mut a, param_f64(case, "val"), op == "fill_diagonal_wrap");
+            Ok(RunResult::F64(a))
+        }
+        "rot90" => Ok(RunResult::F64(np::rot90(
+            &i[0],
+            param_isize(case, "k"),
+            (param_isize(case, "a0"), param_isize(case, "a1")),
+        ))),
+        "dstack" => Ok(RunResult::F64(np::dstack(&[&i[0], &i[1]]))),
+        "column_stack" => Ok(RunResult::F64(np::column_stack(&[&i[0], &i[1]]))),
+        "geomspace" => Ok(RunResult::F64(np::geomspace(
+            param_f64(case, "start"),
+            param_f64(case, "stop"),
+            param_usize(case, "num"),
+        ))),
+        "vander" => Ok(RunResult::F64(np::vander(
+            &i[0],
+            Some(param_usize(case, "n")),
+            param_usize(case, "inc") == 1,
+        ))),
+        "around" => Ok(RunResult::F64(np::around(
+            &i[0],
+            param_isize(case, "decimals") as i32,
+        ))),
+        "sliding_window_view" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w0"), param_usize(case, "w1")],
+            None,
+        ))),
+        "sliding_window_view_axis" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w")],
+            Some(&[param_isize(case, "axis")]),
+        ))),
+        "sliding_window_view_axes" => Ok(RunResult::F64(np::sliding_window_view(
+            &i[0],
+            &[param_usize(case, "w0"), param_usize(case, "w1")],
+            Some(&[param_isize(case, "a0"), param_isize(case, "a1")]),
+        ))),
+        "as_strided" => Ok(RunResult::F64(np::as_strided(
+            &i[0],
+            &[param_usize(case, "n0"), param_usize(case, "n1")],
+            &[param_isize(case, "s0"), param_isize(case, "s1")],
+        ))),
+        "bitwise_xor" | "left_shift" | "right_shift" | "bitwise_count" | "packbits"
+        | "packbits_little" | "unpackbits" => {
+            let ints: Vec<Array<i64>> = i.iter().map(|a| a.astype::<i64>()).collect();
+            let out: Array<i64> = match op {
+                "bitwise_xor" => np::bitwise_xor(&ints[0], &ints[1]),
+                "left_shift" => np::left_shift(&ints[0], &ints[1]),
+                "right_shift" => np::right_shift(&ints[0], &ints[1]),
+                "bitwise_count" => np::bitwise_count(&ints[0]).astype::<i64>(),
+                "packbits" => {
+                    np::packbits(&ints[0], Some(param_isize(case, "axis")), "big").astype::<i64>()
+                }
+                "packbits_little" => {
+                    np::packbits(&ints[0], Some(param_isize(case, "axis")), "little")
+                        .astype::<i64>()
+                }
+                _ => np::unpackbits(
+                    &i[0].astype::<u8>(),
+                    Some(param_isize(case, "axis")),
+                    Some(param_isize(case, "count")),
+                    "big",
+                )
+                .astype::<i64>(),
+            };
+            Ok(RunResult::I64(out))
+        }
+        "apply_along_axis_sorted" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| l.sort().flip(0),
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_along_axis_minmax" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| np::array![l.min(), l.max()],
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_along_axis_sum" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| Array::scalar(l.sum()),
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_over_axes_sum" => Ok(RunResult::F64(np::apply_over_axes(
+            |x, ax| x.sum_axis(ax),
+            &i[0],
+            &[param_isize(case, "a0"), param_isize(case, "a1")],
+        ))),
+        "vectorize_call2" => Ok(RunResult::F64(
+            np::vectorize(|x: f64, y: f64| x * 2.0 + y * y).call2(&i[0], &i[1]),
+        )),
+        "histogram2d" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "bx")),
+                np::Bins::Count(param_usize(case, "by")),
+            ];
+            Ok(RunResult::F64(
+                np::histogram2d(&i[0], &i[1], bins, None, false, Some(&i[2])).0,
+            ))
+        }
+        "histogram2d_density" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "bx")),
+                np::Bins::Count(param_usize(case, "by")),
+            ];
+            Ok(RunResult::F64(
+                np::histogram2d(&i[0], &i[1], bins, None, true, None).0,
+            ))
+        }
+        "histogramdd" => {
+            let bins = [
+                np::Bins::Count(param_usize(case, "b0")),
+                np::Bins::Count(param_usize(case, "b1")),
+                np::Bins::Count(param_usize(case, "b2")),
+            ];
+            Ok(RunResult::F64(
+                np::histogramdd(&i[0], &bins, None, false, None).0,
+            ))
+        }
+        "tensorinv" => Ok(RunResult::F64(
+            np::linalg::tensorinv(&i[0], param_usize(case, "ind")).map_err(|e| e.to_string())?,
+        )),
+        "tensorsolve" => Ok(RunResult::F64(
+            np::linalg::tensorsolve(&i[0], &i[1], None).map_err(|e| e.to_string())?,
+        )),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

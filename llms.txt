@@ -223,3 +223,44 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 - docs/API.md — binding API contract
 - docs/ARCHITECTURE.md — internals and how to add a function
 - rustnum/examples/ — quickstart, linear_regression, pca, kmeans, image_ops
+
+## NaN-aware reductions (added after v0.1)
+- `nanvar nanstd` (+ `_ddof(ddof)`, `_axis(axis)`, `_ddof_axis(axis, ddof)`), `nanmedian`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` — floats
+- `nanargmax nanargmin` (flat usize; all-NaN panics), `nanargmax_axis nanargmin_axis`; `nanprod nancumsum nancumprod` (+ `_axis`)
+
+## Sorting, searching and conditional selection (added after v0.1)
+- `np::lexsort(&[&k0,&k1], axis)` (last key primary), `np::flatnonzero(&a)`, `a.partition(kth, axis)`, `a.argpartition(kth, axis)`
+- `np::select(&[&c..], &[&x..], default)`, `np::piecewise(&x, &[&c..], &[&f..])` (`&dyn Fn(T)->T`), `np::extract(&cond, &a)`
+- `np::place(&mut a, &mask, &[v..])`, `np::copyto(&mut dst, src, Some(&mask))`, `np::trim_zeros(&a, "fb")`
+
+## Index helpers (added after v0.1)
+- `np::tril_indices(n, k, None)`, `triu_indices`, `tril_indices_from(&a, k)`, `triu_indices_from` -> `(rows, cols)`
+- `np::diag_indices(n, ndim)`, `diag_indices_from(&a)`, `np::fill_diagonal(&mut a, val, wrap)`, `np::mask_indices(n, f, k)`
+- `np::ndindex(&shape)`, `np::ndenumerate(&a)` — iterators
+
+## Shape and creation extras (added after v0.1)
+- `np::rot90(&m, k, (0, 1))`, `np::dstack(&[..])`, `np::column_stack(&[..])`, `np::row_stack(&[..])`, `np::atleast_1d/2d/3d(&a)`
+- `np::geomspace(start, stop, num)`, `np::vander(&x, Some(n), false)`, `np::fromiter(iter, None)`, `np::frombuffer::<T>(&bytes, None, 0)`
+- `np::around(&a, decimals)`, `np::real_if_close(&re, &im, tol)` (pair form), `a.is_posinf()`, `a.is_neginf()`
+
+## Stride tricks (added after v0.1)
+- `np::sliding_window_view(&x, &[w], None)` — zero-copy view; `np::as_strided(&x, &shape, &strides)` — element strides, bounds-checked
+
+## Bit operations (added after v0.1)
+- `np::bitwise_and/or/xor(&a, &b)`, `np::bitwise_not(&a)`, `np::invert(&a)`, `np::left_shift(&a, n)`, `np::right_shift(&a, n)`; operators `& | ^ ! << >>` on i32/i64/u8/usize arrays
+- `np::packbits(&a, axis, "big")`, `np::unpackbits(&a, axis, count, "big")`, `np::bitwise_count(&a)`; trait `np::Integer`
+
+## Functional helpers (added after v0.1)
+- `np::vectorize(|x: f64| ..).call(a)` / `.call2(a, b)` / `.call3(a, b, c)` — scalar closure lifted over arrays with broadcasting
+- `np::apply_along_axis(|lane| ..., axis, &a)`, `np::apply_over_axes(|a, axis| ..., &a, &[0, 2])`
+
+## Text I/O (np::io) (added after v0.1)
+- `np::io::loadtxt::<f64>(path, Some("#"), delimiter, skiprows, usecols, max_rows)?`, `np::io::savetxt(path, &x, fmt, delim, newline, header, footer, comments)?`
+- `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling, usecols, names, max_rows)?` -> `(array, names)`
+
+## Print options (added after v0.1)
+- `np::set_printoptions(np::PrintOptions { precision: 3, ..np::get_printoptions() })`, `np::get_printoptions()`, `let _g = np::printoptions(opts);` (scoped)
+
+## Histograms, einsum_path, tensor inverse and solve (added after v0.1)
+- `np::histogram2d(&x, &y, [Bins; 2], range, density, weights)` -> `(H, xedges, yedges)`; `np::histogramdd(&sample, &[Bins], range, density, weights)` -> `(H, edges)`
+- `np::einsum_path("ij,jk->ik", &[&a, &b], "greedy")` -> `(path, report)`; `np::linalg::tensorinv(&a, ind)?`, `np::linalg::tensorsolve(&a, &b, axes)?`

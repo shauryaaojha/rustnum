@@ -254,7 +254,68 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Final unique array owners return buffers to the cache. Views and clones never release live shared storage. An iterator can outlive its array; if it is the final Arc owner, that storage goes directly to the allocator when the iterator ends.
 - Creation, element-wise output, and copying kernels obtain cached initialized buffers. Kernels overwrite every output before it is observable; no uninitialized reads or unsafe pool code are used. `from_vec` adopts the supplied Vec directly, so producers outside these kernels (including the existing GEMM implementation) do not acquire pooled buffers.
 
-## 22. Polynomial classes and packages (`np::polynomial`)
+## 22. NaN-aware reductions
+
+- `Array<F: Float>` methods `nanvar`, `nanvar_ddof(ddof)`, `nanvar_axis(axis)`, `nanvar_ddof_axis(axis, ddof)`, and the same four for `nanstd`.
+- `nanmedian()`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` (q in 0..=100).
+- `nanargmax()`, `nanargmin()` return `usize`; `nanargmax_axis(axis)`, `nanargmin_axis(axis)` return `Array<usize>`; an all-NaN lane panics with `All-NaN slice encountered`.
+- `nanprod()`, `nanprod_axis(axis)`, `nancumsum()`, `nancumprod()`, `nancumsum_axis(axis)`, `nancumprod_axis(axis)`.
+
+## 23. Sorting, searching and conditional selection
+
+- `lexsort(keys: &[&Array<T>], axis) -> Array<usize>`, `flatnonzero(&a) -> Array<usize>`, `Array::partition(kth: isize, axis) -> Array<T>`, `Array::argpartition(kth: isize, axis) -> Array<usize>`.
+- `select(condlist: &[&Array<bool>], choicelist: &[&Array<T>], default: T) -> Array<T>`, `piecewise<T: Num>(x, condlist: &[&Array<bool>], funclist: &[&dyn Fn(T) -> T]) -> Array<T>`, `extract(&cond, &a) -> Array<T>`.
+- `place(&mut a, &mask, vals: &[T])`, `copyto(&mut dst, src: impl IntoArray<T>, where_: Option<&Array<bool>>)`, `trim_zeros(&a, trim: &str) -> Array<T>` (view).
+
+## 24. Index helpers
+
+- `tril_indices(n, k: isize, m: Option<usize>) -> (Array<usize>, Array<usize>)`, `triu_indices(...)`, `tril_indices_from(&a, k)`, `triu_indices_from(&a, k)`.
+- `diag_indices(n, ndim) -> Vec<Array<usize>>`, `diag_indices_from(&a)`, `fill_diagonal(&mut a, val: impl IntoArray<T>, wrap: bool)`.
+- `ndindex(&[usize]) -> impl Iterator<Item = Vec<usize>>`, `ndenumerate(&a) -> impl Iterator<Item = (Vec<usize>, T)>`, `mask_indices(n, mask_func: impl Fn(&Array<i64>, isize) -> Array<i64>, k)`.
+
+## 25. Shape and creation extras
+
+- `rot90(&a, k: isize, axes: (isize, isize))`, `dstack(&[&Array<T>])`, `column_stack(&[&Array<T>])`, `row_stack(&[&Array<T>])`, `atleast_1d/2d/3d(&a)`.
+- `geomspace<F: Float>(start, stop, num)`, `vander<T: Num>(&x, n: Option<usize>, increasing: bool)`, `fromiter(iter, count: Option<usize>)`, `frombuffer::<T>(&[u8], count: Option<usize>, offset: usize)`.
+- `around<F: Float>(&a, decimals: i32)`, `real_if_close(&re, &im, tol) -> (Array<F>, Option<Array<F>>)`, `Array<F>::is_posinf()`, `is_neginf()`.
+- Already present, not re-added: `fromfunction` (`Array::from_shape_fn`), `round` (`Array::round`, `round_decimals`).
+
+## 26. Stride tricks
+
+- `sliding_window_view(&x, window_shape: &[usize], axis: Option<&[isize]>) -> Array<T>` is a view with shape `x.shape` (windowed axes shortened to `n - w + 1`) followed by the window shape.
+- `as_strided(&x, shape: &[usize], strides: &[isize]) -> Array<T>` is bounds-checked (element strides, from `x`'s first element) and panics instead of reading outside the buffer.
+- Writes to a view whose elements overlap in memory first copy the view, so logical elements stay independent.
+
+## 27. Bit operations
+
+- `Integer` is implemented for `i32`, `i64`, `u8` and `usize`. Free functions `bitwise_and`, `bitwise_or`, `bitwise_xor`, `left_shift`, `right_shift` (array-like arguments, broadcasting), `bitwise_not`, `invert`, `bitwise_count -> Array<u8>`.
+- Operators `&`, `|`, `^`, `<<`, `>>` for `Array<i32/i64/u8/usize>` (owned and borrowed, array or scalar right side) and unary `!`.
+- `packbits<T: Element>(&a, axis: Option<isize>, bitorder: &str) -> Array<u8>`, `unpackbits(&a: &Array<u8>, axis: Option<isize>, count: Option<isize>, bitorder: &str) -> Array<u8>`; `bitorder` starts with `b` (big) or `l` (little), else panics `'order' must begin with 'l' or 'b'`.
+
+## 28. Functional helpers
+
+- `vectorize(f) -> Vectorize<F>` with `call(a)`, `call2(a, b)`, `call3(a, b, c)` taking array-likes and broadcasting.
+- `apply_along_axis(func1d: impl FnMut(&Array<T>) -> Array<R>, axis: isize, &arr) -> Array<R>`; `apply_over_axes(func: impl FnMut(&Array<T>, isize) -> Array<T>, &a, axes: &[isize]) -> Array<T>`.
+
+## 29. Text I/O (np::io)
+
+- `io::loadtxt<T: Element>(fname, comments: Option<&str>, delimiter: Option<&str>, skiprows: usize, usecols: Option<&[isize]>, max_rows: Option<usize>) -> Result<Array<T>>`.
+- `io::savetxt<T: Element>(fname, &x, fmt: &str, delimiter: &str, newline: &str, header: &str, footer: &str, comments: &str) -> Result<()>`.
+- `io::genfromtxt<F: Float>(fname, comments, delimiter, skip_header, skip_footer, filling_values: Option<F>, usecols, names: bool, max_rows) -> Result<(Array<F>, Vec<String>)>`; there is no `missing_values` argument (NumPy's float converter only replaces fields that fail to parse).
+- Bad data returns `Error::Parse` (messages follow NumPy) or `Error::Format`; unreadable files return `Error::Io`.
+
+## 30. Print options
+
+- `PrintOptions { precision: usize (8), threshold: usize (1000), edgeitems: usize (3), linewidth: usize (75), suppress: bool (false), sign: char ('-') }` with `Default`.
+- `set_printoptions(PrintOptions)`, `get_printoptions() -> PrintOptions`, `printoptions(PrintOptions) -> PrintOptionsGuard` (restores on drop). Options are per thread and honoured by `Display` and `Debug` of every `Array`.
+
+## 31. Histograms, einsum_path, tensor inverse and solve
+
+- `histogramdd(&sample: &Array<f64>, bins: &[Bins], range: Option<&[(f64, f64)]>, density: bool, weights: Option<&Array<f64>>) -> (Array<f64>, Vec<Array<f64>>)`; `histogram2d(&x, &y, bins: [Bins; 2], range: Option<[(f64, f64); 2]>, density, weights) -> (Array<f64>, Array<f64>, Array<f64>)`.
+- `einsum_path<T: Element>(subscripts: &str, operands: &[&Array<T>], optimize: &str) -> (Vec<Vec<usize>>, String)`; the report text is NumPy's.
+- `linalg::tensorinv<F: LinalgFloat>(&a, ind: usize) -> Result<Array<F>>`, `linalg::tensorsolve<F: LinalgFloat>(&a, &b, axes: Option<&[isize]>) -> Result<Array<F>>`; both call `inv` / `solve`.
+
+## 32. Polynomial classes and packages (`np::polynomial`)
 
 - Convenience classes: `Polynomial`, `Chebyshev`, `Legendre`, `Laguerre`, `Hermite`, `HermiteE`.
 - Default domains and windows: `Laguerre` has domain `[0.0, 1.0]` and window `[0.0, 1.0]`; all other classes have domain `[-1.0, 1.0]` and window `[-1.0, 1.0]`.
