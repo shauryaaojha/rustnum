@@ -160,10 +160,14 @@ cannot run. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the test 
 
 ## Roadmap
 
-- **rustnum v0.2:** `einsum`, `.npz`, fancy indexing, `fft`, `polynomial`, complex numbers.
-- **rustnum v0.3:** SIMD kernels, optional BLAS backend, `f16` / `bf16`.
-- **rustnum v0.4:** Python bindings (PyO3).
-- **Next libraries:** dataframes (Polars glue), plotting, classical ML, autograd and neural nets.
+- **On main since 0.1.0:** `einsum` / `einsum_path`, `.npz`, `fft`, `np::polynomial` classes, every
+  `numpy.random` distribution, blocked LAPACK (LU, Cholesky, QR, `eigh`, SVD), AVX2 SIMD ufuncs, print options,
+  and ~90 more NumPy functions (`nan*`, `partition`, stride tricks, `loadtxt` / `savetxt` / `genfromtxt`, ...).
+- **rustnum v0.2 (in progress, branch `v02-dtypes`):** complex numbers, `f16` / `bf16`, fancy indexing,
+  masked arrays (`np::ma`), `datetime64` / `timedelta64`, structured dtypes, Python bindings (PyO3).
+- **Open performance gaps:** `svd` on 500×500 is ~3x slower than NumPy; NEON kernels are compile-checked only.
+- **Next libraries:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) (65 `rust-ml-*` crates: dataframes, SciPy,
+  classical ML, plotting, autograd and neural nets, up to LLM tooling).
 
 ## License
 
