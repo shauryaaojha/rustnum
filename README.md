@@ -92,10 +92,11 @@ The full NumPy to rustnum table is in [`docs/NUMPY_MAPPING.md`](docs/NUMPY_MAPPI
 | Scalars | `a + 1`, `np.maximum(a, 0)` | `&a + 1.0`, `np::maximum(&a, 0.0)`. Float literals need the `.0` |
 | Random | `default_rng(42)` (PCG64) | `Rng::seed(42)` (xoshiro256**). Same style, different numbers |
 | GEMM | OpenBLAS / MKL | Packed pure-Rust GEMM with AVX2/FMA fast paths and a portable fallback |
-| File format | `.npy`, `.npz` | `.npy` and CSV (no `.npz`) |
+| File format | `.npy`, `.npz` | `.npy`, `.npz`, CSV / text (`loadtxt`, `savetxt`, `genfromtxt`) |
 
-Not in v0.1 (v0.2 adds a complex dtype, `float16`/`bfloat16`, and `np::fft` returns complex arrays): 
-structured and datetime dtypes, masked arrays, fancy indexing with index arrays on several axes.
+Added after v0.1 on main (v0.2): complex dtype (`np::fft` returns complex arrays), `float16` / `bfloat16`, fancy
+indexing, masked arrays (`np::ma`), `datetime64` / `timedelta64`, structured dtypes (`record!`) and Python bindings
+(`rustnum-py`). Still missing: string and unicode dtypes, `recarray`, unit multipliers like `m8[3D]`, `busday_*`.
 
 ## Benchmarks
 
@@ -163,8 +164,8 @@ cannot run. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the test 
 - **On main since 0.1.0:** `einsum` / `einsum_path`, `.npz`, `fft`, `np::polynomial` classes, every
   `numpy.random` distribution, blocked LAPACK (LU, Cholesky, QR, `eigh`, SVD), AVX2 SIMD ufuncs, print options,
   and ~90 more NumPy functions (`nan*`, `partition`, stride tricks, `loadtxt` / `savetxt` / `genfromtxt`, ...).
-- **rustnum v0.2 (in progress, branch `v02-dtypes`):** complex numbers, `f16` / `bf16`, fancy indexing,
-  masked arrays (`np::ma`), `datetime64` / `timedelta64`, structured dtypes, Python bindings (PyO3).
+- **rustnum v0.2 (merged, not yet released):** complex numbers, `f16` / `bf16`, fancy indexing, masked arrays
+  (`np::ma`), `datetime64` / `timedelta64`, structured dtypes, Python bindings (`rustnum-py`, PyO3 abi3).
 - **Open performance gaps:** `svd` on 500×500 is ~3x slower than NumPy; NEON kernels are compile-checked only.
 - **Next libraries:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) (65 `rust-ml-*` crates: dataframes, SciPy,
   classical ML, plotting, autograd and neural nets, up to LLM tooling).
