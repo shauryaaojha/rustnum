@@ -275,7 +275,12 @@ def main():
     # 13. Masked arrays (stage 4 of v0.2)
     # =========================================================================
     ma_cases(save_case, rng)
-=======
+
+    # =========================================================================
+    # 14. datetime64 / timedelta64 (stage 5 of v0.2)
+    # =========================================================================
+    dt_cases(save_case, rng)
+    # =========================================================================
     # 10. numpy-extra groups (nan-functions, sorting, indices, shapes, ...)
     # =========================================================================
     nan_in = rng.standard_normal((4, 5, 3))
@@ -389,6 +394,134 @@ def main():
         json.dump(cases, f, indent=2)
 
     print(f"Generated {len(cases)} parity fixture cases in {FIXTURE_DIR}")
+
+
+def dt_cases(save_case, rng):
+    """datetime64 / timedelta64 parity cases (ops prefixed `dt_` / `td_`; the unit is `params.unit`).
+
+    Results are stored as raw int64 counts (NaT is the minimum int64), strings, or booleans.
+    """
+    I8 = np.int64
+    nat = np.iinfo(I8).min
+
+    def tg(u):
+        # NumPy's M (month) and m (minute) differ only by case; Windows file names do not
+        return {"M": "mon", "m": "min"}.get(u, u)
+
+    def raw(a):
+        return np.asarray(a).astype("i8")
+
+    units = ["Y", "M", "W", "D", "h", "m", "s", "ms", "us", "ns"]
+    # --- npy round trip of every unit: load the array NumPy saved, compare the raw counts ---
+    for u in units:
+        vals = rng.integers(-5000, 20000, 9).astype(I8)
+        vals[3] = nat
+        d = vals.astype(f"M8[{u}]")
+        t = vals.astype(f"m8[{u}]")
+        save_case(f"dt_load_{tg(u)}", "dt_load", [d], {"unit": u}, raw(d), "datetime64")
+        save_case(f"td_load_{tg(u)}", "td_load", [t], {"unit": u}, raw(t), "timedelta64")
+        save_case(f"dt_str_{tg(u)}", "dt_str", [d], {"unit": u, "str": str(d)}, np.array(0), "str")
+        save_case(f"dt_repr_{tg(u)}", "dt_repr", [d], {"unit": u, "str": repr(d)}, np.array(0), "str")
+        save_case(f"td_str_{tg(u)}", "td_str", [t], {"unit": u, "str": str(t)}, np.array(0), "str")
+        save_case(f"td_repr_{tg(u)}", "td_repr", [t], {"unit": u, "str": repr(t)}, np.array(0), "str")
+        save_case(f"dt_asstr_{tg(u)}", "dt_as_string", [d], {"unit": u, "str": "|".join(np.datetime_as_string(d))}, np.array(0), "str")
+        save_case(f"dt_isnat_{tg(u)}", "dt_isnat", [d], {"unit": u}, np.isnat(d), "bool")
+
+    # --- ISO 8601 parsing in every unit that can hold the string ---------------------------
+    samples = {
+        "Y": ["1970", "2024", "1969", "0001", "-0044", "9999"],
+        "M": ["1970-01", "2024-02", "1969-12", "2000-07"],
+        "D": ["1970-01-01", "2024-02-29", "1969-12-31", "2100-03-01", "1900-02-28", "0001-01-01", "2038-01-19", "NaT"],
+        "h": ["1970-01-01T05", "2024-02-29T23", "1969-12-31T23"],
+        "m": ["1970-01-01T05:07", "2024-02-29T23:59", "1969-12-31T00:01"],
+        "s": ["1970-01-01T00:00:09", "2024-02-29T23:59:59", "1969-12-31T23:59:59", "2038-01-19T03:14:07"],
+        "ms": ["1970-01-01T00:00:00.250", "2024-02-29T23:59:59.999", "1969-12-31T23:59:59.001"],
+        "us": ["1970-01-01T00:00:00.000001", "2024-02-29T23:59:59.999999", "1969-12-31T23:59:59.5"],
+        "ns": ["1970-01-01T00:00:00.000000007", "2024-02-29T23:59:59.999999999", "1969-12-31T23:59:59.123456789"],
+    }
+    for u, strs in samples.items():
+        arr = np.array(strs, dtype=f"M8[{u}]")
+        save_case(f"dt_parse_{tg(u)}", "dt_parse", [], {"unit": u, "strings": strs}, raw(arr), "datetime64")
+    # coarser strings widen into finer units
+    for u in ["D", "s", "ms", "us", "ns"]:
+        strs = ["1970-01", "2024-03", "1999"] if u == "D" else ["2024-03-05", "1999-12-31", "1970-01-01T01:02"]
+        arr = np.array(strs, dtype=f"M8[{u}]")
+        save_case(f"dt_widen_{tg(u)}", "dt_parse", [], {"unit": u, "strings": strs}, raw(arr), "datetime64")
+
+    # --- arithmetic --------------------------------------------------------------------------
+    for u in ["D", "s", "ms", "ns", "M", "h"]:
+        a = rng.integers(-3000, 30000, 11).astype(I8)
+        b = rng.integers(-3000, 30000, 11).astype(I8)
+        a[2] = nat
+        b[7] = nat
+        da, db = a.astype(f"M8[{u}]"), b.astype(f"M8[{u}]")
+        ta, tb = a.astype(f"m8[{u}]"), b.astype(f"m8[{u}]")
+        save_case(f"dt_sub_{tg(u)}", "dt_sub", [da, db], {"unit": u}, raw(da - db), "timedelta64")
+        save_case(f"dt_add_td_{tg(u)}", "dt_add_td", [da, tb], {"unit": u}, raw(da + tb), "datetime64")
+        save_case(f"td_add_dt_{tg(u)}", "td_add_dt", [ta, db], {"unit": u}, raw(ta + db), "datetime64")
+        save_case(f"dt_sub_td_{tg(u)}", "dt_sub_td", [da, tb], {"unit": u}, raw(da - tb), "datetime64")
+        save_case(f"td_add_{tg(u)}", "td_add", [ta, tb], {"unit": u}, raw(ta + tb), "timedelta64")
+        save_case(f"td_sub_{tg(u)}", "td_sub", [ta, tb], {"unit": u}, raw(ta - tb), "timedelta64")
+        save_case(f"td_neg_{tg(u)}", "td_neg", [ta], {"unit": u}, raw(-ta), "timedelta64")
+        save_case(f"td_mul_int_{tg(u)}", "td_mul_int", [ta], {"unit": u, "k": 7}, raw(ta * 7), "timedelta64")
+        save_case(f"td_mul_neg_{tg(u)}", "td_mul_int", [ta], {"unit": u, "k": -3}, raw(ta * -3), "timedelta64")
+        save_case(f"td_div_int_{tg(u)}", "td_div_int", [ta], {"unit": u, "k": 4}, raw(ta // 4), "timedelta64")
+        save_case(f"td_div_td_{tg(u)}", "td_div_td", [ta, tb], {"unit": u}, ta / tb, "float64", 1e-12, 0.0)
+        save_case(f"td_floordiv_{tg(u)}", "td_floordiv", [ta, tb + 1], {"unit": u}, ta // (tb + 1), "int64")
+        save_case(f"td_mod_{tg(u)}", "td_mod", [ta, tb + 1], {"unit": u}, raw(ta % (tb + 1)), "timedelta64")
+        for name, f in [("lt", np.less), ("le", np.less_equal), ("gt", np.greater), ("ge", np.greater_equal), ("eq", np.equal), ("ne", np.not_equal)]:
+            save_case(f"dt_{name}_{tg(u)}", f"dt_{name}", [da, db], {"unit": u}, f(da, db), "bool")
+            save_case(f"td_{name}_{tg(u)}", f"td_{name}", [ta, tb], {"unit": u}, f(ta, tb), "bool")
+        ta0 = np.where(np.isnat(ta), 0, ta.astype("i8")).astype(f"m8[{u}]")
+        save_case(f"td_sum_{tg(u)}", "td_sum", [ta0], {"unit": u}, raw(ta0.sum()), "timedelta64")
+        save_case(f"td_sum_nat_{tg(u)}", "td_sum", [ta], {"unit": u}, raw(ta.sum()), "timedelta64")
+        save_case(f"td_cumsum_{tg(u)}", "td_cumsum", [ta0], {"unit": u}, raw(ta0.cumsum()), "timedelta64")
+        save_case(f"td_mean_{tg(u)}", "td_mean", [ta0], {"unit": u}, raw(ta0.mean()), "timedelta64")
+        for kind in ["dt", "td"]:
+            src = da if kind == "dt" else ta
+            save_case(f"{kind}_sort_{tg(u)}", f"{kind}_sort", [src], {"unit": u}, raw(np.sort(src)), "datetime64")
+            save_case(f"{kind}_argsort_{tg(u)}", f"{kind}_argsort", [src], {"unit": u}, np.argsort(src, kind="stable").astype(I8), "int64")
+
+    # --- astype between units ----------------------------------------------------------------
+    pairs = [("D", "s"), ("s", "D"), ("D", "ns"), ("ns", "D"), ("D", "M"), ("D", "Y"), ("M", "D"), ("Y", "D"),
+             ("Y", "M"), ("M", "Y"), ("s", "ms"), ("ms", "s"), ("us", "ns"), ("h", "m"), ("m", "h"), ("W", "D"),
+             ("D", "W"), ("W", "s"), ("s", "W"), ("M", "s"), ("s", "M"), ("Y", "s"), ("ms", "M"), ("h", "Y")]
+    for fr, to in pairs:
+        v = rng.integers(-40000, 40000, 25).astype(I8)
+        if fr in ("ns", "us"):
+            v = v * 1_000_000_007
+        v[4] = nat
+        v[9] = -1
+        v[10] = 0
+        v[11] = 1
+        d = v.astype(f"M8[{fr}]")
+        t = v.astype(f"m8[{fr}]")
+        save_case(f"dt_astype_{tg(fr)}_{tg(to)}", "dt_astype", [d], {"from": fr, "unit": to}, raw(d.astype(f"M8[{to}]")), "datetime64")
+        save_case(f"td_astype_{tg(fr)}_{tg(to)}", "td_astype", [t], {"from": fr, "unit": to}, raw(t.astype(f"m8[{to}]")), "timedelta64")
+
+    # --- casts to and from numbers ------------------------------------------------------------
+    ints = np.array([0, 1, -1, 19782, 1 << 40, nat], dtype=I8)
+    save_case("dt_from_i64", "dt_from_i64", [ints], {"unit": "D"}, raw(ints.astype("M8[D]")), "datetime64")
+    save_case("td_from_i64", "td_from_i64", [ints], {"unit": "s"}, raw(ints.astype("m8[s]")), "timedelta64")
+    fl = np.array([1.5, -2.5, 3.9, np.nan, 1e10], dtype=np.float64)
+    save_case("td_from_f64", "td_from_f64", [fl], {"unit": "ms"}, raw(fl.astype("m8[ms]")), "timedelta64")
+    save_case("dt_from_f64", "dt_from_f64", [fl], {"unit": "D"}, raw(fl.astype("M8[D]")), "datetime64")
+    d = ints.astype("M8[D]")
+    save_case("dt_to_i64", "dt_to_i64", [d], {"unit": "D"}, d.astype(I8), "int64")
+    save_case("td_to_f64", "td_to_f64", [ints.astype("m8[D]")], {"unit": "D"}, ints.astype("m8[D]").astype(np.float64), "float64", 0.0, 0.0)
+
+    # --- arange ---------------------------------------------------------------------------------
+    for u, start, stop, step in [("D", "2024-01-01", "2024-03-01", 7), ("D", "2024-03-01", "2024-01-01", -9),
+                                 ("s", "1970-01-01T00:00:00", "1970-01-01T00:10:00", 61), ("M", "2024-01", "2026-06", 5),
+                                 ("h", "2024-01-01T00", "2024-01-03T07", 5), ("Y", "1990", "2024", 4)]:
+        arr = np.arange(np.datetime64(start, u), np.datetime64(stop, u), np.timedelta64(step, u))
+        save_case(f"dt_arange_{tg(u)}_{step}", "dt_arange", [], {"unit": u, "start": start, "stop": stop, "step": step}, raw(arr), "datetime64")
+    arr = np.arange(np.timedelta64(3, "h"), np.timedelta64(40, "h"), np.timedelta64(6, "h"))
+    save_case("td_arange_h", "td_arange", [], {"unit": "h", "start": 3, "stop": 40, "step": 6}, raw(arr), "timedelta64")
+    # a spot check across the calendar (leap rules, century years)
+    days = np.arange(-800000, 800000, 997).astype("M8[D]")
+    save_case("dt_calendar_days", "dt_as_string", [days], {"unit": "D", "str": "|".join(np.datetime_as_string(days))}, np.array(0), "str")
+    save_case("dt_calendar_months", "dt_cast_month_str", [days], {"unit": "D", "str": "|".join(np.datetime_as_string(days.astype("M8[M]")))}, np.array(0), "str")
 
 
 def complex_cases(save_case, rng):

@@ -367,3 +367,16 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Display uses NumPy's text: `[1.0 -- 3.0 4.0]`; `Debug` prints `masked_array(data=..., mask=..., fill_value=...)`.
 - Not done: comparison operators returning masked booleans, `np.ma.concatenate`/`stack`, `sort`, `cumsum`, `anom`, `median`, `harden_mask`/`soften_mask`, structured masked arrays, and masked complex math.
 
+## 37. datetime64 and timedelta64 (v0.2)
+
+- The unit is part of the type. `np::DateTime64<U>` is `datetime64[U]` and `np::TimeDelta64<U>` is `timedelta64[U]`, where `U` is one of the marker types in `np::datetime`: `Y M W D h m s ms us ns` (so `Array<DateTime64<datetime::D>>` has `dtype='datetime64[D]'`). Both are `Copy` wrappers over an `i64` count since 1970-01-01T00:00 and are array elements (`Element`), so `Array`, `astype`, `sort`, `argsort`, comparisons, `.npy`/`.npz` work on them.
+- `NaT` is `i64::MIN`: `DateTime64::NAT`, `is_nat()`, `np::isnat(&a)`. `NaT` never equals anything (not even itself), compares false under `< <= > >=`, sorts last and propagates through arithmetic, as in NumPy.
+- Scalars: `DateTime64::<U>::new(count)`, `.value()`, `parse("2024-03-05T10:20")` / `"...".parse()` (ISO 8601; a string finer than the unit is an error, a coarser one widens), `.cast::<V>()` (calendar-aware for `Y`/`M`; floors toward minus infinity). `TimeDelta64::<U>::new`, `.value()`, `.cast::<V>()` (a year is 365.2425 days, a month 30.436875 days, as in NumPy), `.floor_div(other)`.
+- Arithmetic (within one unit): `dt - dt = td`, `dt +- td`, `td + dt`, `td +- td`, `-td`, `td * i64` / `td * f64`, `td / i64` / `td / f64` (truncate toward zero), `td / td = f64`, `td % td` (sign of the divisor, zero divisor gives `NaT`), `td.floor_div(td) = i64`. Array versions of all of these broadcast. `Array<TimeDelta64>` also has `sum`, `mean`, `cumsum`, `floor_div`.
+- Mixed units are not promoted automatically: convert with `a.astype::<DateTime64<ns>>()` first (NumPy would pick the finer unit for you).
+- `astype` between units, to and from `i64`/`f64` (the integer path is exact; NaN becomes `NaT`; `NaT` becomes `i64::MIN`).
+- Creation: `Array::<DateTime64<U>>::arange(start, stop, step: TimeDelta64<U>)`, `Array::<TimeDelta64<U>>::arange(start, stop, step)`.
+- Text: `np::datetime_as_string(&a) -> Vec<String>` (NumPy returns a string array; there are no string arrays here). `Display`/`Debug` of arrays and scalars follow NumPy: `['2024-01-01'        'NaT']`, `array([...], dtype='datetime64[D]')`, `array(5, dtype='timedelta64[D]')`, scalar `numpy.datetime64('2024-01-01')`, `5 days`.
+- I/O: `.npy`/`.npz` `<M8[unit]` and `<m8[unit]` both ways; reading with the wrong unit or kind is an `Error::DType`.
+- Not done: `busday_*`, `datetime64` with a unit multiplier (`m8[3D]`), timezone-free generic units, `np.datetime64('now')`, timedelta `min/max`, and automatic unit promotion in mixed-unit arithmetic.
+- `repr` of any array now moves `dtype=...` to its own line and wraps rows one column earlier when the line passes `linewidth`, like `numpy.array_repr`.

@@ -196,6 +196,23 @@ fn extract_string_value(s: &str, key: &str) -> Result<String> {
         .ok_or_else(|| Error::Format(format!("missing ':' after key '{key}'")))?;
     let after_colon = after_colon.trim_start();
 
+    // A structured dtype is a (possibly nested) list: take it up to the matching bracket.
+    if key == "descr" && after_colon.starts_with('[') {
+        let mut depth = 0usize;
+        for (i, c) in after_colon.char_indices() {
+            match c {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Ok(after_colon[..=i].to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+        return Err(Error::Format("unterminated descr list in header".into()));
+    }
     // Find the quoted value
     let quote = after_colon
         .chars()
@@ -296,8 +313,14 @@ pub(crate) fn write_npy_header(descr: &str, shape: &[usize]) -> Vec<u8> {
         format!("({})", parts.join(", "))
     };
 
+    // A structured dtype is written as a Python list, not as a quoted string.
+    let descr = if descr.starts_with('[') {
+        descr.to_string()
+    } else {
+        format!("'{descr}'")
+    };
     let dict = format!(
-        "{{'descr': '{}', 'fortran_order': False, 'shape': {}, }}",
+        "{{'descr': {}, 'fortran_order': False, 'shape': {}, }}",
         descr, shape_str
     );
 
@@ -473,7 +496,14 @@ pub(crate) fn decode_elements<T: Element>(bytes: &[u8]) -> Result<(Vec<T>, Vec<u
 /// Decode through the [`Element`] `.npy` hooks (complex, float16, datetime, structured, ...).
 fn decode_with_hooks<T: Element>(bytes: &[u8], descr: &str) -> Result<(Vec<T>, Vec<usize>)> {
     let (header, data_offset) = parse_npy_header(bytes)?;
-    if header.descr != descr {
+    let squash = |d: &str| {
+        if d.starts_with('[') {
+            d.split_whitespace().collect::<String>()
+        } else {
+            d.to_string()
+        }
+    };
+    if squash(&header.descr) != squash(descr) {
         return Err(Error::DType {
             expected: descr_to_dtype(descr),
             found: descr_to_dtype(&header.descr),

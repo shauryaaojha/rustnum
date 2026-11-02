@@ -101,7 +101,18 @@ fn signed(s: String, o: &PrintOptions) -> String {
         s
     }
 }
-fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
+pub(crate) fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
+    if let Some(text) = T::text_all(values) {
+        return text;
+    }
+    if values.first().is_some_and(|v| v.text().is_some()) {
+        let text: Vec<String> = values
+            .iter()
+            .map(|v| v.text().unwrap_or_default())
+            .collect();
+        let width = text.iter().map(String::len).max().unwrap_or(0);
+        return text.into_iter().map(|s| format!("{s:>width$}")).collect();
+    }
     if T::DTYPE.starts_with("complex") {
         return complex_values(values, o);
     }
@@ -246,6 +257,16 @@ fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
             }
         })
         .collect()
+}
+/// The dtype as `repr` prints it: `float64`, `'datetime64[D]'`, `[('x', '<f8')]`.
+fn repr_dtype<T: Element>() -> String {
+    if T::DTYPE.starts_with("datetime64[") || T::DTYPE.starts_with("timedelta64[") {
+        format!("'{}'", T::DTYPE)
+    } else if let Some(d) = T::npy_descr().filter(|d| d.starts_with('[')) {
+        d
+    } else {
+        T::DTYPE.to_string()
+    }
 }
 fn selected(n: usize, summary: bool, edge: usize) -> Vec<Option<usize>> {
     if summary && n > 2 * edge {
@@ -393,6 +414,12 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
         } else if T::DTYPE.starts_with("complex") {
             let t = format_values(&[v], &o);
             out.push_str(&format!("({})", t[0].trim()));
+        } else if let Some(t) = v.text() {
+            if debug {
+                out.push_str(&t);
+            } else {
+                out.push_str(&crate::timetypes::scalar_str(v).unwrap_or(t));
+            }
         } else {
             out.push_str(&raw(v));
         }
@@ -408,12 +435,21 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
             debug,
             summary,
             edge: o.edgeitems,
-            linewidth: o.linewidth,
+            // repr reserves one column for the closing parenthesis, like NumPy.
+            linewidth: o.linewidth - usize::from(debug),
         };
         p.nested(a.shape(), 0, &mut out);
     }
     if debug {
-        out.push_str(&format!(", dtype={})", T::DTYPE));
+        let dtype = format!("dtype={})", repr_dtype::<T>());
+        let last = out.rsplit('\n').next().map_or(0, str::len);
+        // NumPy moves `dtype=` to its own line when it would pass the line width.
+        if last + 1 + dtype.len() + 1 > o.linewidth {
+            out.push_str(",\n      ");
+        } else {
+            out.push_str(", ");
+        }
+        out.push_str(&dtype);
     }
     out
 }

@@ -347,6 +347,9 @@ impl<T: Element> Array<T> {
         if let Some(r) = crate::half::bulk_astype::<T, U>(self) {
             return r;
         }
+        if let Some(r) = crate::timetypes::astype_time::<T, U>(self) {
+            return r;
+        }
         self.par_map(|v| {
             let (re, im) = v.to_complex_parts();
             U::from_complex_parts(re, im)

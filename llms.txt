@@ -292,3 +292,9 @@ datetime/struct dtypes, memory-mapped files, string arrays. (Complex arrays are 
 ## Histograms, einsum_path, tensor inverse and solve (added after v0.1)
 - `np::histogram2d(&x, &y, [Bins; 2], range, density, weights)` -> `(H, xedges, yedges)`; `np::histogramdd(&sample, &[Bins], range, density, weights)` -> `(H, edges)`
 - `np::einsum_path("ij,jk->ik", &[&a, &b], "greedy")` -> `(path, report)`; `np::linalg::tensorinv(&a, ind)?`, `np::linalg::tensorsolve(&a, &b, axes)?`
+
+## datetime64 / timedelta64 (v0.2)
+- Units are types in `np::datetime`: `Y M W D h m s ms us ns`. `np::DateTime64<D>`, `np::TimeDelta64<D>` are array elements (`Array<np::DateTime64<D>>` is `datetime64[D]`)
+- `DateTime64::<D>::parse("2024-03-05")?`, `::new(count)`, `.value()`, `.cast::<V>()`, `::NAT`, `np::isnat(&a)`, `np::datetime_as_string(&a)`
+- `&a - &b` (td), `&a + &t`, `&t * 3`, `&t / &u` (f64), `t.floor_div(&u)`, `&t % &u`; `t.sum()/mean()/cumsum()`; same unit only, `astype::<DateTime64<s>>()` converts units; `NaT` sorts last
+- `Array::<DateTime64<D>>::arange(start, stop, step)`; `.npy` `<M8[D]` / `<m8[s]` round trip with NumPy

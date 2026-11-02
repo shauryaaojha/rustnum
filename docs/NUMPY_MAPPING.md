@@ -597,6 +597,25 @@ takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return p
 | `np.ma.sqrt(a)`, `log`, `arcsin`, ... | `a.sqrt()`, `a.log()`, `a.arcsin()` ... | out-of-domain inputs masked |
 | `print(a)` | `println!("{a}")` | `[1.0 -- 3.0]` |
 
+## datetime64 and timedelta64 (v0.2)
+
+The unit is a type parameter: `np::DateTime64<np::datetime::D>` is `datetime64[D]`, `np::TimeDelta64<np::datetime::ns>` is `timedelta64[ns]`. Units: `Y M W D h m s ms us ns` in `np::datetime`.
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.datetime64('2024-03-05')` | `np::DateTime64::<D>::parse("2024-03-05")?` | Strings finer than the unit are an error; `"NaT"` parses |
+| `np.datetime64(n, 'D')` | `np::DateTime64::<D>::new(n)` | `.value()` is the raw count |
+| `np.datetime64('NaT')`, `np.isnat(a)` | `np::DateTime64::<D>::NAT`, `np::isnat(&a)` | `NaT` sorts last and never compares equal |
+| `np.timedelta64(7, 'D')` | `np::TimeDelta64::<D>::new(7)` |  |
+| `a - b`, `a + t`, `a - t` | `&a - &b`, `&a + &t`, `&a - &t` | Same unit; convert first with `astype` |
+| `t * 3`, `t / 2`, `t / u`, `t // u`, `t % u` | `&t * 3`, `&t / 2`, `&t / &u`, `t.floor_div(&u)`, `&t % &u` | `t / u` gives `Array<f64>`, `//` gives `Array<i64>` |
+| `a.astype('datetime64[s]')` | `a.astype::<np::DateTime64<s>>()` | Calendar-aware for `Y`/`M`; floors for coarser units |
+| `a.astype('int64')` | `a.astype::<i64>()` | Raw counts, `NaT` is `i64::MIN` |
+| `np.arange(start, stop, step)` (datetimes) | `Array::<DateTime64<D>>::arange(start, stop, step)` | `step` is a `TimeDelta64` |
+| `np.datetime_as_string(a)` | `np::datetime_as_string(&a)` | Returns `Vec<String>` |
+| `td.sum()`, `td.mean()`, `td.cumsum()` | `t.sum()`, `t.mean()`, `t.cumsum()` | `NaT` propagates |
+| `np.save('a.npy', dt)` | `np::io::save_npy(path, &a)?` | Header `<M8[D]` / `<m8[ns]` |
+
 ## More NumPy functions
 
 Added after v0.1. Same conventions as above.
@@ -716,5 +735,5 @@ Added after v0.1. Same conventions as above.
 
 ## Not in v0.1
 
-structured and datetime dtypes, memory-mapped files, and string arrays.
-(Complex arrays, float16/bfloat16, multi-axis fancy indexing and masked arrays arrived in v0.2.)
+memory-mapped files and string arrays.
+(Complex arrays, float16/bfloat16, multi-axis fancy indexing, masked arrays and datetime64/timedelta64 arrived in v0.2.)

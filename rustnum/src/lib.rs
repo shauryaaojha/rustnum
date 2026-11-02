@@ -54,8 +54,10 @@ mod simd_math;
 mod slicing;
 mod sortsearch;
 mod stride;
+mod timetypes;
 mod ufunc;
 
+pub mod datetime;
 pub mod fft;
 pub mod io;
 pub mod linalg;
@@ -108,6 +110,7 @@ pub use shapeextra::{
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
 pub use stride::{as_strided, sliding_window_view};
+pub use timetypes::{DateTime64, TimeDelta64, datetime_as_string, isnat};
 pub use ufunc::*;
 /// A data error, like NumPy's I/O, parsing, or linear algebra exceptions.
 /// ```

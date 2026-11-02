@@ -8,6 +8,7 @@ use rustnum::{Array, Complex};
 use std::fs;
 use std::path::Path;
 
+mod dt;
 mod fancy;
 mod half;
 mod ma;
@@ -88,6 +89,9 @@ macro_rules! binary {
 /// Runs an extension op; `None` when `op` belongs to the base runner.
 pub fn run(dir: &Path, case: &Json) -> Option<Result<Out, String>> {
     if let Some(r) = half::run(dir, case) {
+        return Some(r);
+    }
+    if let Some(r) = dt::run(dir, case) {
         return Some(r);
     }
     if let Some(r) = fancy::run(dir, case) {
