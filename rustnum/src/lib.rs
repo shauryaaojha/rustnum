@@ -30,6 +30,7 @@ mod creation;
 mod display;
 mod element;
 mod extra;
+mod fancy;
 mod half;
 mod kernels_mem;
 mod layout;
@@ -60,6 +61,9 @@ pub use extra::api::{
     cov, cross, diff, digitize, einsum, gradient, gradient_axis, histogram, histogram_bin_edges,
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
+};
+pub use fancy::{
+    choose, ix_, put, put_along_axis, ravel_multi_index, take_along_axis, unravel_index,
 };
 pub use half::{bf16, f16};
 pub use manip::*;

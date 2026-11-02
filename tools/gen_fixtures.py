@@ -268,6 +268,11 @@ def main():
     # =========================================================================
     half_cases(save_case, rng)
 
+    # =========================================================================
+    # 12. Advanced indexing (stage 3 of v0.2)
+    # =========================================================================
+    fancy_cases(save_case, rng)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -501,6 +506,126 @@ def half_cases(save_case, rng):
                       {}, out, "int64")
         out = np.exp((ba / bf16(8)).astype(bf16)).view(np.uint16).astype(np.int64)
         save_case("bh_exp", "bh_exp", [(ba / bf16(8)).astype(bf16).view(np.uint16).astype(np.int64)], {}, out, "int64")
+
+
+def fancy_cases(save_case, rng):
+    """Advanced (integer-array) indexing parity cases (ops prefixed `fx_`)."""
+    a = np.arange(60.0).reshape(3, 4, 5)
+    i64 = lambda v: np.array(v, dtype=np.int64)
+
+    def ARR(k):
+        return {"t": "arr", "i": k}
+
+    def INT(v):
+        return {"t": "int", "v": v}
+
+    def SL(start=None, stop=None, step=1):
+        return {"t": "slice", "start": start, "stop": stop, "step": step}
+
+    NEW = {"t": "new"}
+
+    # (name, index spec in JSON, python index tuple, extra arrays referenced by ARR(k), k >= 1)
+    idx0, idx1 = i64([0, 2]), i64([1, 3])
+    cases = [
+        ("pair", [ARR(1), ARR(2)], lambda x, e: x[e[0], e[1]], [idx0, idx1]),
+        ("axis0", [ARR(1)], lambda x, e: x[e[0]], [idx0]),
+        ("axis1", [SL(), ARR(1)], lambda x, e: x[:, e[0]], [i64([1, 3, 3])]),
+        ("split", [ARR(1), SL(), ARR(2)], lambda x, e: x[e[0], :, e[1]], [idx0, i64([1, 4])]),
+        ("adjacent", [SL(), ARR(1), ARR(2)], lambda x, e: x[:, e[0], e[1]], [idx1, i64([0, 4])]),
+        ("int_split", [INT(0), SL(), ARR(1)], lambda x, e: x[0, :, e[0]], [i64([1, 2])]),
+        ("int_adjacent", [SL(), INT(1), ARR(1)], lambda x, e: x[:, 1, e[0]], [i64([0, 2, 4])]),
+        ("broadcast2d", [ARR(1), ARR(2)], lambda x, e: x[e[0], e[1]], [i64([[0], [2]]), i64([[0, 1, 3]])]),
+        ("negative", [ARR(1), ARR(2)], lambda x, e: x[e[0], e[1]], [i64([-1, 0]), i64([-1, -2])]),
+        ("slices_mixed", [SL(1, None), ARR(1), SL(2, 4)], lambda x, e: x[1:, e[0], 2:4], [i64([0, 3])]),
+        ("newaxis_between", [ARR(1), NEW, ARR(2)], lambda x, e: x[e[0], None, e[1]], [idx0, idx1]),
+        ("steps", [SL(None, None, 2), ARR(1), SL(None, None, -1)], lambda x, e: x[::2, e[0], ::-1], [i64([3, 1, 1])]),
+        ("index2d", [SL(), ARR(1)], lambda x, e: x[:, e[0]], [i64([[0, 1], [2, 3]])]),
+        ("diagonal", [ARR(1), ARR(2), ARR(3)], lambda x, e: x[e[0], e[1], e[2]], [i64([0, 1, 2]), i64([0, 1, 2]), i64([0, 1, 2])]),
+        ("empty", [ARR(1), SL(), INT(0)], lambda x, e: x[e[0], :, 0], [i64([])]),
+        ("three_split", [ARR(1), INT(2), ARR(2)], lambda x, e: x[e[0], 2, e[1]], [idx0, idx1]),
+        ("scalar_broadcast", [ARR(1), ARR(2)], lambda x, e: x[e[0], e[1]], [i64([[1, 2]]), i64([3])]),
+    ]
+    for name, spec, fn, extra in cases:
+        out = fn(a, extra)
+        save_case(f"fx_get_{name}", "fx_get", [a] + extra, {"index": spec}, out, "float64", rtol=0.0, atol=0.0)
+
+    # a 1-d boolean mask inside an index tuple
+    mask = np.array([True, False, True, True])
+    save_case("fx_get_mask", "fx_get", [a, mask], {"index": [SL(), {"t": "mask", "i": 1}]}, a[:, mask], "float64",
+              rtol=0.0, atol=0.0)
+
+    # assignment: values are the last input
+    assigns = [
+        ("pair", [ARR(1), ARR(2)], lambda x, e, v: x.__setitem__((e[0], e[1]), v), [idx0, idx1], np.array([100.0, 200, 300, 400, 500])),
+        ("duplicates", [SL(), ARR(1), INT(1)], lambda x, e, v: x.__setitem__((slice(None), e[0], 1), v),
+         [i64([0, 0])], np.arange(6.0).reshape(3, 2) + 1000),
+        ("split_scalar", [ARR(1), SL(), ARR(2)], lambda x, e, v: x.__setitem__((e[0], slice(None), e[1]), v),
+         [idx0, i64([1, 4])], np.array(-1.0)),
+        ("split_values", [ARR(1), SL(), ARR(2)], lambda x, e, v: x.__setitem__((e[0], slice(None), e[1]), v),
+         [idx0, i64([1, 4])], np.arange(8.0).reshape(2, 4) * 10),
+        ("negative", [ARR(1)], lambda x, e, v: x.__setitem__(e[0], v), [i64([-1, 1])], np.array([5.0, 6, 7, 8, 9])),
+    ]
+    for name, spec, fn, extra, vals in assigns:
+        b = a.copy()
+        fn(b, extra, vals)
+        save_case(f"fx_set_{name}", "fx_set", [a] + extra + [vals], {"index": spec, "n_arrays": len(extra)}, b, "float64",
+                  rtol=0.0, atol=0.0)
+
+    # take_along_axis / put_along_axis
+    m = np.array([[10.0, 30, 20, 5], [60, 40, 50, 1], [7, 9, 8, 6]])
+    order = np.argsort(m, axis=1)
+    save_case("fx_take_along_axis1", "fx_take_along", [m, order.astype(np.int64)], {"axis": 1},
+              np.take_along_axis(m, order, axis=1), "float64", rtol=0.0, atol=0.0)
+    order0 = np.argsort(m, axis=0)
+    save_case("fx_take_along_axis0", "fx_take_along", [m, order0.astype(np.int64)], {"axis": 0},
+              np.take_along_axis(m, order0, axis=0), "float64", rtol=0.0, atol=0.0)
+    mx = np.argmax(m, axis=1, keepdims=True).astype(np.int64)
+    save_case("fx_take_along_argmax", "fx_take_along", [m, mx], {"axis": -1},
+              np.take_along_axis(m, mx, axis=-1), "float64", rtol=0.0, atol=0.0)
+    bi = np.array([[0], [2], [3]], dtype=np.int64)
+    save_case("fx_take_along_broadcast", "fx_take_along", [m, bi], {"axis": 1},
+              np.take_along_axis(m, bi, axis=1), "float64", rtol=0.0, atol=0.0)
+    p = m.copy()
+    pi = np.array([[1], [0], [3]], dtype=np.int64)
+    np.put_along_axis(p, pi, 99.0, axis=1)
+    save_case("fx_put_along_scalar", "fx_put_along", [m, pi, np.array(99.0)], {"axis": 1}, p, "float64", rtol=0.0, atol=0.0)
+    p = m.copy()
+    pv = np.array([[-1.0, -2], [-3, -4], [-5, -6]])
+    pi2 = np.array([[0, 3], [1, 2], [3, 0]], dtype=np.int64)
+    np.put_along_axis(p, pi2, pv, axis=1)
+    save_case("fx_put_along_values", "fx_put_along", [m, pi2, pv], {"axis": 1}, p, "float64", rtol=0.0, atol=0.0)
+
+    # put
+    q = np.arange(10.0)
+    np.put(q, [1, 3, -1, 5], [100.0, 200.0])
+    save_case("fx_put_cycle", "fx_put", [np.arange(10.0), i64([1, 3, -1, 5]), np.array([100.0, 200.0])], {}, q, "float64",
+              rtol=0.0, atol=0.0)
+    q2 = np.zeros((2, 3))
+    np.put(q2, [[0, 5], [2, 4]], [1.0, 2.0, 3.0, 4.0])
+    save_case("fx_put_2d", "fx_put", [np.zeros((2, 3)), i64([[0, 5], [2, 4]]), np.array([1.0, 2.0, 3.0, 4.0])], {}, q2,
+              "float64", rtol=0.0, atol=0.0)
+
+    # choose
+    sel = i64([[0, 1, 2], [2, 1, 0]])
+    ch = [np.arange(6.0).reshape(2, 3), np.arange(6.0).reshape(2, 3) * 10, np.array([7.0, 8.0, 9.0])]
+    save_case("fx_choose", "fx_choose", [sel] + ch, {}, np.choose(sel, ch), "float64", rtol=0.0, atol=0.0)
+
+    # ravel_multi_index / unravel_index
+    r, c, d = i64([0, 1, 2, 2]), i64([1, 2, 3, 0]), i64([0, 4, 1, 4])
+    save_case("fx_ravel", "fx_ravel", [r, c, d], {"dims": [3, 4, 5]}, np.ravel_multi_index((r, c, d), (3, 4, 5)).astype(np.int64),
+              "int64")
+    flat = i64([[0, 7], [59, 33]])
+    un = np.stack(np.unravel_index(flat, (3, 4, 5))).astype(np.int64)
+    save_case("fx_unravel", "fx_unravel", [flat], {"dims": [3, 4, 5]}, un, "int64")
+
+    # ix_
+    rows, cols = i64([0, 2]), i64([1, 3, 4])
+    b2 = np.arange(20.0).reshape(4, 5)
+    save_case("fx_ix", "fx_ix", [b2, rows, cols], {}, b2[np.ix_(rows, cols)], "float64", rtol=0.0, atol=0.0)
+    b3 = np.arange(60.0).reshape(3, 4, 5)
+    z = i64([2, 0])
+    save_case("fx_ix_3", "fx_ix", [b3, z, i64([1, 2, 3]), i64([4, 0])], {}, b3[np.ix_(z, i64([1, 2, 3]), i64([4, 0]))],
+              "float64", rtol=0.0, atol=0.0)
 
 
 if __name__ == "__main__":

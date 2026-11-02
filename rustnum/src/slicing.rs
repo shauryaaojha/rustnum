@@ -64,6 +64,29 @@ pub enum SliceArg {
     /// assert_eq!(rustnum::array![1,2].slice(&[rustnum::SliceArg::NewAxis]).shape(),[1,2]);
     /// ```
     NewAxis,
+    /// Selects with an integer array, like `a[[0, 2]]` (advanced indexing).
+    ///
+    /// Build it with `s!` from a `Vec`, an array literal, or an `Array`: several arrays broadcast
+    /// together and the result is a copy. Negative values count from the end of the axis.
+    /// ```
+    /// use rustnum as np;
+    /// let a = np::arange(0, 12, 1).reshape(&[3, 4]);
+    /// assert_eq!(a.slice(&np::s![[0, 2], [1, 3]]).to_vec(), [1, 11]);
+    /// ```
+    Fancy {
+        /// Shape of the index array.
+        /// ```
+        /// let s = rustnum::SliceArg::from(vec![0usize, 1]);
+        /// if let rustnum::SliceArg::Fancy { shape, .. } = s { assert_eq!(shape, [2]); }
+        /// ```
+        shape: Vec<usize>,
+        /// The indices in C order.
+        /// ```
+        /// let s = rustnum::SliceArg::from(vec![2usize, 0]);
+        /// if let rustnum::SliceArg::Fancy { values, .. } = s { assert_eq!(values, [2, 0]); }
+        /// ```
+        values: Vec<isize>,
+    },
 }
 /// Inserts a singleton axis, like np.newaxis.
 /// ```
@@ -126,7 +149,7 @@ macro_rules! s {
         }),*])
     };
 }
-fn normalize(
+pub(crate) fn normalize(
     start: Option<isize>,
     end: Option<isize>,
     step: isize,
@@ -166,6 +189,9 @@ impl<T: Element> Array<T> {
     /// assert_eq!(np::array![0,1,2,3].slice(&np::s![..;-1]).to_vec(),[3,2,1,0]);
     /// ```
     pub fn slice(&self, args: &[SliceArg]) -> Self {
+        if args.iter().any(SliceArg::is_fancy) {
+            return self.advanced_get(args);
+        }
         let consumed = args
             .iter()
             .filter(|a| !matches!(a, SliceArg::NewAxis))
@@ -182,6 +208,7 @@ impl<T: Element> Array<T> {
         let mut axis = 0;
         for arg in args {
             match *arg {
+                SliceArg::Fancy { .. } => unreachable!("advanced indexing is handled above"),
                 SliceArg::NewAxis => {
                     shape.push(1);
                     strides.push(0);
@@ -249,6 +276,10 @@ impl<T: Element> Array<T> {
     /// ```
     pub fn slice_assign(&mut self, args: &[SliceArg], values: impl IntoArray<T>) {
         let values = values.into_array();
+        if args.iter().any(SliceArg::is_fancy) {
+            self.advanced_assign(args, values);
+            return;
+        }
         // Validate before detaching; snapshot the RHS for overlapping assignments.
         let shape = self.slice(args).shape.clone();
         let values = values.broadcast_to(&shape).to_vec();

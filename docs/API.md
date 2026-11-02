@@ -227,7 +227,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 ## 19. Deliberate v0.1 limits
 
 - Not supported as array dtypes (v0.1 list, see sections 22 onward for what v0.2 added): complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
-- Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
+- Not supported: memory mapping, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
 
 ## 20. In-place and consuming operations
@@ -270,3 +270,11 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Display follows NumPy's shortest-unique-digits rule (`[1.00e-01 1.50e+00 6.55e+04]`); `Display` of a scalar prints the shortest round-trip decimal (`0.1`).
 - I/O: `f16` reads and writes `.npy`/`.npz` `<f2`. NumPy has no bfloat16 dtype, so `bf16` has no `.npy` encoding: saving one returns `Error::DType`.
 - Limit: `matmul`/`dot` use the generic loop and round every partial sum to 16 bits, whereas NumPy accumulates `float16` products in `float32`. Cast to `f32` first for accurate products.
+
+## 24. Advanced (integer-array) indexing (v0.2)
+
+- Design: the index tuple stays `a.slice(&np::s![...])`. `SliceArg` gained a variant `Fancy { shape, values }` and `s!` accepts, next to integers, ranges and `np::NEW_AXIS`, an integer array in any of these forms: an array literal or `Vec` (`[0, 2]`, `vec![1usize, 3]`), a reference to an `Array<i64 | i32 | usize>` (`&idx`), or a 1-d `&Array<bool>` mask. `a.slice(&np::s![[0, 2], [1, 3]])` is NumPy `a[[0, 2], [1, 3]]`; `a.slice(&np::s![[0, 1], .., [1, 3]])` is `a[[0, 1], :, [1, 3]]`.
+- The assign form is `a.slice_assign(&np::s![[0, 2], [1, 3]], values)`, NumPy `a[[0, 2], [1, 3]] = values` (values broadcast to the result shape; when an index repeats the last write wins).
+- Rules follow NumPy: index arrays broadcast together; negative values count from the end; plain integers next to an array take part in the broadcast; if all advanced indices (arrays and integers) are adjacent the broadcast dimensions replace them in place, otherwise (a slice or `np::NEW_AXIS` between them) they go to the front of the result. The result is always a copy. Out-of-range values panic with `index 5 is out of bounds for axis 0 with size 3`; non-broadcastable arrays panic with NumPy's `shape mismatch: indexing arrays could not be broadcast together with shapes ...`.
+- Functions at the crate root: `ix_(&[&[i64]]) -> Vec<Array<i64>>` (open mesh; index with `&ix[k]`), `take_along_axis(&a, &indices, axis)`, `put_along_axis(&mut a, &indices, values, axis)`, `put(&mut a, ind, v)` (flat, cyclic `v`), `choose(&a_idx, &[&choice, ...])`, `ravel_multi_index(&[&coords...], &dims) -> Array<i64>`, `unravel_index(&flat, &shape) -> Vec<Array<i64>>`. Index arrays are `i64` (NumPy's `intp`). `put`/`ravel_multi_index` only support `mode='raise'`.
+- Not done: a boolean mask with more than one dimension inside a tuple (use `Array::mask`), `np.take`/`np.put` `mode='wrap'`/`'clip'`.

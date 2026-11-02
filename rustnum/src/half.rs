@@ -570,7 +570,7 @@ half_type!(
 half_type!(
     /// bfloat16: the top 16 bits of an `f32` (8 exponent bits, 7 mantissa bits).
     ///
-    /// Same computing model as [`f16`]. NumPy has no bfloat16 dtype, so there is no `.npy`
+    /// Same computing model as [`struct@f16`]. NumPy has no bfloat16 dtype, so there is no `.npy`
     /// encoding; `to_npy_bytes` on a `bf16` array reports an `Error::DType`.
     ///
     /// ```

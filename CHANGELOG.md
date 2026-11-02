@@ -10,8 +10,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - Complex dtype: `Complex<f32>` (`complex64`) and `Complex<f64>` (`complex128`) are array elements (`Element` + `Num`). Operators with broadcasting and mixed real/complex operands, `real`, `imag`, `conj`, `angle`, `exp`, `log`, `sqrt`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `power`, `sum`/`mean`/`prod`, `matmul`/`dot`/`vdot`, `astype` to and from real, NumPy-style display, `np::absolute`, and `.npy`/`.npz` `<c8`/`<c16` read and write.
 - `f16` (IEEE binary16, `float16`) and `bf16` (bfloat16) array elements: `Element`, `Num` and `Float` implementations that compute through `f32`, round-to-nearest-even conversions for NaN/inf/subnormals, F16C-accelerated bulk `astype` between `f32` and `f16`, NumPy-style display and `.npy` `<f2` read/write (bfloat16 has no NumPy dtype and no `.npy` encoding).
+- Advanced (integer-array) indexing: `s!` accepts index arrays (`a.slice(&s![[0, 2], [1, 3]])`, `slice_assign` for the assign form) with NumPy's broadcasting and axis-placement rules, plus `ix_`, `take_along_axis`, `put_along_axis`, `put`, `choose`, `ravel_multi_index` and `unravel_index`.
 
 ### Changed (breaking)
+- `SliceArg` has a new variant `Fancy`; exhaustive matches on it need an arm.
 - `np::fft` follows NumPy's signatures: `fft`, `ifft`, `fft2`, `ifft2` take one real or complex array and return an `Array<Complex<F>>`, `rfft` returns `Array<Complex<F>>`, and `irfft(&a, n: Option<usize>)` takes a complex array (`None` is NumPy's default length). The v0.1 `(re, im)` pair signatures are removed.
 
 ### Changed

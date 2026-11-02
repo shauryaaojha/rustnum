@@ -494,7 +494,23 @@ use `a.take(&np::nonzero(&cond)[0].to_vec(), 0)` or `a.compress(&cond, 0)`.
 takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return pairs of real arrays `(re, im)`. `z.abs()` returns a complex array
 (`|z| + 0j`); use `np::absolute(&z)` for the real modulus.
 
+## Advanced indexing (v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `a[[0, 2], [1, 3]]` | `a.slice(&np::s![[0, 2], [1, 3]])` | Index arrays broadcast; result is a copy |
+| `a[idx0, :, idx1]` | `a.slice(&np::s![&idx0, .., &idx1])` | Separated advanced axes go to the front, like NumPy |
+| `a[:, mask1d]` | `a.slice(&np::s![.., &mask])` | 1-d `Array<bool>` mask inside a tuple |
+| `a[[0, 2], [1, 3]] = v` | `a.slice_assign(&np::s![[0, 2], [1, 3]], v)` | Last write wins on repeats |
+| `np.ix_(r, c)` | `np::ix_(&[&r, &c])` | Returns `Vec<Array<i64>>` |
+| `np.take_along_axis(a, i, axis)` | `np::take_along_axis(&a, &i, axis)` | `i` is `Array<i64>` |
+| `np.put_along_axis(a, i, v, axis)` | `np::put_along_axis(&mut a, &i, v, axis)` | In place |
+| `np.put(a, ind, v)` | `np::put(&mut a, ind, v)` | Flat index, `v` cycles |
+| `np.choose(a, choices)` | `np::choose(&a, &[&c0, &c1])` | |
+| `np.ravel_multi_index(mi, dims)` | `np::ravel_multi_index(&[&r, &c], &dims)` | |
+| `np.unravel_index(i, shape)` | `np::unravel_index(&i, &shape)` | Returns one array per dimension |
+
 ## Not in v0.1
 
-structured and datetime dtypes, masked arrays, memory-mapped files, string arrays, and
-multidimensional fancy indexing with index arrays on several axes at once. (Complex arrays arrived in v0.2.)
+structured and datetime dtypes, masked arrays, memory-mapped files, and string arrays.
+(Complex arrays, float16/bfloat16 and multi-axis fancy indexing arrived in v0.2.)

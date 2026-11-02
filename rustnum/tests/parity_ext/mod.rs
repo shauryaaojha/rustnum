@@ -8,6 +8,7 @@ use rustnum::{Array, Complex};
 use std::fs;
 use std::path::Path;
 
+mod fancy;
 mod half;
 
 /// What an extension case computed.
@@ -86,6 +87,9 @@ macro_rules! binary {
 /// Runs an extension op; `None` when `op` belongs to the base runner.
 pub fn run(dir: &Path, case: &Json) -> Option<Result<Out, String>> {
     if let Some(r) = half::run(dir, case) {
+        return Some(r);
+    }
+    if let Some(r) = fancy::run(dir, case) {
         return Some(r);
     }
     let op = case.get("op").as_str();
