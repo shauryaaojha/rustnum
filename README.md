@@ -37,7 +37,7 @@ Install the published crate from crates.io:
 
 ```toml
 [dependencies]
-rustnum = "0.1.0"
+rustnum = "0.2.0"
 ```
 
 Or run:
@@ -161,10 +161,10 @@ cannot run. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the test 
 
 ## Roadmap
 
-- **On main since 0.1.0:** `einsum` / `einsum_path`, `.npz`, `fft`, `np::polynomial` classes, every
+- **Since 0.1.0:** `einsum` / `einsum_path`, `.npz`, `fft`, `np::polynomial` classes, every
   `numpy.random` distribution, blocked LAPACK (LU, Cholesky, QR, `eigh`, SVD), AVX2 SIMD ufuncs, print options,
   and ~90 more NumPy functions (`nan*`, `partition`, stride tricks, `loadtxt` / `savetxt` / `genfromtxt`, ...).
-- **rustnum v0.2 (merged, not yet released):** complex numbers, `f16` / `bf16`, fancy indexing, masked arrays
+- **rustnum v0.2.0 (released 2026-11-02):** complex numbers, `f16` / `bf16`, fancy indexing, masked arrays
   (`np::ma`), `datetime64` / `timedelta64`, structured dtypes, Python bindings (`rustnum-py`, PyO3 abi3).
 - **Open performance gaps:** `svd` on 500×500 is ~3x slower than NumPy; NEON kernels are compile-checked only.
 - **Next libraries:** see [`docs/ROADMAP.md`](docs/ROADMAP.md) (65 `rust-ml-*` crates: dataframes, SciPy,
