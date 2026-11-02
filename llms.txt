@@ -257,3 +257,7 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 ## Functional helpers (added after v0.1)
 - `np::vectorize(|x: f64| ..).call(a)` / `.call2(a, b)` / `.call3(a, b, c)` — scalar closure lifted over arrays with broadcasting
 - `np::apply_along_axis(|lane| ..., axis, &a)`, `np::apply_over_axes(|a, axis| ..., &a, &[0, 2])`
+
+## Text I/O (np::io) (added after v0.1)
+- `np::io::loadtxt::<f64>(path, Some("#"), delimiter, skiprows, usecols, max_rows)?`, `np::io::savetxt(path, &x, fmt, delim, newline, header, footer, comments)?`
+- `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling, usecols, names, max_rows)?` -> `(array, names)`

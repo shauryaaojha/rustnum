@@ -548,6 +548,14 @@ Added after v0.1. Same conventions as above.
 | `np.apply_along_axis(f, axis, arr)` | `np::apply_along_axis(f, axis, &arr)` | `f(&Array<T>) -> Array<R>` (0-d for a scalar result) |
 | `np.apply_over_axes(f, a, axes)` | `np::apply_over_axes(f, &a, &axes)` | `f(&Array<T>, axis) -> Array<T>` |
 
+### Text I/O (np::io)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.loadtxt(fname, comments, delimiter, skiprows, usecols, max_rows)` | `np::io::loadtxt::<f64>(path, Some("#"), None, 0, None, None)?` | Squeezed like NumPy; element type is the type parameter; returns `Result` |
+| `np.savetxt(fname, X, fmt, delimiter, newline, header, footer, comments)` | `np::io::savetxt(path, &x, "%.18e", " ", "\n", "", "", "# ")?` | printf formats `d i u e E f F g G s`; one per column or one for all |
+| `np.genfromtxt(fname, ..., names=True)` | `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling_values, usecols, names, max_rows)?` | Float only; returns `(Array, names)`; missing or unparsable fields become NaN or `filling_values` |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,

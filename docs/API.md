@@ -291,3 +291,10 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 - `vectorize(f) -> Vectorize<F>` with `call(a)`, `call2(a, b)`, `call3(a, b, c)` taking array-likes and broadcasting.
 - `apply_along_axis(func1d: impl FnMut(&Array<T>) -> Array<R>, axis: isize, &arr) -> Array<R>`; `apply_over_axes(func: impl FnMut(&Array<T>, isize) -> Array<T>, &a, axes: &[isize]) -> Array<T>`.
+
+## 29. Text I/O (np::io)
+
+- `io::loadtxt<T: Element>(fname, comments: Option<&str>, delimiter: Option<&str>, skiprows: usize, usecols: Option<&[isize]>, max_rows: Option<usize>) -> Result<Array<T>>`.
+- `io::savetxt<T: Element>(fname, &x, fmt: &str, delimiter: &str, newline: &str, header: &str, footer: &str, comments: &str) -> Result<()>`.
+- `io::genfromtxt<F: Float>(fname, comments, delimiter, skip_header, skip_footer, filling_values: Option<F>, usecols, names: bool, max_rows) -> Result<(Array<F>, Vec<String>)>`; there is no `missing_values` argument (NumPy's float converter only replaces fields that fail to parse).
+- Bad data returns `Error::Parse` (messages follow NumPy) or `Error::Format`; unreadable files return `Error::Io`.
