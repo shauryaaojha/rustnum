@@ -1086,3 +1086,92 @@ pub fn tensordot_n<T: Num>(a: &Array<T>, b: &Array<T>, n: usize) -> Array<T> {
 pub fn vdot<T: Num>(a: &Array<T>, b: &Array<T>) -> T {
     kernels::vdot(&data(a), &data(b)).unwrap_or_else(|_| panic!("vectors have different lengths"))
 }
+
+/// Inverse of a tensor with `a.reshape(prod(shape[:ind]), -1)` square, like `np.linalg.tensorinv(a, ind)`.
+///
+/// The result has shape `a.shape[ind:] + a.shape[:ind]` and satisfies
+/// `tensordot(tensorinv(a), a, ind) == eye`. NumPy's default is `ind = 2`.
+///
+/// # Errors
+/// `Err(Error::Shape("Invalid ind argument."))` unless `0 < ind <= a.ndim()`; the errors of
+/// [`inv`] (non-square reshaped matrix, `Singular`) otherwise.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::eye::<f64>(4).reshape(&[4, 2, 2]);
+/// let ai = np::linalg::tensorinv(&a, 1).unwrap();
+/// assert_eq!(ai.shape(), [2, 2, 4]);
+/// ```
+pub fn tensorinv<F: LinalgFloat>(a: &Array<F>, ind: usize) -> Result<Array<F>> {
+    if ind == 0 || ind > a.ndim() {
+        return Err(shape_error("Invalid ind argument."));
+    }
+    let (lead, tail) = a.shape().split_at(ind);
+    let q: usize = tail.iter().product();
+    let mut inv_shape = tail.to_vec();
+    inv_shape.extend_from_slice(lead);
+    let p: usize = lead.iter().product();
+    if q == 0 || p == 0 {
+        return Err(shape_error("Last 2 dimensions of the array must be square"));
+    }
+    let m = a.reshape(&[q, a.size() / q]);
+    Ok(inv(&m)?.reshape(&inv_shape))
+}
+
+/// Solution `x` of the tensor equation `tensordot(a, x, x.ndim) == b`, like `np.linalg.tensorsolve(a, b, axes)`.
+///
+/// `axes` (if given) are moved to the end of `a` first. The result has the shape of the last
+/// `a.ndim - b.ndim` axes of `a`.
+///
+/// # Errors
+/// The errors of [`solve`]: `Err(Error::Shape)` if the reshaped `a` is not square, `Singular`.
+///
+/// ```
+/// use rustnum as np;
+/// let a = np::eye::<f64>(6).reshape(&[2, 3, 6]);
+/// let b = np::arange(1.0, 7.0, 1.0).reshape(&[2, 3]);
+/// let x = np::linalg::tensorsolve(&a, &b, None).unwrap();
+/// assert_eq!(x.to_vec(), [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+/// ```
+pub fn tensorsolve<F: LinalgFloat>(
+    a: &Array<F>,
+    b: &Array<F>,
+    axes: Option<&[isize]>,
+) -> Result<Array<F>> {
+    let an = a.ndim();
+    let a = match axes {
+        None => a.clone(),
+        Some(ax) => {
+            let mut all: Vec<usize> = (0..an).collect();
+            for &k in ax {
+                let k = if k < 0 { k + an as isize } else { k };
+                assert!(
+                    k >= 0 && (k as usize) < an,
+                    "axis {k} is out of bounds for array of dimension {an}"
+                );
+                let pos = all
+                    .iter()
+                    .position(|&x| x == k as usize)
+                    .expect("axis present once");
+                all.remove(pos);
+                all.push(k as usize);
+            }
+            a.transpose(&all)
+        }
+    };
+    if b.ndim() > an {
+        return Err(shape_error("Input operand 1 has too many dimensions"));
+    }
+    let old_shape = a.shape()[b.ndim()..].to_vec();
+    let prod: usize = old_shape.iter().product();
+    if prod == 0 {
+        return Err(shape_error("Last 2 dimensions of the array must be square"));
+    }
+    if a.size() / prod != prod {
+        return Err(shape_error(
+            "Input arrays must satisfy the requirement             prod(a.shape[b.ndim:]) == prod(a.shape[:b.ndim])",
+        ));
+    }
+    let a2 = a.reshape(&[prod, prod]);
+    Ok(solve(&a2, &b.ravel())?.reshape(&old_shape))
+}

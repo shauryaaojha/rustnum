@@ -18,27 +18,47 @@ const EXP: Kernels = Kernels {
 };
 const EXP2: Kernels = Kernels {
     f64: Some((simd_math::exp2_f64, simd_math::exp2_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::exp2_f32, simd_math::exp2_f32_inplace)),
+};
+const EXPM1: Kernels = Kernels {
+    f64: Some((simd_math::expm1_f64, simd_math::expm1_f64_inplace)),
+    f32: Some((simd_math::expm1_f32, simd_math::expm1_f32_inplace)),
 };
 const LOG: Kernels = Kernels {
     f64: Some((simd_math::log_f64, simd_math::log_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::log_f32, simd_math::log_f32_inplace)),
+};
+const LOG2: Kernels = Kernels {
+    f64: Some((simd_math::log2_f64, simd_math::log2_f64_inplace)),
+    f32: Some((simd_math::log2_f32, simd_math::log2_f32_inplace)),
+};
+const LOG10: Kernels = Kernels {
+    f64: Some((simd_math::log10_f64, simd_math::log10_f64_inplace)),
+    f32: Some((simd_math::log10_f32, simd_math::log10_f32_inplace)),
+};
+const LOG1P: Kernels = Kernels {
+    f64: Some((simd_math::log1p_f64, simd_math::log1p_f64_inplace)),
+    f32: Some((simd_math::log1p_f32, simd_math::log1p_f32_inplace)),
 };
 const SIN: Kernels = Kernels {
     f64: Some((simd_math::sin_f64, simd_math::sin_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::sin_f32, simd_math::sin_f32_inplace)),
 };
 const COS: Kernels = Kernels {
     f64: Some((simd_math::cos_f64, simd_math::cos_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::cos_f32, simd_math::cos_f32_inplace)),
+};
+const TAN: Kernels = Kernels {
+    f64: Some((simd_math::tan_f64, simd_math::tan_f64_inplace)),
+    f32: Some((simd_math::tan_f32, simd_math::tan_f32_inplace)),
 };
 const TANH: Kernels = Kernels {
     f64: Some((simd_math::tanh_f64, simd_math::tanh_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::tanh_f32, simd_math::tanh_f32_inplace)),
 };
 const SIGMOID: Kernels = Kernels {
     f64: Some((simd_math::sigmoid_f64, simd_math::sigmoid_f64_inplace)),
-    f32: None,
+    f32: Some((simd_math::sigmoid_f32, simd_math::sigmoid_f32_inplace)),
 };
 
 /// Elements per rayon task when a SIMD kernel runs in parallel.
@@ -165,7 +185,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].expm1().item(),0f64);
     /// ```
     pub fn expm1(&self) -> Self {
-        self.par_map(F::exp_m1)
+        self.simd_map(EXPM1, F::exp_m1)
     }
     /// Implements np.log with array value semantics.
     ///
@@ -183,7 +203,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![8f64].log2().item(),3f64);
     /// ```
     pub fn log2(&self) -> Self {
-        self.par_map(F::log2)
+        self.simd_map(LOG2, F::log2)
     }
     /// Implements np.log10 with array value semantics.
     ///
@@ -192,7 +212,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![100f64].log10().item(),2f64);
     /// ```
     pub fn log10(&self) -> Self {
-        self.par_map(F::log10)
+        self.simd_map(LOG10, F::log10)
     }
     /// Implements np.log1p with array value semantics.
     ///
@@ -201,7 +221,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].log1p().item(),0f64);
     /// ```
     pub fn log1p(&self) -> Self {
-        self.par_map(F::ln_1p)
+        self.simd_map(LOG1P, F::ln_1p)
     }
     /// Implements np.sqrt with array value semantics.
     ///
@@ -246,7 +266,7 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![0f64].tan().item(),0f64);
     /// ```
     pub fn tan(&self) -> Self {
-        self.par_map(F::tan)
+        self.simd_map(TAN, F::tan)
     }
     /// Implements np.arcsin with array value semantics.
     ///
@@ -658,7 +678,7 @@ impl<F: Float> Array<F> {
     /// a.expm1_inplace();
     /// ```
     pub fn expm1_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::exp_m1)
+        self.simd_map_inplace(EXPM1, F::exp_m1)
     }
     /// Applies np.expm1 with out=a, preserving copy-on-write semantics.
     /// ```
@@ -692,7 +712,7 @@ impl<F: Float> Array<F> {
     /// a.log2_inplace();
     /// ```
     pub fn log2_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::log2)
+        self.simd_map_inplace(LOG2, F::log2)
     }
     /// Applies np.log2 with out=a, preserving copy-on-write semantics.
     /// ```
@@ -709,7 +729,7 @@ impl<F: Float> Array<F> {
     /// a.log10_inplace();
     /// ```
     pub fn log10_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::log10)
+        self.simd_map_inplace(LOG10, F::log10)
     }
     /// Applies np.log10 with out=a, preserving copy-on-write semantics.
     /// ```
@@ -726,7 +746,7 @@ impl<F: Float> Array<F> {
     /// a.log1p_inplace();
     /// ```
     pub fn log1p_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::ln_1p)
+        self.simd_map_inplace(LOG1P, F::ln_1p)
     }
     /// Applies np.log1p with out=a, preserving copy-on-write semantics.
     /// ```
@@ -811,7 +831,7 @@ impl<F: Float> Array<F> {
     /// a.tan_inplace();
     /// ```
     pub fn tan_inplace(&mut self) {
-        self.mapv_inplace_parallel(F::tan)
+        self.simd_map_inplace(TAN, F::tan)
     }
     /// Applies np.tan with out=a, preserving copy-on-write semantics.
     /// ```

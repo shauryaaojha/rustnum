@@ -138,10 +138,66 @@ fn array_benches(c: &mut Criterion) {
     c.bench_function("exp (1e6 f64)", |b| b.iter(|| black_box(million.exp())));
 
     let raw_million = array_data(1_000_000);
+    let raw_pos: Vec<f64> = raw_million.iter().map(|&x| x.abs() + 0.1).collect();
     let mut raw_out = vec![0.0f64; 1_000_000];
+
     c.bench_function("exp (1e6 f64) simd kernel", |b| {
         b.iter(|| {
             simd_math::exp_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("exp2 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp2_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("expm1 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::expm1_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log2 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log2_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log10 (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log10_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("log1p (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log1p_f64(&raw_pos, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("sin (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sin_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("cos (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::cos_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+    c.bench_function("tan (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tan_f64(&raw_million, &mut raw_out);
             black_box(&raw_out);
         })
     });
@@ -149,6 +205,89 @@ fn array_benches(c: &mut Criterion) {
         b.iter(|| {
             simd_math::tanh_f64(&raw_million, &mut raw_out);
             black_box(&raw_out);
+        })
+    });
+    c.bench_function("sigmoid (1e6 f64) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sigmoid_f64(&raw_million, &mut raw_out);
+            black_box(&raw_out);
+        })
+    });
+
+    let raw_million_f32: Vec<f32> = raw_million.iter().map(|&x| x as f32).collect();
+    let raw_pos_f32: Vec<f32> = raw_pos.iter().map(|&x| x as f32).collect();
+    let mut raw_out_f32 = vec![0.0f32; 1_000_000];
+
+    c.bench_function("exp (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("exp2 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::exp2_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("expm1 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::expm1_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log2 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log2_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log10 (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log10_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("log1p (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::log1p_f32(&raw_pos_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("sin (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sin_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("cos (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::cos_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("tan (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tan_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("tanh (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::tanh_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
+        })
+    });
+    c.bench_function("sigmoid (1e6 f32) simd kernel", |b| {
+        b.iter(|| {
+            simd_math::sigmoid_f32(&raw_million_f32, &mut raw_out_f32);
+            black_box(&raw_out_f32);
         })
     });
     let mut rng = np::random::Rng::seed(42);
@@ -183,9 +322,57 @@ fn array_benches(c: &mut Criterion) {
     c.bench_function("inv (200x200)", |b| {
         b.iter(|| black_box(np::linalg::inv(&inv_input).unwrap()))
     });
+    let mut inv_1000_values = array_data(1000 * 1000);
+    for i in 0..1000 {
+        inv_1000_values[i * 1000 + i] += 1250.0;
+    }
+    let inv_1000_input = np::Array::from_vec(inv_1000_values, &[1000, 1000]);
+    c.bench_function("inv (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::inv(&inv_1000_input).unwrap()))
+    });
+
     let svd_input = np::Array::from_vec(array_data(100 * 100), &[100, 100]);
     c.bench_function("svd (100x100)", |b| {
         b.iter(|| black_box(np::linalg::svd(&svd_input)))
+    });
+    let svd_500_input = np::Array::from_vec(array_data(500 * 500), &[500, 500]);
+    c.bench_function("svd (500x500)", |b| {
+        b.iter(|| black_box(np::linalg::svd(&svd_500_input)))
+    });
+
+    let mut sym_500_values = array_data(500 * 500);
+    for i in 0..500 {
+        for j in 0..i {
+            let val = sym_500_values[i * 500 + j];
+            sym_500_values[j * 500 + i] = val;
+        }
+    }
+    let eigh_500_input = np::Array::from_vec(sym_500_values, &[500, 500]);
+    c.bench_function("eigh (500x500)", |b| {
+        b.iter(|| black_box(np::linalg::eigh(&eigh_500_input)))
+    });
+
+    let qr_1000_input = np::Array::from_vec(array_data(1000 * 1000), &[1000, 1000]);
+    c.bench_function("qr (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::qr(&qr_1000_input)))
+    });
+
+    let mut chol_1000_values = array_data(1000 * 1000);
+    for i in 0..1000 {
+        for j in 0..i {
+            let val = chol_1000_values[i * 1000 + j];
+            chol_1000_values[j * 1000 + i] = val;
+        }
+        chol_1000_values[i * 1000 + i] += 2000.0;
+    }
+    let chol_1000_input = np::Array::from_vec(chol_1000_values, &[1000, 1000]);
+    c.bench_function("cholesky (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::cholesky(&chol_1000_input).unwrap()))
+    });
+
+    let solve_1000_b = np::Array::from_vec(array_data(1000), &[1000]);
+    c.bench_function("solve (1000x1000)", |b| {
+        b.iter(|| black_box(np::linalg::solve(&inv_1000_input, &solve_1000_b).unwrap()))
     });
     for n in [256, 512, 1024, 2048, 4096] {
         let left = np::Array::from_vec(array_data(n * n), &[n, n]);

@@ -1,3 +1,4 @@
+use crate::printopts::{PrintOptions, get_printoptions};
 use crate::{Array, Element};
 use std::{
     any::Any,
@@ -49,17 +50,22 @@ fn scientific<T: Element>(x: T) -> String {
         format!("{:e}", x.to_f64())
     }
 }
-fn complex_values<T: Element>(values: &[T]) -> Vec<String> {
+fn complex_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
     // NumPy formats the real and imaginary parts as two independent float columns; the
     // imaginary column always carries a sign and the `j` goes right after the digits.
-    fn columns<F: Element>(re: Vec<F>, im: Vec<F>) -> Vec<String> {
-        let re_text = format_values(&re);
+    fn columns<F: Element>(re: Vec<F>, im: Vec<F>, o: &PrintOptions) -> Vec<String> {
+        let re_text = format_values(&re, o);
         let neg: Vec<bool> = im
             .iter()
             .map(|x| x.to_f64().is_sign_negative() && !x.to_f64().is_nan())
             .collect();
         let im_abs: Vec<F> = im.iter().map(|&x| F::from_f64(x.to_f64().abs())).collect();
-        let im_text = format_values(&im_abs);
+        // The imaginary part carries its own sign, so the `sign` option applies to the real part only.
+        let plain = PrintOptions {
+            sign: '-',
+            ..o.clone()
+        };
+        let im_text = format_values(&im_abs, &plain);
         re_text
             .into_iter()
             .zip(im_text)
@@ -78,20 +84,36 @@ fn complex_values<T: Element>(values: &[T]) -> Vec<String> {
         columns(
             parts.iter().map(|p| p.0 as f32).collect(),
             parts.iter().map(|p| p.1 as f32).collect(),
+            o,
         )
     } else {
         columns(
             parts.iter().map(|p| p.0).collect(),
             parts.iter().map(|p| p.1).collect(),
+            o,
         )
     }
 }
-fn format_values<T: Element>(values: &[T]) -> Vec<String> {
+fn signed(s: String, o: &PrintOptions) -> String {
+    if o.sign != '-' && !s.starts_with('-') {
+        format!("{}{s}", o.sign)
+    } else {
+        s
+    }
+}
+fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
     if T::DTYPE.starts_with("complex") {
-        return complex_values(values);
+        return complex_values(values, o);
     }
     if !crate::element::is_float_dtype(T::DTYPE) {
-        let text: Vec<_> = values.iter().copied().map(raw).collect();
+        let text: Vec<_> = values
+            .iter()
+            .copied()
+            .map(|x| {
+                let s = raw(x);
+                if T::DTYPE == "bool" { s } else { signed(s, o) }
+            })
+            .collect();
         let width = if T::DTYPE == "bool" {
             5
         } else {
@@ -107,7 +129,7 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
         .collect();
     let min = finite.iter().copied().fold(f64::INFINITY, f64::min);
     let max = finite.iter().copied().fold(0., f64::max);
-    let sci = max >= 1e8 || (min < 1e-4) || (max > 0. && max / min > 1000.);
+    let sci = max >= 1e8 || (!o.suppress && ((min < 1e-4) || (max > 0. && max / min > 1000.)));
     let negative = values.iter().any(|x| x.to_f64().is_sign_negative());
     if sci {
         let precision = values
@@ -116,7 +138,11 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
             .map(|&x| {
                 let s = scientific(x);
                 let mantissa = s.split('e').next().unwrap();
-                mantissa.split('.').nth(1).map_or(0, str::len).min(8)
+                mantissa
+                    .split('.')
+                    .nth(1)
+                    .map_or(0, str::len)
+                    .min(o.precision)
             })
             .max()
             .unwrap_or(0);
@@ -142,7 +168,7 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
             .map(|&x| {
                 let x = x.to_f64();
                 if !x.is_finite() {
-                    return x.to_string().to_lowercase();
+                    return signed(x.to_string().to_lowercase(), o);
                 }
                 let s = format!("{x:.precision$e}");
                 let (mantissa, exponent) = s.split_once('e').unwrap();
@@ -154,10 +180,12 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
                 };
                 format!(
                     "{}{}e{}{:0exponent_width$}",
-                    if negative && !x.is_sign_negative() {
-                        " "
+                    if o.sign != '-' && !x.is_sign_negative() {
+                        o.sign.to_string()
+                    } else if negative && !x.is_sign_negative() {
+                        " ".to_string()
                     } else {
-                        ""
+                        String::new()
                     },
                     mantissa,
                     if exp < 0 { "-" } else { "+" },
@@ -172,10 +200,10 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
         .iter()
         .map(|&x| {
             if !x.to_f64().is_finite() {
-                return x.to_f64().to_string().to_lowercase();
+                return signed(x.to_f64().to_string().to_lowercase(), o);
             }
             let short = shortest(x);
-            let precision = short.split('.').nth(1).map_or(0, str::len).min(8);
+            let precision = short.split('.').nth(1).map_or(0, str::len).min(o.precision);
             let mut s = format!("{:.*}", precision, x.to_f64());
             if s.contains('.') {
                 while s.ends_with('0') {
@@ -184,7 +212,7 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
             } else {
                 s.push('.');
             }
-            s
+            signed(s, o)
         })
         .collect();
     let mut left = text
@@ -219,12 +247,12 @@ fn format_values<T: Element>(values: &[T]) -> Vec<String> {
         })
         .collect()
 }
-fn selected(n: usize, summary: bool) -> Vec<Option<usize>> {
-    if summary && n > 6 {
-        (0..3)
+fn selected(n: usize, summary: bool, edge: usize) -> Vec<Option<usize>> {
+    if summary && n > 2 * edge {
+        (0..edge)
             .map(Some)
             .chain([None])
-            .chain((n - 3..n).map(Some))
+            .chain((n - edge..n).map(Some))
             .collect()
     } else {
         (0..n).map(Some).collect()
@@ -235,15 +263,19 @@ fn collect_visible<T: Element>(
     axis: usize,
     c: &mut Vec<usize>,
     summary: bool,
+    edge: usize,
     out: &mut Vec<T>,
 ) {
     if axis == a.ndim() {
         out.push(a.get(c));
         return;
     }
-    for i in selected(a.shape()[axis], summary).into_iter().flatten() {
+    for i in selected(a.shape()[axis], summary, edge)
+        .into_iter()
+        .flatten()
+    {
         c.push(i);
-        collect_visible(a, axis + 1, c, summary, out);
+        collect_visible(a, axis + 1, c, summary, edge, out);
         c.pop();
     }
 }
@@ -252,6 +284,8 @@ struct Printer {
     next: usize,
     debug: bool,
     summary: bool,
+    edge: usize,
+    linewidth: usize,
 }
 impl Printer {
     fn nested(&mut self, shape: &[usize], axis: usize, out: &mut String) {
@@ -261,7 +295,7 @@ impl Printer {
             return;
         }
         out.push('[');
-        let choices = selected(shape[axis], self.summary);
+        let choices = selected(shape[axis], self.summary, self.edge);
         let last = axis + 1 == shape.len();
         let indent = axis + 1 + if self.debug { 6 } else { 0 };
         for (k, index) in choices.iter().enumerate() {
@@ -274,7 +308,7 @@ impl Printer {
                     };
                     let col = out.rsplit('\n').next().unwrap().len();
                     let sep = if self.debug { 2 } else { 1 };
-                    if col + sep + width + 1 > 75 {
+                    if col + sep + width + 1 > self.linewidth {
                         if self.debug {
                             out.push(',');
                         }
@@ -300,14 +334,21 @@ impl Printer {
         out.push(']');
     }
 }
-fn visible_flat(shape: &[usize], axis: usize, base: usize, summary: bool, out: &mut Vec<usize>) {
+fn visible_flat(
+    shape: &[usize],
+    axis: usize,
+    base: usize,
+    summary: bool,
+    edge: usize,
+    out: &mut Vec<usize>,
+) {
     if axis == shape.len() {
         out.push(base);
         return;
     }
     let stride: usize = shape[axis + 1..].iter().product();
-    for i in selected(shape[axis], summary).into_iter().flatten() {
-        visible_flat(shape, axis + 1, base + i * stride, summary, out);
+    for i in selected(shape[axis], summary, edge).into_iter().flatten() {
+        visible_flat(shape, axis + 1, base + i * stride, summary, edge, out);
     }
 }
 /// Lays out arbitrary per-element text like NumPy's array printer (no column alignment).
@@ -321,20 +362,24 @@ pub(crate) fn render_custom(shape: &[usize], text: &dyn Fn(usize) -> String) -> 
     if total == 0 {
         return "[]".to_string();
     }
-    let summary = total > 1000;
+    let o = get_printoptions();
+    let summary = total > o.threshold;
     let mut flat = Vec::new();
-    visible_flat(shape, 0, 0, summary, &mut flat);
+    visible_flat(shape, 0, 0, summary, o.edgeitems, &mut flat);
     let mut p = Printer {
         text: flat.into_iter().map(text).collect(),
         next: 0,
         debug: false,
         summary,
+        edge: o.edgeitems,
+        linewidth: o.linewidth,
     };
     let mut out = String::new();
     p.nested(shape, 0, &mut out);
     out
 }
 fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
+    let o = get_printoptions();
     let mut out = if debug {
         "array(".to_string()
     } else {
@@ -343,10 +388,10 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     if a.ndim() == 0 {
         let v = a.item();
         if debug && (crate::element::is_float_dtype(T::DTYPE) || T::DTYPE.starts_with("complex")) {
-            let t = format_values(&[v]);
+            let t = format_values(&[v], &o);
             out.push_str(t[0].trim());
         } else if T::DTYPE.starts_with("complex") {
-            let t = format_values(&[v]);
+            let t = format_values(&[v], &o);
             out.push_str(&format!("({})", t[0].trim()));
         } else {
             out.push_str(&raw(v));
@@ -354,14 +399,16 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     } else if a.is_empty() {
         out.push_str("[]");
     } else {
-        let summary = a.size() > 1000;
+        let summary = a.size() > o.threshold;
         let mut values = Vec::new();
-        collect_visible(a, 0, &mut Vec::new(), summary, &mut values);
+        collect_visible(a, 0, &mut Vec::new(), summary, o.edgeitems, &mut values);
         let mut p = Printer {
-            text: format_values(&values),
+            text: format_values(&values, &o),
             next: 0,
             debug,
             summary,
+            edge: o.edgeitems,
+            linewidth: o.linewidth,
         };
         p.nested(a.shape(), 0, &mut out);
     }

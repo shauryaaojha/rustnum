@@ -217,10 +217,35 @@ impl<T: Element> Array<T> {
             .iter()
             .zip(&self.strides)
             .any(|(&d, &s)| d > 1 && s == 0)
+            || self.may_overlap()
         {
             *self = self.copy();
         }
         Arc::make_mut(&mut self.data);
+    }
+    // Conservative test for two logical elements sharing one buffer slot (sliding windows,
+    // `as_strided` views). Sorted by |stride|, each axis must step past everything the smaller
+    // strides can reach; failing that test only costs a copy, never correctness.
+    fn may_overlap(&self) -> bool {
+        if self.is_contiguous() {
+            return false;
+        }
+        let mut axes: Vec<(usize, usize)> = self
+            .shape
+            .iter()
+            .zip(&self.strides)
+            .filter(|&(&d, _)| d > 1)
+            .map(|(&d, &s)| (s.unsigned_abs(), d))
+            .collect();
+        axes.sort_unstable();
+        let mut reach = 0usize;
+        for (stride, dim) in axes {
+            if stride <= reach {
+                return true;
+            }
+            reach += (dim - 1) * stride;
+        }
+        false
     }
     /// Implements np.ndarray.__getitem__ with array value semantics.
     ///

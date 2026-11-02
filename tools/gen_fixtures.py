@@ -259,8 +259,6 @@ def main():
     save_case("trace_matrix", "trace", [m3], {}, np.array(np.trace(m3)), "float64")
 
     # =========================================================================
-    # 10. Complex dtype (stage 1 of v0.2)
-    # =========================================================================
     complex_cases(save_case, rng)
 
     # =========================================================================
@@ -277,7 +275,114 @@ def main():
     # 13. Masked arrays (stage 4 of v0.2)
     # =========================================================================
     ma_cases(save_case, rng)
+=======
+    # 10. numpy-extra groups (nan-functions, sorting, indices, shapes, ...)
+    # =========================================================================
+    nan_in = rng.standard_normal((4, 5, 3))
+    nan_in[rng.random(nan_in.shape) < 0.25] = np.nan
+    nan_in[:, 2, 0] = np.nan  # an all-NaN lane along axis 1
+    nan_ok = nan_in.copy()
+    nan_ok[:, 2, :] = rng.standard_normal((4, 3))  # no all-NaN lane (for arg*)
+    save_case("nanvar_axis1", "nanvar_ddof_axis", [nan_in], {"axis": 1, "ddof": 1}, np.nanvar(nan_in, axis=1, ddof=1), "float64", 1e-10, 1e-12)
+    save_case("nanstd_all", "nanstd", [nan_in], {}, np.array(np.nanstd(nan_in)), "float64", 1e-10, 1e-12)
+    save_case("nanmedian_axis0", "nanmedian_axis", [nan_in], {"axis": 0}, np.nanmedian(nan_in, axis=0), "float64", 1e-10, 1e-12)
+    save_case("nanpercentile_axis2", "nanpercentile_axis", [nan_in], {"axis": 2, "q": 37.0}, np.nanpercentile(nan_in, 37.0, axis=2), "float64", 1e-10, 1e-12)
+    save_case("nancumsum_axis1", "nancumsum_axis", [nan_in], {"axis": 1}, np.nancumsum(nan_in, axis=1), "float64", 1e-10, 1e-12)
+    save_case("nancumprod_axis2", "nancumprod_axis", [nan_in], {"axis": 2}, np.nancumprod(nan_in, axis=2), "float64", 1e-10, 1e-12)
+    save_case("nanprod_axis0", "nanprod_axis", [nan_in], {"axis": 0}, np.nanprod(nan_in, axis=0), "float64", 1e-10, 1e-12)
+    save_case("nanargmax_axis1", "nanargmax_axis", [nan_ok], {"axis": 1}, np.nanargmax(nan_ok, axis=1).astype(np.int64), "int64")
+    save_case("nanargmin_all", "nanargmin", [nan_ok], {}, np.array(np.nanargmin(nan_ok), dtype=np.int64), "int64")
 
+    # -- group 2: sorting / searching --
+    lex_a = rng.integers(0, 4, size=(3, 25)).astype(np.float64)
+    lex_a[0, ::7] = np.nan
+    save_case("lexsort_3keys", "lexsort", [lex_a], {"axis": 1}, np.lexsort(lex_a).astype(np.int64), "int64")
+    part_in = rng.integers(0, 50, size=(6, 40)).astype(np.float64)
+    save_case("partition_kth_axis1", "partition_kth", [part_in], {"axis": 1, "kth": 11}, np.partition(part_in, 11, axis=1)[:, 11], "float64", 0.0, 0.0)
+    save_case("partition_kth_axis0", "partition_kth", [part_in], {"axis": 0, "kth": -2}, np.partition(part_in, -2, axis=0)[-2], "float64", 0.0, 0.0)
+    nz_in = np.where(rng.random((7, 9)) < 0.4, rng.standard_normal((7, 9)), 0.0)
+    save_case("flatnonzero_2d", "flatnonzero", [nz_in], {}, np.flatnonzero(nz_in).astype(np.int64), "int64")
+    tz_in = np.zeros((6, 8)); tz_in[2:5, 3:7] = rng.standard_normal((3, 4)); tz_in[3, 4] = 0.0
+    save_case("trim_zeros_2d", "trim_zeros", [tz_in], {}, np.trim_zeros(tz_in), "float64", 0.0, 0.0)
+    sel_x = rng.standard_normal((5, 6))
+    save_case("select_two", "select", [sel_x], {"lo": -0.5, "hi": 0.5, "default": 99.0}, np.select([sel_x < -0.5, sel_x > 0.5], [sel_x * 2, sel_x * 3], 99.0), "float64", 0.0, 0.0)
+    save_case("extract_2d", "extract", [sel_x], {}, np.extract(sel_x > 0, sel_x), "float64", 0.0, 0.0)
+
+    # -- group 3: index helpers --
+    tl = np.tril_indices(6, -1, 8)
+    save_case("tril_indices_6_8", "tril_indices", [], {"n": 6, "k": -1, "m": 8}, np.stack(tl).astype(np.int64), "int64")
+    tu = np.triu_indices(5, 2)
+    save_case("triu_indices_5", "triu_indices", [], {"n": 5, "k": 2, "m": 0}, np.stack(tu).astype(np.int64), "int64")
+    fd = np.zeros((9, 4)); np.fill_diagonal(fd, 3.5, wrap=True)
+    save_case("fill_diagonal_wrap", "fill_diagonal_wrap", [np.zeros((9, 4))], {"val": 3.5}, fd, "float64", 0.0, 0.0)
+    fd3 = np.zeros((3, 3, 3)); np.fill_diagonal(fd3, -1.0)
+    save_case("fill_diagonal_3d", "fill_diagonal", [np.zeros((3, 3, 3))], {"val": -1.0}, fd3, "float64", 0.0, 0.0)
+
+    # -- group 4: shape and creation --
+    r90 = rng.standard_normal((3, 4, 5))
+    save_case("rot90_k3_axes12", "rot90", [r90], {"k": 3, "a0": 1, "a1": 2}, np.rot90(r90, 3, axes=(1, 2)), "float64", 0.0, 0.0)
+    save_case("rot90_kneg1_axes02", "rot90", [r90], {"k": -1, "a0": 0, "a1": 2}, np.rot90(r90, -1, axes=(0, 2)), "float64", 0.0, 0.0)
+    ds_a, ds_b = rng.standard_normal((3, 4)), rng.standard_normal((3, 4))
+    save_case("dstack_2d", "dstack", [ds_a, ds_b], {}, np.dstack([ds_a, ds_b]), "float64", 0.0, 0.0)
+    cs_a, cs_b = rng.standard_normal(5), rng.standard_normal((5, 2))
+    save_case("column_stack_mixed", "column_stack", [cs_a, cs_b], {}, np.column_stack([cs_a, cs_b]), "float64", 0.0, 0.0)
+    save_case("geomspace_50", "geomspace", [], {"start": 0.5, "stop": 4096.0, "num": 50}, np.geomspace(0.5, 4096.0, 50), "float64", 1e-12, 0.0)
+    save_case("geomspace_neg", "geomspace", [], {"start": -3.0, "stop": -0.001, "num": 17}, np.geomspace(-3.0, -0.001, 17), "float64", 1e-12, 0.0)
+    van = rng.standard_normal(6)
+    save_case("vander_inc", "vander", [van], {"n": 5, "inc": 1}, np.vander(van, 5, increasing=True), "float64", 1e-12, 0.0)
+    save_case("vander_dec", "vander", [van], {"n": 4, "inc": 0}, np.vander(van, 4), "float64", 1e-12, 0.0)
+    rnd = rng.standard_normal(40) * 100
+    save_case("around_2", "around", [rnd], {"decimals": 2}, np.around(rnd, 2), "float64", 1e-12, 1e-12)
+    save_case("around_neg1", "around", [rnd], {"decimals": -1}, np.around(rnd, -1), "float64", 1e-12, 1e-12)
+
+    # -- group 5: stride tricks --
+    from numpy.lib.stride_tricks import sliding_window_view as swv, as_strided as asd
+    sw = rng.standard_normal((6, 7))
+    save_case("swv_2d_window", "sliding_window_view", [sw], {"w0": 3, "w1": 2}, swv(sw, (3, 2)), "float64", 0.0, 0.0)
+    save_case("swv_axis0", "sliding_window_view_axis", [sw], {"w": 4, "axis": 0}, swv(sw, 4, axis=0), "float64", 0.0, 0.0)
+    sw3 = rng.standard_normal((4, 5, 6))
+    save_case("swv_3d_two_axes", "sliding_window_view_axes", [sw3], {"w0": 2, "w1": 3, "a0": -1, "a1": 0}, swv(sw3, (2, 3), axis=(-1, 0)), "float64", 0.0, 0.0)
+    flat = rng.standard_normal(20)
+    save_case("as_strided_overlap", "as_strided", [flat], {"s0": 3, "s1": 1, "n0": 6, "n1": 4}, asd(flat, (6, 4), (3 * 8, 8)), "float64", 0.0, 0.0)
+
+    # -- group 6: bit operations (values are small non-negative integers stored as float64) --
+    bi_a = rng.integers(0, 1000, size=(4, 6))
+    bi_b = rng.integers(0, 9, size=(4, 6))
+    save_case("bitwise_xor_2d", "bitwise_xor", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a ^ bi_b).astype(np.int64), "int64")
+    save_case("left_shift_2d", "left_shift", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a << bi_b).astype(np.int64), "int64")
+    save_case("right_shift_2d", "right_shift", [bi_a.astype(np.float64), bi_b.astype(np.float64)], {}, (bi_a >> bi_b).astype(np.int64), "int64")
+    save_case("bitwise_count_2d", "bitwise_count", [bi_a.astype(np.float64)], {}, np.bitwise_count(bi_a).astype(np.int64), "int64")
+    pk = rng.integers(0, 2, size=(5, 21))
+    save_case("packbits_axis1", "packbits", [pk.astype(np.float64)], {"axis": 1}, np.packbits(pk, axis=1).astype(np.int64), "int64")
+    save_case("packbits_little_axis0", "packbits_little", [pk.astype(np.float64)], {"axis": 0}, np.packbits(pk, axis=0, bitorder="little").astype(np.int64), "int64")
+    ub = rng.integers(0, 256, size=(3, 4))
+    save_case("unpackbits_axis1_count", "unpackbits", [ub.astype(np.float64)], {"axis": 1, "count": 27}, np.unpackbits(ub.astype(np.uint8), axis=1, count=27).astype(np.int64), "int64")
+
+    # -- group 7: functional --
+    aa = rng.standard_normal((4, 5, 3))
+    save_case("apply_along_axis_sort_desc", "apply_along_axis_sorted", [aa], {"axis": 1}, np.apply_along_axis(lambda v: np.sort(v)[::-1], 1, aa), "float64", 0.0, 0.0)
+    save_case("apply_along_axis_minmax", "apply_along_axis_minmax", [aa], {"axis": 2}, np.apply_along_axis(lambda v: np.array([v.min(), v.max()]), 2, aa), "float64", 0.0, 0.0)
+    save_case("apply_along_axis_sum_axis0", "apply_along_axis_sum", [aa], {"axis": 0}, np.apply_along_axis(lambda v: v.sum(), 0, aa), "float64", 1e-12, 1e-12)
+    save_case("apply_over_axes_sum", "apply_over_axes_sum", [aa], {"a0": 0, "a1": 2}, np.apply_over_axes(np.sum, aa, [0, 2]), "float64", 1e-12, 1e-12)
+    vb = rng.standard_normal((3, 1)); vc = rng.standard_normal((1, 4))
+    save_case("vectorize_call2", "vectorize_call2", [vb, vc], {}, np.vectorize(lambda x, y: x * 2 + y * y)(vb, vc), "float64", 1e-12, 1e-12)
+
+    # -- group 10: histograms and tensor linear algebra --
+    hx, hy = rng.standard_normal(300), rng.standard_normal(300) * 2
+    hw = rng.random(300)
+    save_case("histogram2d_weighted", "histogram2d", [hx, hy, hw], {"bx": 7, "by": 5}, np.histogram2d(hx, hy, bins=[7, 5], weights=hw)[0], "float64", 1e-12, 1e-12)
+    save_case("histogram2d_density", "histogram2d_density", [hx, hy], {"bx": 6, "by": 4}, np.histogram2d(hx, hy, bins=[6, 4], density=True)[0], "float64", 1e-12, 1e-12)
+    hs = rng.standard_normal((400, 3))
+    save_case("histogramdd_3d", "histogramdd", [hs], {"b0": 4, "b1": 3, "b2": 5}, np.histogramdd(hs, bins=[4, 3, 5])[0], "float64", 1e-12, 1e-12)
+    ti = (np.eye(12) * 4 + rng.standard_normal((12, 12)) * 0.3).reshape(3, 4, 2, 6)
+    save_case("tensorinv_ind2", "tensorinv", [ti], {"ind": 2}, np.linalg.tensorinv(ti, ind=2), "float64", 1e-9, 1e-12)
+    ts = (np.eye(12) * 4 + rng.standard_normal((12, 12)) * 0.3).reshape(3, 4, 12)
+    tb = rng.standard_normal((3, 4))
+    save_case("tensorsolve_basic", "tensorsolve", [ts, tb], {}, np.linalg.tensorsolve(ts, tb), "float64", 1e-9, 1e-12)
+
+    # =========================================================================
+    # 11. Complex dtype (stage 1 of v0.2)
+    # ==================================================================
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

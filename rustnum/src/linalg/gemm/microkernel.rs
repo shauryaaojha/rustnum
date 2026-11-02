@@ -70,6 +70,14 @@ pub(super) fn f64_kernels() -> Kernels<f64> {
             fused: Some(avx2::d6x8_fused),
         };
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Kernels {
+            raw: neon::d6x8_raw,
+            fused: Some(neon::d6x8_fused),
+        };
+    }
+    #[allow(unreachable_code)]
     Kernels {
         raw: scalar::<f64, 6, 8>,
         fused: None,
@@ -84,6 +92,14 @@ pub(super) fn f32_kernels() -> Kernels<f32> {
             fused: Some(avx2::s6x16_fused),
         };
     }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Kernels {
+            raw: neon::s6x16_raw,
+            fused: Some(neon::s6x16_fused),
+        };
+    }
+    #[allow(unreachable_code)]
     Kernels {
         raw: scalar::<f32, 6, 16>,
         fused: None,
@@ -271,6 +287,143 @@ mod avx2 {
                 }
                 _mm256_storeu_ps(row, x0);
                 _mm256_storeu_ps(row.add(8), x1);
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+mod neon {
+    use core::arch::aarch64::*;
+
+    #[inline]
+    pub(super) unsafe fn d6x8_raw(k: usize, a: *const f64, b: *const f64, tile: *mut f64) {
+        // SAFETY: caller guarantees a holds k*6, b holds k*8 packed elements, tile has 48 writable slots.
+        unsafe {
+            let mut acc = [vdupq_n_f64(0.0); 24];
+            for p in 0..k {
+                let b0 = vld1q_f64(b.add(p * 8));
+                let b1 = vld1q_f64(b.add(p * 8 + 2));
+                let b2 = vld1q_f64(b.add(p * 8 + 4));
+                let b3 = vld1q_f64(b.add(p * 8 + 6));
+                for i in 0..6 {
+                    let ai = vdupq_n_f64(*a.add(p * 6 + i));
+                    acc[i * 4] = vfmaq_f64(acc[i * 4], b0, ai);
+                    acc[i * 4 + 1] = vfmaq_f64(acc[i * 4 + 1], b1, ai);
+                    acc[i * 4 + 2] = vfmaq_f64(acc[i * 4 + 2], b2, ai);
+                    acc[i * 4 + 3] = vfmaq_f64(acc[i * 4 + 3], b3, ai);
+                }
+            }
+            for (i, val) in acc.iter().enumerate() {
+                vst1q_f64(tile.add(i * 2), *val);
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) unsafe fn d6x8_fused(
+        k: usize,
+        a: *const f64,
+        b: *const f64,
+        alpha: f64,
+        beta: f64,
+        c: *mut f64,
+        rs: isize,
+    ) {
+        // SAFETY: caller guarantees packed panels as above; c has 6 rows of 8 elements at stride rs.
+        unsafe {
+            let mut acc = [vdupq_n_f64(0.0); 24];
+            for p in 0..k {
+                let b0 = vld1q_f64(b.add(p * 8));
+                let b1 = vld1q_f64(b.add(p * 8 + 2));
+                let b2 = vld1q_f64(b.add(p * 8 + 4));
+                let b3 = vld1q_f64(b.add(p * 8 + 6));
+                for i in 0..6 {
+                    let ai = vdupq_n_f64(*a.add(p * 6 + i));
+                    acc[i * 4] = vfmaq_f64(acc[i * 4], b0, ai);
+                    acc[i * 4 + 1] = vfmaq_f64(acc[i * 4 + 1], b1, ai);
+                    acc[i * 4 + 2] = vfmaq_f64(acc[i * 4 + 2], b2, ai);
+                    acc[i * 4 + 3] = vfmaq_f64(acc[i * 4 + 3], b3, ai);
+                }
+            }
+            let va = vdupq_n_f64(alpha);
+            let vb = vdupq_n_f64(beta);
+            for i in 0..6 {
+                let row = c.offset(i as isize * rs);
+                for j in 0..4 {
+                    let mut x = vmulq_f64(va, acc[i * 4 + j]);
+                    if beta != 0.0 {
+                        let c_val = vld1q_f64(row.add(j * 2));
+                        x = vfmaq_f64(x, vb, c_val);
+                    }
+                    vst1q_f64(row.add(j * 2), x);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) unsafe fn s6x16_raw(k: usize, a: *const f32, b: *const f32, tile: *mut f32) {
+        // SAFETY: caller guarantees a holds k*6, b holds k*16 packed elements, tile has 96 writable slots.
+        unsafe {
+            let mut acc = [vdupq_n_f32(0.0); 24];
+            for p in 0..k {
+                let b0 = vld1q_f32(b.add(p * 16));
+                let b1 = vld1q_f32(b.add(p * 16 + 4));
+                let b2 = vld1q_f32(b.add(p * 16 + 8));
+                let b3 = vld1q_f32(b.add(p * 16 + 12));
+                for i in 0..6 {
+                    let ai = vdupq_n_f32(*a.add(p * 6 + i));
+                    acc[i * 4] = vfmaq_f32(acc[i * 4], b0, ai);
+                    acc[i * 4 + 1] = vfmaq_f32(acc[i * 4 + 1], b1, ai);
+                    acc[i * 4 + 2] = vfmaq_f32(acc[i * 4 + 2], b2, ai);
+                    acc[i * 4 + 3] = vfmaq_f32(acc[i * 4 + 3], b3, ai);
+                }
+            }
+            for (i, val) in acc.iter().enumerate() {
+                vst1q_f32(tile.add(i * 4), *val);
+            }
+        }
+    }
+
+    #[inline]
+    pub(super) unsafe fn s6x16_fused(
+        k: usize,
+        a: *const f32,
+        b: *const f32,
+        alpha: f32,
+        beta: f32,
+        c: *mut f32,
+        rs: isize,
+    ) {
+        // SAFETY: caller guarantees packed panels as above; c has 6 rows of 16 elements at stride rs.
+        unsafe {
+            let mut acc = [vdupq_n_f32(0.0); 24];
+            for p in 0..k {
+                let b0 = vld1q_f32(b.add(p * 16));
+                let b1 = vld1q_f32(b.add(p * 16 + 4));
+                let b2 = vld1q_f32(b.add(p * 16 + 8));
+                let b3 = vld1q_f32(b.add(p * 16 + 12));
+                for i in 0..6 {
+                    let ai = vdupq_n_f32(*a.add(p * 6 + i));
+                    acc[i * 4] = vfmaq_f32(acc[i * 4], b0, ai);
+                    acc[i * 4 + 1] = vfmaq_f32(acc[i * 4 + 1], b1, ai);
+                    acc[i * 4 + 2] = vfmaq_f32(acc[i * 4 + 2], b2, ai);
+                    acc[i * 4 + 3] = vfmaq_f32(acc[i * 4 + 3], b3, ai);
+                }
+            }
+            let va = vdupq_n_f32(alpha);
+            let vb = vdupq_n_f32(beta);
+            for i in 0..6 {
+                let row = c.offset(i as isize * rs);
+                for j in 0..4 {
+                    let mut x = vmulq_f32(va, acc[i * 4 + j]);
+                    if beta != 0.0 {
+                        let c_val = vld1q_f32(row.add(j * 4));
+                        x = vfmaq_f32(x, vb, c_val);
+                    }
+                    vst1q_f32(row.add(j * 4), x);
+                }
             }
         }
     }

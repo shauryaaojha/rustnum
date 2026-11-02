@@ -7,7 +7,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 ## 0. Crate surface
 
 - Users write `use rustnum as np;`; core items are re-exported once at the crate root.
-- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, `np::memory`, and `np::random`; implementation modules remain private.
+- Public modules are `np::fft`, `np::io`, `np::linalg`, `np::poly`, `np::polynomial`, `np::memory`, and `np::random`; implementation modules remain private.
 - Root macros are `np::array!` for literals through three dimensions and `np::s!` for slice arguments.
 - Public APIs contain no explicit lifetime parameters and no public `unsafe` functions.
 - Integer addition, subtraction, multiplication, powers, reductions, and linear-algebra products wrap on overflow like fixed-width NumPy dtypes.
@@ -163,9 +163,14 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `Rng::seed(seed: u64)` and `Rng::from_entropy()` construct the xoshiro256** generator; seeded streams are platform-stable but intentionally differ from NumPy PCG64.
 - `random(&mut self, shape: &[usize])`, `uniform(low, high, shape)`, `normal(mean, std, shape)`, and `standard_normal(shape)` return `Array<f64>`.
 - `integers(low: i64, high: i64, shape: &[usize]) -> Array<i64>` uses an exclusive high bound.
-- `choice<T: Element>(&mut self, a, n, replace) -> Array<T>`, `shuffle<T: Element>(&mut self, a: &mut Array<T>)`, and `permutation(n) -> Array<usize>` provide sampling and permutations.
-- `binomial(n: u64, p: f64, shape: &[usize]) -> Array<i64>` and `poisson(lam: f64, shape: &[usize]) -> Array<i64>` return signed integer arrays.
-- `exponential(scale, shape)`, `beta(a, b, shape)`, and `gamma(shape_param, scale, shape)` return `Array<f64>`.
+- `choice<T: Element>(&mut self, a, n, replace) -> Array<T>`, `shuffle<T: Element>(&mut self, a: &mut Array<T>)`, `permutation(n) -> Array<usize>`, and `permuted<T: Element>(&mut self, a: &Array<T>, axis: Option<isize>) -> Array<T>` provide sampling and permutations.
+- `binomial(n: u64, p: f64, shape: &[usize]) -> Array<i64>`, `poisson(lam: f64, shape: &[usize]) -> Array<i64>`, `geometric(p, shape)`, `negative_binomial(n, p, shape)`, `hypergeometric(ngood, nbad, nsample, shape)`, `logseries(p, shape)`, and `zipf(a, shape)` return signed integer arrays.
+- `multivariate_hypergeometric(colors: &[i64], nsample: i64, shape: &[usize]) -> Array<i64>` and `multinomial(n: i64, pvals: &[f64], shape: &[usize]) -> Array<i64>` return discrete multi-dimensional counts.
+- `standard_exponential(shape)`, `standard_gamma(shape_param, shape)`, `exponential(scale, shape)`, `beta(a, b, shape)`, and `gamma(shape_param, scale, shape)` return `Array<f64>`.
+- `standard_cauchy(shape)`, `standard_t(df, shape)`, `chisquare(df, shape)`, `noncentral_chisquare(df, nonc, shape)`, `f(dfnum, dfden, shape)`, `noncentral_f(dfnum, dfden, nonc, shape)`, `laplace(loc, scale, shape)`, `logistic(loc, scale, shape)`, `lognormal(mean, sigma, shape)`, `gumbel(loc, scale, shape)`, `rayleigh(scale, shape)`, `pareto(a, shape)`, `power(a, shape)`, `weibull(a, shape)`, `wald(mean, scale, shape)`, `triangular(left, mode, right, shape)`, and `vonmises(mu, kappa, shape)` return `Array<f64>`.
+- `dirichlet(alpha: &[f64], shape: &[usize]) -> Array<f64>` draws Dirichlet distribution vectors over simplexes.
+- `multivariate_normal(mean: &[f64], cov: &Array<f64>, shape: &[usize], check_valid: &str, tol: f64, method: &str) -> Array<f64>` draws multivariate normals through rustnum's linalg `cholesky`, `eigh`, or `svd` decompositions.
+- `bytes(length: usize) -> Vec<u8>` returns raw pseudorandom bytes.
 
 ## 13. I/O (`np::io`)
 
@@ -226,8 +231,8 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 19. Deliberate v0.1 limits
 
-- Not supported as array dtypes (v0.1 list, see sections 22 onward for what v0.2 added): complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
-- Not supported: memory mapping, FFT axis/pad/crop options, polynomial classes, and the omitted keyword-rich statistics options documented above.
+- Not supported as array dtypes (v0.1 list, see sections 33 onward for what v0.2 added): complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
+- Not supported: memory mapping, FFT axis/pad/crop options, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
 
 ## 20. In-place and consuming operations
@@ -250,7 +255,80 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Final unique array owners return buffers to the cache. Views and clones never release live shared storage. An iterator can outlive its array; if it is the final Arc owner, that storage goes directly to the allocator when the iterator ends.
 - Creation, element-wise output, and copying kernels obtain cached initialized buffers. Kernels overwrite every output before it is observable; no uninitialized reads or unsafe pool code are used. `from_vec` adopts the supplied Vec directly, so producers outside these kernels (including the existing GEMM implementation) do not acquire pooled buffers.
 
-## 22. Complex arrays (v0.2)
+## 22. NaN-aware reductions
+
+- `Array<F: Float>` methods `nanvar`, `nanvar_ddof(ddof)`, `nanvar_axis(axis)`, `nanvar_ddof_axis(axis, ddof)`, and the same four for `nanstd`.
+- `nanmedian()`, `nanmedian_axis(axis)`, `nanpercentile(q)`, `nanpercentile_axis(q, axis)` (q in 0..=100).
+- `nanargmax()`, `nanargmin()` return `usize`; `nanargmax_axis(axis)`, `nanargmin_axis(axis)` return `Array<usize>`; an all-NaN lane panics with `All-NaN slice encountered`.
+- `nanprod()`, `nanprod_axis(axis)`, `nancumsum()`, `nancumprod()`, `nancumsum_axis(axis)`, `nancumprod_axis(axis)`.
+
+## 23. Sorting, searching and conditional selection
+
+- `lexsort(keys: &[&Array<T>], axis) -> Array<usize>`, `flatnonzero(&a) -> Array<usize>`, `Array::partition(kth: isize, axis) -> Array<T>`, `Array::argpartition(kth: isize, axis) -> Array<usize>`.
+- `select(condlist: &[&Array<bool>], choicelist: &[&Array<T>], default: T) -> Array<T>`, `piecewise<T: Num>(x, condlist: &[&Array<bool>], funclist: &[&dyn Fn(T) -> T]) -> Array<T>`, `extract(&cond, &a) -> Array<T>`.
+- `place(&mut a, &mask, vals: &[T])`, `copyto(&mut dst, src: impl IntoArray<T>, where_: Option<&Array<bool>>)`, `trim_zeros(&a, trim: &str) -> Array<T>` (view).
+
+## 24. Index helpers
+
+- `tril_indices(n, k: isize, m: Option<usize>) -> (Array<usize>, Array<usize>)`, `triu_indices(...)`, `tril_indices_from(&a, k)`, `triu_indices_from(&a, k)`.
+- `diag_indices(n, ndim) -> Vec<Array<usize>>`, `diag_indices_from(&a)`, `fill_diagonal(&mut a, val: impl IntoArray<T>, wrap: bool)`.
+- `ndindex(&[usize]) -> impl Iterator<Item = Vec<usize>>`, `ndenumerate(&a) -> impl Iterator<Item = (Vec<usize>, T)>`, `mask_indices(n, mask_func: impl Fn(&Array<i64>, isize) -> Array<i64>, k)`.
+
+## 25. Shape and creation extras
+
+- `rot90(&a, k: isize, axes: (isize, isize))`, `dstack(&[&Array<T>])`, `column_stack(&[&Array<T>])`, `row_stack(&[&Array<T>])`, `atleast_1d/2d/3d(&a)`.
+- `geomspace<F: Float>(start, stop, num)`, `vander<T: Num>(&x, n: Option<usize>, increasing: bool)`, `fromiter(iter, count: Option<usize>)`, `frombuffer::<T>(&[u8], count: Option<usize>, offset: usize)`.
+- `around<F: Float>(&a, decimals: i32)`, `real_if_close(&re, &im, tol) -> (Array<F>, Option<Array<F>>)`, `Array<F>::is_posinf()`, `is_neginf()`.
+- Already present, not re-added: `fromfunction` (`Array::from_shape_fn`), `round` (`Array::round`, `round_decimals`).
+
+## 26. Stride tricks
+
+- `sliding_window_view(&x, window_shape: &[usize], axis: Option<&[isize]>) -> Array<T>` is a view with shape `x.shape` (windowed axes shortened to `n - w + 1`) followed by the window shape.
+- `as_strided(&x, shape: &[usize], strides: &[isize]) -> Array<T>` is bounds-checked (element strides, from `x`'s first element) and panics instead of reading outside the buffer.
+- Writes to a view whose elements overlap in memory first copy the view, so logical elements stay independent.
+
+## 27. Bit operations
+
+- `Integer` is implemented for `i32`, `i64`, `u8` and `usize`. Free functions `bitwise_and`, `bitwise_or`, `bitwise_xor`, `left_shift`, `right_shift` (array-like arguments, broadcasting), `bitwise_not`, `invert`, `bitwise_count -> Array<u8>`.
+- Operators `&`, `|`, `^`, `<<`, `>>` for `Array<i32/i64/u8/usize>` (owned and borrowed, array or scalar right side) and unary `!`.
+- `packbits<T: Element>(&a, axis: Option<isize>, bitorder: &str) -> Array<u8>`, `unpackbits(&a: &Array<u8>, axis: Option<isize>, count: Option<isize>, bitorder: &str) -> Array<u8>`; `bitorder` starts with `b` (big) or `l` (little), else panics `'order' must begin with 'l' or 'b'`.
+
+## 28. Functional helpers
+
+- `vectorize(f) -> Vectorize<F>` with `call(a)`, `call2(a, b)`, `call3(a, b, c)` taking array-likes and broadcasting.
+- `apply_along_axis(func1d: impl FnMut(&Array<T>) -> Array<R>, axis: isize, &arr) -> Array<R>`; `apply_over_axes(func: impl FnMut(&Array<T>, isize) -> Array<T>, &a, axes: &[isize]) -> Array<T>`.
+
+## 29. Text I/O (np::io)
+
+- `io::loadtxt<T: Element>(fname, comments: Option<&str>, delimiter: Option<&str>, skiprows: usize, usecols: Option<&[isize]>, max_rows: Option<usize>) -> Result<Array<T>>`.
+- `io::savetxt<T: Element>(fname, &x, fmt: &str, delimiter: &str, newline: &str, header: &str, footer: &str, comments: &str) -> Result<()>`.
+- `io::genfromtxt<F: Float>(fname, comments, delimiter, skip_header, skip_footer, filling_values: Option<F>, usecols, names: bool, max_rows) -> Result<(Array<F>, Vec<String>)>`; there is no `missing_values` argument (NumPy's float converter only replaces fields that fail to parse).
+- Bad data returns `Error::Parse` (messages follow NumPy) or `Error::Format`; unreadable files return `Error::Io`.
+
+## 30. Print options
+
+- `PrintOptions { precision: usize (8), threshold: usize (1000), edgeitems: usize (3), linewidth: usize (75), suppress: bool (false), sign: char ('-') }` with `Default`.
+- `set_printoptions(PrintOptions)`, `get_printoptions() -> PrintOptions`, `printoptions(PrintOptions) -> PrintOptionsGuard` (restores on drop). Options are per thread and honoured by `Display` and `Debug` of every `Array`.
+
+## 31. Histograms, einsum_path, tensor inverse and solve
+
+- `histogramdd(&sample: &Array<f64>, bins: &[Bins], range: Option<&[(f64, f64)]>, density: bool, weights: Option<&Array<f64>>) -> (Array<f64>, Vec<Array<f64>>)`; `histogram2d(&x, &y, bins: [Bins; 2], range: Option<[(f64, f64); 2]>, density, weights) -> (Array<f64>, Array<f64>, Array<f64>)`.
+- `einsum_path<T: Element>(subscripts: &str, operands: &[&Array<T>], optimize: &str) -> (Vec<Vec<usize>>, String)`; the report text is NumPy's.
+- `linalg::tensorinv<F: LinalgFloat>(&a, ind: usize) -> Result<Array<F>>`, `linalg::tensorsolve<F: LinalgFloat>(&a, &b, axes: Option<&[isize]>) -> Result<Array<F>>`; both call `inv` / `solve`.
+
+## 32. Polynomial classes and packages (`np::polynomial`)
+
+- Convenience classes: `Polynomial`, `Chebyshev`, `Legendre`, `Laguerre`, `Hermite`, `HermiteE`.
+- Default domains and windows: `Laguerre` has domain `[0.0, 1.0]` and window `[0.0, 1.0]`; all other classes have domain `[-1.0, 1.0]` and window `[-1.0, 1.0]`.
+- Constructors and factories: `new(coef: &[f64])`, `with_domain_and_window(coef, domain, window)`, `fit(x, y, deg)` (least squares with domain mapping), `identity()`, `basis(deg)`, and `fromroots(roots)`.
+- Evaluation and calculus: `eval(x: f64) -> f64`, `eval_array(x: &Array<f64>) -> Array<f64>`, `roots() -> (Array<f64>, Array<f64>)` (companion matrix + eigvals with inverse window-to-domain mapping), `deriv(m: usize)`, `integ(m: usize, k: &[f64], lbnd: Option<f64>)`, `linspace(n: usize, domain: Option<[f64; 2]>)`.
+- Arithmetic: operators `+`, `-`, `*`, `/`, `%` between series (with domain/window compatibility check) and scalars, `divmod(&other) -> (Self, Self)`, and `pow(n: usize)`.
+- Conversions: `convert<Target: PolyKind>()` and named `convert_to_polynomial()`, `convert_to_chebyshev()`, `convert_to_legendre()`, `convert_to_laguerre()`, `convert_to_hermite()`, `convert_to_hermite_e()`.
+- Series manipulation: `degree() -> usize`, `cutdeg(deg)`, `trim(tol)`, and `truncate(size)`.
+- Display: formats polynomial terms matching NumPy (e.g., `1.0 + 2.0 x + 3.0 x**2`, `1.0 + 2.0 T_1(x) + 3.0 T_2(x)`).
+- Submodules: `np::polynomial::polynomial`, `chebyshev`, `legendre`, `laguerre`, `hermite`, `hermite_e`, and `polyutils` provide free functions (`*val`, `*fit`, `*der`, `*int`, `*roots`, `*gauss`, `*vander`, `*line`, `*add`, `*sub`, `*mul`, `*div`, `*pow`, `*fromroots`, `*trim`, `*weight`, `poly2*`, `*2poly`).
+
+## 33. Complex arrays (v0.2)
 
 - `Complex<f32>` is NumPy `complex64` and `Complex<f64>` is `complex128`; `Array<Complex<F>>` is an ordinary array (`DTYPE` is `"complex64"`/`"complex128"`). Elements are ordered lexicographically on `(re, im)`, so `sort`, `argsort`, `min`, `max`, `argmin`, `argmax` and comparisons follow NumPy.
 - `Complex<F>` implements `Element` and `Num`, so every `Num` routine works: operators with broadcasting, `sum`, `prod`, `cumsum`, `cumprod`, `sum_axis`, `matmul`, `dot`, `trace`, `outer`, `einsum`, `square`, `power` (complex exponents). `%` panics, as NumPy raises.
@@ -262,7 +340,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - I/O: `.npy`/`.npz` `<c8` and `<c16` read and write through the usual `np::io` functions.
 - Not done: complex `np::linalg` (`solve`, `inv`, `eig` with complex input), complex `std`/`var`, arcsin/arccos/arctan on complex arrays, `np::poly::roots` still returns `(re, im)` pairs.
 
-## 23. float16 and bfloat16 (v0.2)
+## 34. float16 and bfloat16 (v0.2)
 
 - `np::f16` is IEEE 754 binary16 (NumPy `float16`, `DTYPE` `"float16"`) and `np::bf16` is bfloat16 (`"bfloat16"`). Both are 16-bit `Copy` types: `from_bits`/`to_bits`, `from_f32`/`from_f64` (round to nearest, ties to even; `from_f64` rounds once), `to_f32`/`to_f64` (exact), `is_nan`/`is_infinite`/`is_finite`, and the constants `MAX`, `MIN`, `EPSILON`, `INFINITY`, `NEG_INFINITY`, `NAN`. They implement `Element`, `Num` and `Float`, so every `Array<T: Num>` and `Array<F: Float>` routine works. NaN, infinities, signed zeros and subnormals behave like NumPy.
 - Arithmetic and elementary functions compute in `f32` and round the result once, like NumPy. `sum`, `sum_axis`, `mean`, `mean_axis`, `var`, `std` accumulate in `f32` and round once at the end (NumPy's behaviour); `cumsum` and `prod` round at every step.
@@ -271,7 +349,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - I/O: `f16` reads and writes `.npy`/`.npz` `<f2`. NumPy has no bfloat16 dtype, so `bf16` has no `.npy` encoding: saving one returns `Error::DType`.
 - Limit: `matmul`/`dot` use the generic loop and round every partial sum to 16 bits, whereas NumPy accumulates `float16` products in `float32`. Cast to `f32` first for accurate products.
 
-## 24. Advanced (integer-array) indexing (v0.2)
+## 35. Advanced (integer-array) indexing (v0.2)
 
 - Design: the index tuple stays `a.slice(&np::s![...])`. `SliceArg` gained a variant `Fancy { shape, values }` and `s!` accepts, next to integers, ranges and `np::NEW_AXIS`, an integer array in any of these forms: an array literal or `Vec` (`[0, 2]`, `vec![1usize, 3]`), a reference to an `Array<i64 | i32 | usize>` (`&idx`), or a 1-d `&Array<bool>` mask. `a.slice(&np::s![[0, 2], [1, 3]])` is NumPy `a[[0, 2], [1, 3]]`; `a.slice(&np::s![[0, 1], .., [1, 3]])` is `a[[0, 1], :, [1, 3]]`.
 - The assign form is `a.slice_assign(&np::s![[0, 2], [1, 3]], values)`, NumPy `a[[0, 2], [1, 3]] = values` (values broadcast to the result shape; when an index repeats the last write wins).
@@ -279,7 +357,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Functions at the crate root: `ix_(&[&[i64]]) -> Vec<Array<i64>>` (open mesh; index with `&ix[k]`), `take_along_axis(&a, &indices, axis)`, `put_along_axis(&mut a, &indices, values, axis)`, `put(&mut a, ind, v)` (flat, cyclic `v`), `choose(&a_idx, &[&choice, ...])`, `ravel_multi_index(&[&coords...], &dims) -> Array<i64>`, `unravel_index(&flat, &shape) -> Vec<Array<i64>>`. Index arrays are `i64` (NumPy's `intp`). `put`/`ravel_multi_index` only support `mode='raise'`.
 - Not done: a boolean mask with more than one dimension inside a tuple (use `Array::mask`), `np.take`/`np.put` `mode='wrap'`/`'clip'`.
 
-## 25. Masked arrays, `np::ma` (v0.2)
+## 36. Masked arrays, `np::ma` (v0.2)
 
 - `np::ma` mirrors `numpy.ma`. `MaskedArray<T: Element>` couples `Array<T>` data with an optional `Array<bool>` mask (`true` = masked). `None` is `nomask`: unmasked work takes the plain-array path, and a mask that becomes all-`false` is dropped.
 - Construction: `masked_array(data, Option<mask>)`, `masked_where(&cond, a)`, `masked_equal`, `masked_not_equal`, `masked_greater`, `masked_greater_equal`, `masked_less`, `masked_less_equal`, `masked_inside`, `masked_outside`, `masked_values(x, value, rtol, atol)`, `masked_invalid`. The inputs are any `IntoMasked` (plain or masked, owned or borrowed), so constructors chain.
