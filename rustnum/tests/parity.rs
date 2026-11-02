@@ -738,6 +738,29 @@ fn run_extra_case(fixture_dir: &Path, case: &Json, op: &str) -> Result<RunResult
             };
             Ok(RunResult::I64(out))
         }
+        "apply_along_axis_sorted" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| l.sort().flip(0),
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_along_axis_minmax" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| np::array![l.min(), l.max()],
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_along_axis_sum" => Ok(RunResult::F64(np::apply_along_axis(
+            |l| Array::scalar(l.sum()),
+            param_isize(case, "axis"),
+            &i[0],
+        ))),
+        "apply_over_axes_sum" => Ok(RunResult::F64(np::apply_over_axes(
+            |x, ax| x.sum_axis(ax),
+            &i[0],
+            &[param_isize(case, "a0"), param_isize(case, "a1")],
+        ))),
+        "vectorize_call2" => Ok(RunResult::F64(
+            np::vectorize(|x: f64, y: f64| x * 2.0 + y * y).call2(&i[0], &i[1]),
+        )),
         _ => Err(format!("skipped: op `{op}` not wired")),
     }
 }

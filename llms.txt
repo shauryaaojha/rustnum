@@ -253,3 +253,7 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 ## Bit operations (added after v0.1)
 - `np::bitwise_and/or/xor(&a, &b)`, `np::bitwise_not(&a)`, `np::invert(&a)`, `np::left_shift(&a, n)`, `np::right_shift(&a, n)`; operators `& | ^ ! << >>` on i32/i64/u8/usize arrays
 - `np::packbits(&a, axis, "big")`, `np::unpackbits(&a, axis, count, "big")`, `np::bitwise_count(&a)`; trait `np::Integer`
+
+## Functional helpers (added after v0.1)
+- `np::vectorize(|x: f64| ..).call(a)` / `.call2(a, b)` / `.call3(a, b, c)` — scalar closure lifted over arrays with broadcasting
+- `np::apply_along_axis(|lane| ..., axis, &a)`, `np::apply_over_axes(|a, axis| ..., &a, &[0, 2])`

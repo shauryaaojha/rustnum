@@ -286,3 +286,8 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `Integer` is implemented for `i32`, `i64`, `u8` and `usize`. Free functions `bitwise_and`, `bitwise_or`, `bitwise_xor`, `left_shift`, `right_shift` (array-like arguments, broadcasting), `bitwise_not`, `invert`, `bitwise_count -> Array<u8>`.
 - Operators `&`, `|`, `^`, `<<`, `>>` for `Array<i32/i64/u8/usize>` (owned and borrowed, array or scalar right side) and unary `!`.
 - `packbits<T: Element>(&a, axis: Option<isize>, bitorder: &str) -> Array<u8>`, `unpackbits(&a: &Array<u8>, axis: Option<isize>, count: Option<isize>, bitorder: &str) -> Array<u8>`; `bitorder` starts with `b` (big) or `l` (little), else panics `'order' must begin with 'l' or 'b'`.
+
+## 28. Functional helpers
+
+- `vectorize(f) -> Vectorize<F>` with `call(a)`, `call2(a, b)`, `call3(a, b, c)` taking array-likes and broadcasting.
+- `apply_along_axis(func1d: impl FnMut(&Array<T>) -> Array<R>, axis: isize, &arr) -> Array<R>`; `apply_over_axes(func: impl FnMut(&Array<T>, isize) -> Array<T>, &a, axes: &[isize]) -> Array<T>`.

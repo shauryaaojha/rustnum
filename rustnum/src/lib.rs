@@ -30,6 +30,7 @@ mod creation;
 mod display;
 mod element;
 mod extra;
+mod functional;
 mod indexing;
 mod kernels_mem;
 mod lanes;
@@ -69,6 +70,7 @@ pub use extra::api::{
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
 };
+pub use functional::{Vectorize, apply_along_axis, apply_over_axes, vectorize};
 pub use indexing::{
     diag_indices, diag_indices_from, fill_diagonal, mask_indices, ndenumerate, ndindex,
     tril_indices, tril_indices_from, triu_indices, triu_indices_from,

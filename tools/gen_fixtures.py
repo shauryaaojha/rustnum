@@ -341,6 +341,15 @@ def main():
     ub = rng.integers(0, 256, size=(3, 4))
     save_case("unpackbits_axis1_count", "unpackbits", [ub.astype(np.float64)], {"axis": 1, "count": 27}, np.unpackbits(ub.astype(np.uint8), axis=1, count=27).astype(np.int64), "int64")
 
+    # -- group 7: functional --
+    aa = rng.standard_normal((4, 5, 3))
+    save_case("apply_along_axis_sort_desc", "apply_along_axis_sorted", [aa], {"axis": 1}, np.apply_along_axis(lambda v: np.sort(v)[::-1], 1, aa), "float64", 0.0, 0.0)
+    save_case("apply_along_axis_minmax", "apply_along_axis_minmax", [aa], {"axis": 2}, np.apply_along_axis(lambda v: np.array([v.min(), v.max()]), 2, aa), "float64", 0.0, 0.0)
+    save_case("apply_along_axis_sum_axis0", "apply_along_axis_sum", [aa], {"axis": 0}, np.apply_along_axis(lambda v: v.sum(), 0, aa), "float64", 1e-12, 1e-12)
+    save_case("apply_over_axes_sum", "apply_over_axes_sum", [aa], {"a0": 0, "a1": 2}, np.apply_over_axes(np.sum, aa, [0, 2]), "float64", 1e-12, 1e-12)
+    vb = rng.standard_normal((3, 1)); vc = rng.standard_normal((1, 4))
+    save_case("vectorize_call2", "vectorize_call2", [vb, vc], {}, np.vectorize(lambda x, y: x * 2 + y * y)(vb, vc), "float64", 1e-12, 1e-12)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:

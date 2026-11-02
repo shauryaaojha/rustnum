@@ -540,6 +540,14 @@ Added after v0.1. Same conventions as above.
 | `np.unpackbits(a, axis, count, bitorder)` | `np::unpackbits(&a, None, None, "big")` | `Array<u8>` input |
 | `np.bitwise_count(a)` | `np::bitwise_count(&a)` | Returns `Array<u8>` (popcount of the absolute value) |
 
+### Functional helpers
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.vectorize(f)(a, b)` | `np::vectorize(f).call2(a, b)` | `call`, `call2`, `call3` for 1, 2, 3 arguments; broadcasts; the closure's output type may differ |
+| `np.apply_along_axis(f, axis, arr)` | `np::apply_along_axis(f, axis, &arr)` | `f(&Array<T>) -> Array<R>` (0-d for a scalar result) |
+| `np.apply_over_axes(f, a, axes)` | `np::apply_over_axes(f, &a, &axes)` | `f(&Array<T>, axis) -> Array<T>` |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,
