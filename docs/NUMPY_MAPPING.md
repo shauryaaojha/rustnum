@@ -380,6 +380,38 @@ Create a generator once, then call methods on it. Every method needs `&mut`, so 
 | `rng.binomial(n, p, size)` | `rng.binomial(n, p, &[2, 3])` | |
 | `rng.poisson(lam, size)` | `rng.poisson(lam, &[2, 3])` | |
 | `rng.exponential(scale, size)` | `rng.exponential(scale, &[2, 3])` | |
+| `rng.beta(a, b, size)` | `rng.beta(a, b, &[2, 3])` | |
+| `rng.gamma(shape, scale, size)` | `rng.gamma(shape, scale, &[2, 3])` | |
+| `rng.standard_exponential(size)` | `rng.standard_exponential(&[2, 3])` | |
+| `rng.standard_gamma(shape, size)` | `rng.standard_gamma(shape, &[2, 3])` | |
+| `rng.standard_cauchy(size)` | `rng.standard_cauchy(&[2, 3])` | |
+| `rng.standard_t(df, size)` | `rng.standard_t(df, &[2, 3])` | |
+| `rng.chisquare(df, size)` | `rng.chisquare(df, &[2, 3])` | |
+| `rng.noncentral_chisquare(df, nonc, size)` | `rng.noncentral_chisquare(df, nonc, &[2, 3])` | |
+| `rng.f(dfnum, dfden, size)` | `rng.f(dfnum, dfden, &[2, 3])` | |
+| `rng.noncentral_f(dfnum, dfden, nonc, size)` | `rng.noncentral_f(dfnum, dfden, nonc, &[2, 3])` | |
+| `rng.laplace(loc, scale, size)` | `rng.laplace(loc, scale, &[2, 3])` | |
+| `rng.logistic(loc, scale, size)` | `rng.logistic(loc, scale, &[2, 3])` | |
+| `rng.lognormal(mean, sigma, size)` | `rng.lognormal(mean, sigma, &[2, 3])` | |
+| `rng.gumbel(loc, scale, size)` | `rng.gumbel(loc, scale, &[2, 3])` | |
+| `rng.rayleigh(scale, size)` | `rng.rayleigh(scale, &[2, 3])` | |
+| `rng.pareto(a, size)` | `rng.pareto(a, &[2, 3])` | |
+| `rng.power(a, size)` | `rng.power(a, &[2, 3])` | |
+| `rng.weibull(a, size)` | `rng.weibull(a, &[2, 3])` | |
+| `rng.wald(mean, scale, size)` | `rng.wald(mean, scale, &[2, 3])` | |
+| `rng.triangular(left, mode, right, size)` | `rng.triangular(left, mode, right, &[2, 3])` | |
+| `rng.vonmises(mu, kappa, size)` | `rng.vonmises(mu, kappa, &[2, 3])` | |
+| `rng.geometric(p, size)` | `rng.geometric(p, &[2, 3])` | |
+| `rng.negative_binomial(n, p, size)` | `rng.negative_binomial(n, p, &[2, 3])` | |
+| `rng.hypergeometric(ngood, nbad, nsample, size)` | `rng.hypergeometric(ngood, nbad, nsample, &[2, 3])` | |
+| `rng.multivariate_hypergeometric(colors, nsample, size)` | `rng.multivariate_hypergeometric(&colors, nsample, &[2, 3])` | |
+| `rng.logseries(p, size)` | `rng.logseries(p, &[2, 3])` | |
+| `rng.zipf(a, size)` | `rng.zipf(a, &[2, 3])` | |
+| `rng.multinomial(n, pvals, size)` | `rng.multinomial(n, &pvals, &[2, 3])` | |
+| `rng.dirichlet(alpha, size)` | `rng.dirichlet(&alpha, &[2, 3])` | |
+| `rng.multivariate_normal(mean, cov, size)` | `rng.multivariate_normal(&mean, &cov, &[2, 3], "warn", 1e-8, "cholesky")` | method: "cholesky", "eigh", or "svd" |
+| `rng.bytes(length)` | `rng.bytes(length)` | Returns `Vec<u8>` |
+| `rng.permuted(x, axis)` | `rng.permuted(&x, axis)` | Permutes along specified axis or whole array |
 
 The same seed gives the same numbers on every platform, but they are **not** the numbers NumPy gives for the same seed.
 
@@ -398,6 +430,40 @@ All I/O functions live in `np::io` and return `Result`.
 | `np.savetxt("a.csv", a, delimiter=",")` | `np::io::save_csv("a.csv", &a, ',')?` | 2-d arrays only |
 | `np.loadtxt("a.csv", delimiter=",", skiprows=1)` | `np::io::load_csv::<f64>("a.csv", ',', 1)?` | |
 | (bytes in memory) | `np::io::to_npy_bytes(&a)`, `np::io::from_npy_bytes::<f64>(&bytes)?` | In-memory `.npy` codec |
+
+## Polynomials (`np.polynomial`)
+
+Available as convenience classes (`Polynomial`, `Chebyshev`, `Legendre`, `Laguerre`, `Hermite`, `HermiteE`) and as module functions in `np::polynomial`.
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `P.Polynomial([1, 2, 3])` | `np::polynomial::Polynomial::new(&[1.0, 2.0, 3.0])` | Power series |
+| `P.Chebyshev([1, 2, 3])` | `np::polynomial::Chebyshev::new(&[1.0, 2.0, 3.0])` | Chebyshev series |
+| `P.Legendre([1, 2, 3])` | `np::polynomial::Legendre::new(&[1.0, 2.0, 3.0])` | Legendre series |
+| `P.Laguerre([1, 2, 3])` | `np::polynomial::Laguerre::new(&[1.0, 2.0, 3.0])` | Laguerre series (domain [0, 1]) |
+| `P.Hermite([1, 2, 3])` | `np::polynomial::Hermite::new(&[1.0, 2.0, 3.0])` | Physicists' Hermite series |
+| `P.HermiteE([1, 2, 3])` | `np::polynomial::HermiteE::new(&[1.0, 2.0, 3.0])` | Probabilists' Hermite series |
+| `p(0.5)` | `p.eval(0.5)` | Scalar evaluation |
+| `p(x)` (array) | `p.eval_array(&x)` | Array evaluation |
+| `p.roots()` | `p.roots()` | Returns `(re, im)` arrays |
+| `p.deriv(m)` | `p.deriv(m)` | Order m derivative |
+| `p.integ(m, k, lbnd)` | `p.integ(m, &k, Some(lbnd))` | Order m integration |
+| `p1 + p2`, `p1 - p2`, `p1 * p2` | `&p1 + &p2`, `&p1 - &p2`, `&p1 * &p2` | Operators |
+| `p1 // p2`, `p1 % p2`, `divmod(p1, p2)` | `&p1 / &p2`, `&p1 % &p2`, `p1.divmod(&p2)` | Series floor division and remainder |
+| `p**2` | `p.pow(2)` | Integer power |
+| `p.convert(kind=P.Chebyshev)` | `p.convert::<Chebyshev>()` or `p.convert_to_chebyshev()` | Convert between series kinds |
+| `p.linspace(n, domain)` | `p.linspace(n, domain)` | Evaluation over domain |
+| `p.degree()` | `p.degree()` | Degree of series |
+| `p.cutdeg(deg)` | `p.cutdeg(deg)` | Truncate degree |
+| `p.trim(tol)` | `p.trim(tol)` | Trim small trailing coefficients |
+| `p.truncate(size)` | `p.truncate(size)` | Truncate to size |
+| `P.Polynomial.identity()` | `Polynomial::identity()` | Identity series p(x) = x |
+| `P.Polynomial.basis(deg)` | `Polynomial::basis(deg)` | Basis series x^deg |
+| `P.Polynomial.fromroots(roots)` | `Polynomial::fromroots(&roots)` | Series with given roots |
+| `P.Polynomial.fit(x, y, deg)` | `Polynomial::fit(&x, &y, deg)` | Least-squares fit with domain mapping |
+| `chebval(x, c)` | `np::polynomial::chebval(x, &c)` | Also `polyval`, `legval`, `lagval`, `hermval`, `hermeval` |
+| `chebgauss(deg)` | `np::polynomial::chebgauss(deg)` | Gauss quadrature (also `leggauss`, `laggauss`, `hermgauss`, `hermegauss`) |
+| `poly2cheb(c)` / `cheb2poly(c)` | `np::polynomial::poly2cheb(&c)` / `cheb2poly(&c)` | Basis conversions |
 
 ## Common gotchas
 
