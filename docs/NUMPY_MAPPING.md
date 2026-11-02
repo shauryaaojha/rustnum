@@ -510,7 +510,28 @@ takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return p
 | `np.ravel_multi_index(mi, dims)` | `np::ravel_multi_index(&[&r, &c], &dims)` | |
 | `np.unravel_index(i, shape)` | `np::unravel_index(&i, &shape)` | Returns one array per dimension |
 
+## Masked arrays (np::ma, v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.ma.masked_array(d, mask=m)` | `np::ma::masked_array(d, Some(m))` | `None` is `nomask` |
+| `np.ma.masked_where(c, a)` | `np::ma::masked_where(&c, a)` | |
+| `np.ma.masked_invalid(a)` | `np::ma::masked_invalid(&a)` | NaN and inf |
+| `np.ma.masked_equal(a, v)` | `np::ma::masked_equal(&a, v)` | fill value becomes `v` |
+| `np.ma.masked_greater(a, v)` / `less` | `np::ma::masked_greater(&a, v)` / `masked_less` | also `_equal` forms |
+| `np.ma.masked_inside(a, v1, v2)` | `np::ma::masked_inside(&a, v1, v2)` | and `masked_outside`, `masked_values` |
+| `np.ma.filled(a, v)` / `a.filled(v)` | `np::ma::filled(&a, v)` | |
+| `a.compressed()` | `a.compressed()` | |
+| `np.ma.getmask(a)` / `getdata(a)` | `np::ma::getmask(&a)` / `getdata(&a)` | `getmask` is a full array |
+| `a.count()` / `a.count(axis=k)` | `a.count()` / `a.count_axis(k)` | |
+| `a + b`, `a / b` | `&a + &b`, `&a / &b` | masks propagate; divide by zero is masked |
+| `a.sum()`, `a.mean()`, `a.std()`, `a.var()` | `a.sum()` ... (`Option`) | `None` for all-masked |
+| `a.sum(axis=k)` | `a.sum_axis(k)` | returns a `MaskedArray` |
+| `a.min()`, `a.max()`, `a.argmin()`, `a.argmax()` | same names | plus `_axis` forms |
+| `np.ma.sqrt(a)`, `log`, `arcsin`, ... | `a.sqrt()`, `a.log()`, `a.arcsin()` ... | out-of-domain inputs masked |
+| `print(a)` | `println!("{a}")` | `[1.0 -- 3.0]` |
+
 ## Not in v0.1
 
-structured and datetime dtypes, masked arrays, memory-mapped files, and string arrays.
-(Complex arrays, float16/bfloat16 and multi-axis fancy indexing arrived in v0.2.)
+structured and datetime dtypes, memory-mapped files, and string arrays.
+(Complex arrays, float16/bfloat16, multi-axis fancy indexing and masked arrays arrived in v0.2.)

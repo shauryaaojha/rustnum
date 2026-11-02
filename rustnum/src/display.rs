@@ -300,6 +300,40 @@ impl Printer {
         out.push(']');
     }
 }
+fn visible_flat(shape: &[usize], axis: usize, base: usize, summary: bool, out: &mut Vec<usize>) {
+    if axis == shape.len() {
+        out.push(base);
+        return;
+    }
+    let stride: usize = shape[axis + 1..].iter().product();
+    for i in selected(shape[axis], summary).into_iter().flatten() {
+        visible_flat(shape, axis + 1, base + i * stride, summary, out);
+    }
+}
+/// Lays out arbitrary per-element text like NumPy's array printer (no column alignment).
+///
+/// `text(i)` returns the text of the element at C-order flat index `i`.
+pub(crate) fn render_custom(shape: &[usize], text: &dyn Fn(usize) -> String) -> String {
+    if shape.is_empty() {
+        return text(0);
+    }
+    let total: usize = shape.iter().product();
+    if total == 0 {
+        return "[]".to_string();
+    }
+    let summary = total > 1000;
+    let mut flat = Vec::new();
+    visible_flat(shape, 0, 0, summary, &mut flat);
+    let mut p = Printer {
+        text: flat.into_iter().map(text).collect(),
+        next: 0,
+        debug: false,
+        summary,
+    };
+    let mut out = String::new();
+    p.nested(shape, 0, &mut out);
+    out
+}
 fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     let mut out = if debug {
         "array(".to_string()

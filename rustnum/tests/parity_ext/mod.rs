@@ -2,7 +2,7 @@
 //! structured). `parity.rs` falls back to [`run`] for ops it does not know and to [`check`] to
 //! compare the result with the NumPy output stored next to the inputs.
 
-use super::{Json, exact_bool, param_isize, param_usize};
+use super::{Json, exact_bool, param_f64, param_isize, param_usize};
 use rustnum as np;
 use rustnum::{Array, Complex};
 use std::fs;
@@ -10,6 +10,7 @@ use std::path::Path;
 
 mod fancy;
 mod half;
+mod ma;
 
 /// What an extension case computed.
 pub enum Out {
@@ -90,6 +91,9 @@ pub fn run(dir: &Path, case: &Json) -> Option<Result<Out, String>> {
         return Some(r);
     }
     if let Some(r) = fancy::run(dir, case) {
+        return Some(r);
+    }
+    if let Some(r) = ma::run(dir, case) {
         return Some(r);
     }
     let op = case.get("op").as_str();

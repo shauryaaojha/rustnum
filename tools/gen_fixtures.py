@@ -273,6 +273,11 @@ def main():
     # =========================================================================
     fancy_cases(save_case, rng)
 
+    # =========================================================================
+    # 13. Masked arrays (stage 4 of v0.2)
+    # =========================================================================
+    ma_cases(save_case, rng)
+
     # Write manifest.json
     manifest_path = FIXTURE_DIR / "manifest.json"
     with open(manifest_path, "w", encoding="utf-8") as f:
@@ -626,6 +631,162 @@ def fancy_cases(save_case, rng):
     z = i64([2, 0])
     save_case("fx_ix_3", "fx_ix", [b3, z, i64([1, 2, 3]), i64([4, 0])], {}, b3[np.ix_(z, i64([1, 2, 3]), i64([4, 0]))],
               "float64", rtol=0.0, atol=0.0)
+
+
+def ma_cases(save_case, rng):
+    """numpy.ma parity cases (ops prefixed `ma_`).
+
+    Every case is saved three times (`part` = filled / mask / data) so the masked result is compared
+    value-by-value, mask-by-mask and, where NumPy defines it, under the mask as well.
+    """
+    FILL_F, FILL_I = -999.0, -999
+
+    def sample(shape, seed, integer=False):
+        r = np.random.default_rng(seed)
+        if integer:
+            return r.integers(-9, 10, shape).astype(np.int64)
+        return np.round(r.standard_normal(shape) * 3, 3)
+
+    x = sample((4, 5), 1)
+    xm = np.zeros((4, 5), dtype=bool)
+    xm[0, 1] = xm[2, 3] = xm[3, 0] = xm[3, 4] = True
+    y = sample((4, 5), 2)
+    y[1, 1] = 0.0
+    y[2, 2] = 0.0
+    ym = np.zeros((4, 5), dtype=bool)
+    ym[1, 3] = ym[2, 2] = True
+    row = sample((1, 5), 3)
+    rowm = np.array([[False, True, False, False, False]])
+    X = np.ma.array(x, mask=xm)
+    Y = np.ma.array(y, mask=ym)
+    R = np.ma.array(row, mask=rowm)
+
+    def parts(res, integer=False):
+        r = np.ma.asanyarray(res)
+        fill = FILL_I if integer else FILL_F
+        dtype = r.dtype
+        filled = np.ma.filled(r, np.array(fill).astype(dtype))
+        return filled, np.ma.getmaskarray(r), np.ma.getdata(r)
+
+    def case(name, op, operands, params, res, raw=True, integer=False, rtol=1e-12, atol=1e-12):
+        """operands: masked arrays / ndarrays; masks saved as extra input files."""
+        files, nomask = [], []
+        for k, o in enumerate(operands):
+            if isinstance(o, np.ma.MaskedArray):
+                files += [np.ma.getdata(o), np.ma.getmaskarray(o)]
+                if o.mask is np.ma.nomask:
+                    nomask.append(k)
+            else:
+                files += [np.asarray(o), np.zeros(np.shape(o), dtype=bool)]
+                nomask.append(k)
+        filled, mask, data = parts(res, integer)
+        base = dict(params)
+        base["nomask"] = nomask
+        base["n_operands"] = len(operands)
+        for part, arr in [("filled", filled), ("mask", mask)] + ([("data", data)] if raw else []):
+            dtype = "bool" if part == "mask" else ("int64" if arr.dtype.kind == "i" else "float64")
+            save_case(f"ma_{name}_{part}", f"ma_{op}", files, {**base, "part": part}, arr, dtype, rtol=rtol, atol=atol)
+
+    # arithmetic with mask propagation (data under the mask is the first operand's, like NumPy)
+    with np.errstate(all="ignore"):
+        case("add", "add", [X, Y], {}, X + Y)
+        case("sub", "sub", [X, Y], {}, X - Y)
+        case("mul", "mul", [X, Y], {}, X * Y)
+        case("div", "div", [X, Y], {}, X / Y)
+        case("add_broadcast", "add", [X, R], {}, X + R)
+        case("div_broadcast", "div", [X, R], {}, X / R)
+        case("add_scalar", "add_scalar", [X], {"value": 2.5}, X + 2.5)
+        case("mul_scalar", "mul_scalar", [X], {"value": -2.0}, X * -2.0)
+        case("rdiv_scalar", "rdiv_scalar", [X], {"value": 1.0}, 1.0 / X)
+        case("neg", "neg", [X], {}, -X)
+        case("abs", "abs", [X], {}, np.ma.abs(X))
+        case("square", "square", [X], {}, np.ma.power(X, 2), raw=False)
+        # unary functions and their domains
+        for name, f in [("exp", np.ma.exp), ("sin", np.ma.sin), ("cos", np.ma.cos), ("tanh", np.ma.tanh),
+                        ("sqrt", np.ma.sqrt), ("log", np.ma.log), ("log2", np.ma.log2), ("log10", np.ma.log10)]:
+            case(name, name, [X], {}, f(X))
+        unit = np.ma.array(np.array([[-1.5, -1.0, -0.25, 0.0, 0.5], [1.0, 1.5, 0.75, -0.75, 2.0]]),
+                           mask=np.array([[False, False, False, True, False], [False, False, False, False, False]]))
+        case("arcsin", "arcsin", [unit], {}, np.ma.arcsin(unit))
+        case("arccos", "arccos", [unit], {}, np.ma.arccos(unit))
+        # no mask at all: the nomask fast path
+        pa, pb = np.arange(6.0).reshape(2, 3), np.arange(6.0).reshape(2, 3) + 1
+        case("nomask_add", "add", [pa, pb], {}, np.ma.array(pa) + np.ma.array(pb))
+        case("nomask_sum", "sum", [pa], {}, np.ma.array(pa).sum())
+        # reductions
+        for axis in [None, 0, 1]:
+            tag = "all" if axis is None else f"ax{axis}"
+            kw = {} if axis is None else {"axis": axis}
+            params = {} if axis is None else {"axis": axis}
+            case(f"sum_{tag}", "sum", [X], params, X.sum(**kw), raw=False)
+            case(f"prod_{tag}", "prod", [X], params, X.prod(**kw), raw=False, rtol=1e-10)
+            case(f"mean_{tag}", "mean", [X], params, X.mean(**kw), raw=False)
+            case(f"std_{tag}", "std", [X], params, X.std(**kw), raw=False, rtol=1e-10)
+            case(f"var_{tag}", "var", [X], params, X.var(**kw), raw=False, rtol=1e-10)
+            case(f"min_{tag}", "min", [X], params, X.min(**kw), raw=False)
+            case(f"max_{tag}", "max", [X], params, X.max(**kw), raw=False)
+            case(f"argmin_{tag}", "argmin", [X], params, np.ma.asarray(X.argmin(**kw)), raw=False, integer=True)
+            case(f"argmax_{tag}", "argmax", [X], params, np.ma.asarray(X.argmax(**kw)), raw=False, integer=True)
+            case(f"count_{tag}", "count", [X], params, np.ma.asarray(X.count(**kw)), raw=False, integer=True)
+        case("var_ddof1", "var_ddof", [X], {"ddof": 1}, X.var(ddof=1), raw=False, rtol=1e-10)
+        case("var_ddof1_ax1", "var_ddof", [X], {"ddof": 1, "axis": 1}, X.var(axis=1, ddof=1), raw=False, rtol=1e-10)
+        allm = np.ma.array(x[:2], mask=True)
+        case("sum_allmasked", "sum", [allm], {}, allm.sum(), raw=False)
+        case("mean_allmasked", "mean", [allm], {}, allm.mean(), raw=False)
+        half = np.ma.array(x[:3], mask=np.array([[True] * 5, [False] * 5, [False] * 5]))
+        case("sum_lane_masked", "sum", [half], {"axis": 1}, half.sum(axis=1), raw=False)
+        case("max_lane_masked", "max", [half], {"axis": 1}, half.max(axis=1), raw=False)
+        case("mean_lane_masked", "mean", [half], {"axis": 1}, half.mean(axis=1), raw=False)
+        case("std_lane_masked", "std", [half], {"axis": 1}, half.std(axis=1), raw=False, rtol=1e-10)
+        # integer data
+        xi = sample((3, 4), 5, integer=True)
+        mi = np.zeros((3, 4), dtype=bool)
+        mi[0, 0] = mi[1, 2] = True
+        XI = np.ma.array(xi, mask=mi)
+        case("int_sum", "sum", [XI], {}, XI.sum(), raw=False, integer=True)
+        case("int_sum_ax0", "sum", [XI], {"axis": 0}, XI.sum(axis=0), raw=False, integer=True)
+        case("int_min", "min", [XI], {}, XI.min(), raw=False, integer=True)
+        case("int_max_ax1", "max", [XI], {"axis": 1}, XI.max(axis=1), raw=False, integer=True)
+        case("int_add", "add", [XI, XI], {}, XI + XI, integer=True)
+        case("int_mul_scalar", "mul_scalar", [XI], {"value": 3}, XI * 3, integer=True)
+        # constructors
+        plain = sample((3, 4), 7)
+        pl = plain.copy()
+        pl[0, 1], pl[2, 2], pl[1, 3] = np.nan, np.inf, -np.inf
+        case("masked_invalid", "masked_invalid", [pl], {}, np.ma.masked_invalid(pl))
+        eq = np.array([[1.0, 2.0, 1.0], [3.0, 1.0, 2.0]])
+        for name, f, value in [("equal", np.ma.masked_equal, 1.0), ("greater", np.ma.masked_greater, 1.5),
+                               ("greater_equal", np.ma.masked_greater_equal, 2.0), ("less", np.ma.masked_less, 2.0),
+                               ("less_equal", np.ma.masked_less_equal, 2.0), ("not_equal", np.ma.masked_not_equal, 1.0)]:
+            case(f"masked_{name}", f"masked_{name}", [eq], {"value": value}, f(eq, value))
+        case("masked_inside", "masked_inside", [eq], {"v1": 1.5, "v2": 2.5}, np.ma.masked_inside(eq, 1.5, 2.5))
+        case("masked_outside", "masked_outside", [eq], {"v1": 1.5, "v2": 2.5}, np.ma.masked_outside(eq, 1.5, 2.5))
+        case("masked_values", "masked_values", [eq + np.array([[1e-9, 0, 0], [0, 1e-9, 0]])],
+             {"value": 1.0, "rtol": 1e-5, "atol": 1e-8}, np.ma.masked_values(eq + np.array([[1e-9, 0, 0], [0, 1e-9, 0]]), 1.0, rtol=1e-5, atol=1e-8))
+        chained = np.ma.masked_greater(np.ma.masked_less(eq, 1.5), 2.5)
+        case("chained", "chained", [eq], {}, chained)
+        cond = np.array([[True, False, False], [False, True, False]])
+        case("masked_where", "masked_where", [eq, cond], {}, np.ma.masked_where(cond, eq))
+        # compressed / filled / indexing
+        case("compressed", "compressed", [X], {}, np.ma.asarray(X.compressed()), raw=False)
+        case("slice", "slice", [X], {}, X[1:3, ::2])
+        case("reshape", "reshape", [X], {"shape": [5, 4]}, X.reshape(5, 4))
+        case("transpose", "transpose", [X], {}, X.T)
+        case("ravel", "ravel", [X], {}, X.ravel())
+        # display
+        strings = {
+            "float": np.ma.array([1.0, 2.5, 3.0, 22.25], mask=[0, 1, 0, 0]),
+            "matrix": np.ma.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], mask=[[0, 0, 1], [1, 0, 0]]),
+            "int": np.ma.array([[1, 22], [333, 4]], mask=[[0, 1], [0, 0]]),
+            "bool": np.ma.array([True, False, True], mask=[0, 0, 1]),
+            "exp": np.ma.array([1e-5, 1e16, 0.1, 100.0], mask=[0, 0, 1, 0]),
+            "nomask": np.ma.array([1.5, 2.5]),
+            "special": np.ma.array([np.nan, np.inf, -0.0, 1 / 3], mask=[0, 0, 0, 0]),
+        }
+        for k, arr in strings.items():
+            save_case(f"ma_str_{k}", "ma_str", [np.ma.getdata(arr), np.ma.getmaskarray(arr)],
+                      {"str": str(arr), "nomask": [] if arr.mask is not np.ma.nomask else [0], "n_operands": 1},
+                      np.array(0), "str")
 
 
 if __name__ == "__main__":
