@@ -298,3 +298,8 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - `io::savetxt<T: Element>(fname, &x, fmt: &str, delimiter: &str, newline: &str, header: &str, footer: &str, comments: &str) -> Result<()>`.
 - `io::genfromtxt<F: Float>(fname, comments, delimiter, skip_header, skip_footer, filling_values: Option<F>, usecols, names: bool, max_rows) -> Result<(Array<F>, Vec<String>)>`; there is no `missing_values` argument (NumPy's float converter only replaces fields that fail to parse).
 - Bad data returns `Error::Parse` (messages follow NumPy) or `Error::Format`; unreadable files return `Error::Io`.
+
+## 30. Print options
+
+- `PrintOptions { precision: usize (8), threshold: usize (1000), edgeitems: usize (3), linewidth: usize (75), suppress: bool (false), sign: char ('-') }` with `Default`.
+- `set_printoptions(PrintOptions)`, `get_printoptions() -> PrintOptions`, `printoptions(PrintOptions) -> PrintOptionsGuard` (restores on drop). Options are per thread and honoured by `Display` and `Debug` of every `Array`.

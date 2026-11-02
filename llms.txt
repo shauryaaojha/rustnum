@@ -261,3 +261,6 @@ float16, datetime/struct dtypes, masked arrays, memory-mapped files, string arra
 ## Text I/O (np::io) (added after v0.1)
 - `np::io::loadtxt::<f64>(path, Some("#"), delimiter, skiprows, usecols, max_rows)?`, `np::io::savetxt(path, &x, fmt, delim, newline, header, footer, comments)?`
 - `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling, usecols, names, max_rows)?` -> `(array, names)`
+
+## Print options (added after v0.1)
+- `np::set_printoptions(np::PrintOptions { precision: 3, ..np::get_printoptions() })`, `np::get_printoptions()`, `let _g = np::printoptions(opts);` (scoped)

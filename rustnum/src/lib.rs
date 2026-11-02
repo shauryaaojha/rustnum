@@ -42,6 +42,7 @@ mod nanfn;
 mod npz;
 mod ops;
 mod pool;
+mod printopts;
 mod reduce;
 mod shapeextra;
 mod simd_math;
@@ -82,6 +83,9 @@ pub use misc::{
     logaddexp, logaddexp2, nextafter, remainder,
 };
 pub use ops::*;
+pub use printopts::{
+    PrintOptions, PrintOptionsGuard, get_printoptions, printoptions, set_printoptions,
+};
 pub use shapeextra::{
     around, atleast_1d, atleast_2d, atleast_3d, column_stack, dstack, frombuffer, fromiter,
     geomspace, real_if_close, rot90, row_stack, vander,

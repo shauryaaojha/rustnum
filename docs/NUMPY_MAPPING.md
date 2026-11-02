@@ -556,6 +556,14 @@ Added after v0.1. Same conventions as above.
 | `np.savetxt(fname, X, fmt, delimiter, newline, header, footer, comments)` | `np::io::savetxt(path, &x, "%.18e", " ", "\n", "", "", "# ")?` | printf formats `d i u e E f F g G s`; one per column or one for all |
 | `np.genfromtxt(fname, ..., names=True)` | `np::io::genfromtxt::<f64>(path, comments, delimiter, skip_header, skip_footer, filling_values, usecols, names, max_rows)?` | Float only; returns `(Array, names)`; missing or unparsable fields become NaN or `filling_values` |
 
+### Print options
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.set_printoptions(precision=3, ...)` | `np::set_printoptions(np::PrintOptions { precision: 3, ..np::get_printoptions() })` | Fields: `precision`, `threshold`, `edgeitems`, `linewidth`, `suppress`, `sign` (`'-'`, `'+'`, `' '`). Per thread, like NumPy's context-local options |
+| `np.get_printoptions()` | `np::get_printoptions()` | Returns `np::PrintOptions` |
+| `with np.printoptions(...):` | `let _g = np::printoptions(opts);` | The guard restores the previous options when dropped |
+
 ## Not in v0.1
 
 `float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,
