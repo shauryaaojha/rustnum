@@ -27,6 +27,133 @@ pub trait Element:
     /// assert_eq!(<i32 as np::Element>::from_f64(2.9),2);
     /// ```
     fn from_f64(value: f64) -> Self;
+    /// Real and imaginary parts as `f64`, used by `astype` so complex values keep both parts.
+    ///
+    /// Real types return `(self.to_f64(), 0.0)`, like NumPy casting a real array to complex.
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<i32 as np::Element>::to_complex_parts(3),(3.0,0.0));
+    /// assert_eq!(<np::Complex<f64> as np::Element>::to_complex_parts(np::Complex::new(1.0,2.0)),(1.0,2.0));
+    /// ```
+    fn to_complex_parts(self) -> (f64, f64) {
+        (self.to_f64(), 0.0)
+    }
+    /// Builds a value from real and imaginary parts; real types drop `im`, like NumPy's
+    /// `ComplexWarning` cast.
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<f64 as np::Element>::from_complex_parts(1.5,9.0),1.5);
+    /// assert_eq!(<np::Complex<f64> as np::Element>::from_complex_parts(1.5,9.0),np::Complex::new(1.5,9.0));
+    /// ```
+    fn from_complex_parts(re: f64, im: f64) -> Self {
+        let _ = im;
+        Self::from_f64(re)
+    }
+    /// `.npy` dtype descriptor such as `"<c16"`, or `None` for types without a `.npy` encoding.
+    ///
+    /// Types outside the seven built-ins that return `Some` are written and read through
+    /// [`Element::npy_write`] and [`Element::npy_read`].
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<np::Complex<f64> as np::Element>::npy_descr().as_deref(),Some("<c16"));
+    /// assert_eq!(<f64 as np::Element>::npy_descr(),None);
+    /// ```
+    fn npy_descr() -> Option<String> {
+        None
+    }
+    /// Bytes per element in a `.npy` file (meaningful when [`Element::npy_descr`] is `Some`).
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<np::Complex<f64> as np::Element>::npy_itemsize(),16);
+    /// ```
+    fn npy_itemsize() -> usize {
+        0
+    }
+    /// Appends the little-endian `.npy` encoding of `self`.
+    /// ```
+    /// use rustnum as np;
+    /// let mut out=Vec::new();
+    /// np::Element::npy_write(np::Complex::new(1.0f32,2.0),&mut out);
+    /// assert_eq!(out.len(),8);
+    /// ```
+    fn npy_write(self, out: &mut Vec<u8>) {
+        let _ = out;
+    }
+    /// Decodes one element from little-endian `.npy` bytes.
+    /// ```
+    /// use rustnum as np;
+    /// let mut out=Vec::new();
+    /// np::Element::npy_write(np::Complex::new(1.0f32,2.0),&mut out);
+    /// assert_eq!(<np::Complex<f32> as np::Element>::npy_read(&out),np::Complex::new(1.0,2.0));
+    /// ```
+    fn npy_read(bytes: &[u8]) -> Self {
+        let _ = bytes;
+        Self::default()
+    }
+    /// `(count, unit code, is_timedelta)` of a `datetime64` / `timedelta64` value, `None` for other types.
+    ///
+    /// The unit code is the position in `Y M W D h m s ms us ns` (0 to 9). `astype` uses it to
+    /// convert between units without going through `f64`.
+    /// ```
+    /// use rustnum as np;
+    /// use np::datetime::D;
+    /// assert_eq!(np::Element::time_parts(np::TimeDelta64::<D>::new(5)),Some((5,3,true)));
+    /// assert_eq!(np::Element::time_parts(5i64),None);
+    /// ```
+    fn time_parts(self) -> Option<(i64, u8, bool)> {
+        None
+    }
+    /// Builds a `datetime64` / `timedelta64` value from [`Element::time_parts`] of another type, `None` for other types.
+    /// ```
+    /// use rustnum as np;
+    /// use np::datetime::{D, h};
+    /// let t=<np::TimeDelta64<h> as np::Element>::from_time_parts(2,3,true).unwrap();
+    /// assert_eq!(t.value(),48);
+    /// assert!(<f64 as np::Element>::from_time_parts(2,3,true).is_none());
+    /// ```
+    fn from_time_parts(value: i64, code: u8, is_delta: bool) -> Option<Self> {
+        let _ = (value, code, is_delta);
+        None
+    }
+    /// Exact `i64` view of an integer-like value, `None` for other types (used by `astype`).
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(np::Element::to_i64_exact(7i32),Some(7));
+    /// assert_eq!(np::Element::to_i64_exact(7.5f64),None);
+    /// ```
+    fn to_i64_exact(self) -> Option<i64> {
+        None
+    }
+    /// Builds a value from an exact `i64` (used by `astype` from integer-like types).
+    /// ```
+    /// use rustnum as np;
+    /// assert_eq!(<np::TimeDelta64<np::datetime::D> as np::Element>::from_i64_exact(4).value(),4);
+    /// assert_eq!(<f64 as np::Element>::from_i64_exact(4),4.0);
+    /// ```
+    fn from_i64_exact(value: i64) -> Self {
+        Self::from_f64(value as f64)
+    }
+    /// How NumPy prints this value inside an array when it is not a plain number
+    /// (quoted ISO strings for datetimes, `(1., 2.)` tuples for records); `None` for numbers.
+    /// ```
+    /// use rustnum as np;
+    /// use np::datetime::D;
+    /// assert_eq!(np::Element::text(np::DateTime64::<D>::new(0)).as_deref(),Some("'1970-01-01'"));
+    /// assert_eq!(np::Element::text(1.5f64),None);
+    /// ```
+    fn text(self) -> Option<String> {
+        None
+    }
+    /// Texts of a whole slice of values laid out as columns (structured arrays align each
+    /// field); `None` means format each value with [`Element::text`].
+    /// ```
+    /// use rustnum as np;
+    /// assert!(<f64 as np::Element>::text_all(&[1.0]).is_none());
+    /// ```
+    fn text_all(values: &[Self]) -> Option<Vec<String>> {
+        let _ = values;
+        None
+    }
 }
 /// A numeric array element, like NumPy numeric dtypes.
 /// ```
@@ -326,10 +453,29 @@ macro_rules! element {
 }
 element!(f32, "float32");
 element!(f64, "float64");
-element!(i32, "int32");
-element!(i64, "int64");
-element!(u8, "uint8");
-element!(usize, "uint64");
+macro_rules! element_int {
+    ($t:ty,$n:literal) => {
+        impl Element for $t {
+            const DTYPE: &'static str = $n;
+            fn to_f64(self) -> f64 {
+                self as f64
+            }
+            fn from_f64(v: f64) -> Self {
+                v as $t
+            }
+            fn to_i64_exact(self) -> Option<i64> {
+                Some(self as i64)
+            }
+            fn from_i64_exact(v: i64) -> Self {
+                v as $t
+            }
+        }
+    };
+}
+element_int!(i32, "int32");
+element_int!(i64, "int64");
+element_int!(u8, "uint8");
+element_int!(usize, "uint64");
 impl Element for bool {
     const DTYPE: &'static str = "bool";
     fn to_f64(self) -> f64 {
@@ -499,6 +645,10 @@ macro_rules! float {
 float!(f32);
 float!(f64);
 
+/// True for `float16`, `float32`, `float64` and `bfloat16`.
+pub(crate) fn is_float_dtype(dtype: &str) -> bool {
+    dtype.starts_with("float") || dtype.starts_with("bfloat")
+}
 pub(crate) fn isnan<T: Element>(x: T) -> bool {
     x.partial_cmp(&x).is_none()
 }

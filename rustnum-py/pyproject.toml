@@ -1,0 +1,14 @@
+[build-system]
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
+
+[project]
+name = "rustnum-py"
+version = "0.2.0"
+description = "Python bindings for rustnum: a NumPy-style n-dimensional array backed by pure Rust."
+requires-python = ">=3.9"
+license = { text = "MIT OR Apache-2.0" }
+
+[tool.maturin]
+module-name = "rustnum_py"
+features = ["pyo3/extension-module"]

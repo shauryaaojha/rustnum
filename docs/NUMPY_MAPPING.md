@@ -294,18 +294,54 @@ Matrix products, dot and trace are methods. Decompositions and solvers are free 
 | `np.tensordot(a, b, axes=(axes_a, axes_b))` | `np::linalg::tensordot(&a, &b, &axes_a, &axes_b)` | Tensor contraction over paired axes |
 | `np.tensordot(a, b, axes=n)` | `np::linalg::tensordot_n(&a, &b, n)` | Contract last `n` of `a` with first `n` of `b` |
 
-## Discrete Fourier Transform (np::fft)
+## Complex arrays
 
-Transforms over `Array<F>` (`f32` and `f64`). Since rustnum v0.1 has no complex array dtype, complex signals and spectra are pairs of real arrays `(re, im)` of the same shape.
+`Array<Complex<f64>>` is `complex128` and `Array<Complex<f32>>` is `complex64`. Build elements with `np::Complex::new(re, im)`.
 
 | NumPy | rustnum | Notes |
 |---|---|---|
-| `np.fft.fft(a)` | `np::fft::fft(&re, &im)` | 1-d complex FFT along last axis, returns `(re, im)` |
-| `np.fft.ifft(a)` | `np::fft::ifft(&re, &im)` | 1-d inverse complex FFT along last axis, divided by `n` |
-| `np.fft.rfft(a)` | `np::fft::rfft(&a)` | Real FFT along last axis, returns `n / 2 + 1` bins as `(re, im)` |
-| `np.fft.irfft(a, n)` | `np::fft::irfft(&re, &im, n)` | Inverse real FFT to length `n`, returns `Array<F>` |
-| `np.fft.fft2(a)` | `np::fft::fft2(&re, &im)` | 2-d complex FFT over last two axes, returns `(re, im)` |
-| `np.fft.ifft2(a)` | `np::fft::ifft2(&re, &im)` | 2-d inverse complex FFT over last two axes |
+| `a + b`, `a * b`, `a / b` (complex, mixed real/complex) | `&a + &b`, `&a * &b`, `&a / &b`, `&z * 2.0`, `&z + &r` | Broadcasting; the real operand becomes `x + 0j` |
+| `a.real`, `np.real(a)` | `z.real()` | `Array<F>` |
+| `a.imag`, `np.imag(a)` | `z.imag()` | `Array<F>` |
+| `np.conj(a)` | `z.conj()` | |
+| `np.abs(z)`, `np.absolute(z)` | `np::absolute(&z)` | Real output; `z.abs()` returns `\|z\| + 0j` as complex |
+| `np.angle(z)`, `np.angle(z, deg=True)` | `z.angle()`, `z.angle_deg()` | |
+| `np.exp/log/log2/log10/sqrt(z)` | `z.exp()`, `z.log()`, `z.log2()`, `z.log10()`, `z.sqrt()` | C99 branch cuts, signed zeros |
+| `np.sin/cos/tan/sinh/cosh/tanh(z)` | `z.sin()` ... `z.tanh()` | |
+| `np.power(z, w)` | `np::power(&z, &w)` | Complex exponents |
+| `np.isnan/isinf/isfinite(z)` | `z.is_nan()`, `z.is_inf()`, `z.is_finite()` | |
+| `z.sum()`, `z.prod()`, `np.cumsum(z)` | `z.sum()`, `z.prod()`, `z.cumsum()` | |
+| `z.mean()`, `z.mean(axis=k)` | `z.mean()`, `z.mean_axis(k)` | |
+| `a @ b`, `np.dot(a, b)` | `a.matmul(&b)`, `a.dot(&b)` | Generic (not packed) loop |
+| `np.vdot(a, b)` | `a.vdot(&b)` | Conjugates `a` |
+| `np.sort(z)`, `z.max()` | `z.sort()`, `z.max()` | Lexicographic `(re, im)` |
+| `a.astype(complex)` | `a.astype::<np::Complex<f64>>()` | Real to complex gives `x + 0j` |
+| `np.save("z.npy", z)` | `np::io::save_npy("z.npy", &z)` | `<c8`, `<c16` |
+
+## float16 and bfloat16
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.float16(x)` | `np::f16::from_f32(x)`, `np::f16::from_f64(x)` | Round to nearest even; `bf16` is the same API |
+| `a.astype(np.float16)` | `a.astype::<np::f16>()` | `f32` to `f16` uses F16C when the CPU has it |
+| `h.astype(np.float32)` | `h.astype::<f32>()` | Exact |
+| `np.finfo(np.float16).max`, `.eps` | `np::f16::MAX`, `np::f16::EPSILON` | |
+| `a.sum()`, `a.mean()`, `a.std()` on float16 | `a.sum()`, `a.mean()`, `a.std()` | Accumulate in `f32`, round once |
+| `h.view(np.uint16)` | `h.to_bits()`, `np::f16::from_bits(b)` | |
+| `np.save` of a float16 array | `np::io::save_npy` | `<f2`; bfloat16 has no NumPy dtype and cannot be saved |
+
+## Discrete Fourier Transform (np::fft)
+
+Transforms accept real or complex arrays (`Array<F>` or `Array<Complex<F>>`) and return complex arrays, like NumPy. `f64` gives `complex128`, `f32` gives `complex64`.
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.fft.fft(a)` | `np::fft::fft(&a)` | 1-d FFT along last axis, returns `Array<Complex<F>>` |
+| `np.fft.ifft(a)` | `np::fft::ifft(&a)` | 1-d inverse FFT along last axis, divided by `n` |
+| `np.fft.rfft(a)` | `np::fft::rfft(&a)` | Real FFT along last axis, `n / 2 + 1` bins |
+| `np.fft.irfft(a)`, `np.fft.irfft(a, n)` | `np::fft::irfft(&a, None)`, `np::fft::irfft(&a, Some(n))` | Inverse real FFT, returns `Array<F>` |
+| `np.fft.fft2(a)` | `np::fft::fft2(&a)` | 2-d FFT over last two axes |
+| `np.fft.ifft2(a)` | `np::fft::ifft2(&a)` | 2-d inverse FFT over last two axes |
 | `np.fft.fftfreq(n, d=1.0)` | `np::fft::fftfreq(n, d)` | Sample frequencies for `n`-point DFT with spacing `d` |
 | `np.fft.rfftfreq(n, d=1.0)` | `np::fft::rfftfreq(n, d)` | Sample frequencies for `rfft`, `n / 2 + 1` bins |
 | `np.fft.fftshift(a)` | `np::fft::fftshift(&a)` | Shift zero-frequency component to centre (all axes) |
@@ -520,8 +556,78 @@ File errors, parse errors, singular matrices and non-positive-definite matrices 
 **14. A mask must match the array shape.** `a.mask(&m)` needs `m.shape() == a.shape()`. To select rows by a 1-d condition,
 use `a.take(&np::nonzero(&cond)[0].to_vec(), 0)` or `a.compress(&cond, 0)`.
 
-**15. Complex data is represented as `(re, im)` pairs.** `Array` does not yet have a complex element type; `np::fft::fft`,
-`np::poly::roots`, and `np::linalg::eig` take or return pairs of real arrays `(re, im)`. Scalar complex arithmetic is available via `np::Complex<F>`.
+**15. Complex arrays exist, but some APIs still use `(re, im)` pairs.** `Array<Complex<F>>` is a real dtype since v0.2 and `np::fft`
+takes and returns it, but `np::poly::roots` and `np::linalg::eig` still return pairs of real arrays `(re, im)`. `z.abs()` returns a complex array
+(`|z| + 0j`); use `np::absolute(&z)` for the real modulus.
+
+## Advanced indexing (v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `a[[0, 2], [1, 3]]` | `a.slice(&np::s![[0, 2], [1, 3]])` | Index arrays broadcast; result is a copy |
+| `a[idx0, :, idx1]` | `a.slice(&np::s![&idx0, .., &idx1])` | Separated advanced axes go to the front, like NumPy |
+| `a[:, mask1d]` | `a.slice(&np::s![.., &mask])` | 1-d `Array<bool>` mask inside a tuple |
+| `a[[0, 2], [1, 3]] = v` | `a.slice_assign(&np::s![[0, 2], [1, 3]], v)` | Last write wins on repeats |
+| `np.ix_(r, c)` | `np::ix_(&[&r, &c])` | Returns `Vec<Array<i64>>` |
+| `np.take_along_axis(a, i, axis)` | `np::take_along_axis(&a, &i, axis)` | `i` is `Array<i64>` |
+| `np.put_along_axis(a, i, v, axis)` | `np::put_along_axis(&mut a, &i, v, axis)` | In place |
+| `np.put(a, ind, v)` | `np::put(&mut a, ind, v)` | Flat index, `v` cycles |
+| `np.choose(a, choices)` | `np::choose(&a, &[&c0, &c1])` | |
+| `np.ravel_multi_index(mi, dims)` | `np::ravel_multi_index(&[&r, &c], &dims)` | |
+| `np.unravel_index(i, shape)` | `np::unravel_index(&i, &shape)` | Returns one array per dimension |
+
+## Masked arrays (np::ma, v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.ma.masked_array(d, mask=m)` | `np::ma::masked_array(d, Some(m))` | `None` is `nomask` |
+| `np.ma.masked_where(c, a)` | `np::ma::masked_where(&c, a)` | |
+| `np.ma.masked_invalid(a)` | `np::ma::masked_invalid(&a)` | NaN and inf |
+| `np.ma.masked_equal(a, v)` | `np::ma::masked_equal(&a, v)` | fill value becomes `v` |
+| `np.ma.masked_greater(a, v)` / `less` | `np::ma::masked_greater(&a, v)` / `masked_less` | also `_equal` forms |
+| `np.ma.masked_inside(a, v1, v2)` | `np::ma::masked_inside(&a, v1, v2)` | and `masked_outside`, `masked_values` |
+| `np.ma.filled(a, v)` / `a.filled(v)` | `np::ma::filled(&a, v)` | |
+| `a.compressed()` | `a.compressed()` | |
+| `np.ma.getmask(a)` / `getdata(a)` | `np::ma::getmask(&a)` / `getdata(&a)` | `getmask` is a full array |
+| `a.count()` / `a.count(axis=k)` | `a.count()` / `a.count_axis(k)` | |
+| `a + b`, `a / b` | `&a + &b`, `&a / &b` | masks propagate; divide by zero is masked |
+| `a.sum()`, `a.mean()`, `a.std()`, `a.var()` | `a.sum()` ... (`Option`) | `None` for all-masked |
+| `a.sum(axis=k)` | `a.sum_axis(k)` | returns a `MaskedArray` |
+| `a.min()`, `a.max()`, `a.argmin()`, `a.argmax()` | same names | plus `_axis` forms |
+| `np.ma.sqrt(a)`, `log`, `arcsin`, ... | `a.sqrt()`, `a.log()`, `a.arcsin()` ... | out-of-domain inputs masked |
+| `print(a)` | `println!("{a}")` | `[1.0 -- 3.0]` |
+
+## datetime64 and timedelta64 (v0.2)
+
+The unit is a type parameter: `np::DateTime64<np::datetime::D>` is `datetime64[D]`, `np::TimeDelta64<np::datetime::ns>` is `timedelta64[ns]`. Units: `Y M W D h m s ms us ns` in `np::datetime`.
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.datetime64('2024-03-05')` | `np::DateTime64::<D>::parse("2024-03-05")?` | Strings finer than the unit are an error; `"NaT"` parses |
+| `np.datetime64(n, 'D')` | `np::DateTime64::<D>::new(n)` | `.value()` is the raw count |
+| `np.datetime64('NaT')`, `np.isnat(a)` | `np::DateTime64::<D>::NAT`, `np::isnat(&a)` | `NaT` sorts last and never compares equal |
+| `np.timedelta64(7, 'D')` | `np::TimeDelta64::<D>::new(7)` |  |
+| `a - b`, `a + t`, `a - t` | `&a - &b`, `&a + &t`, `&a - &t` | Same unit; convert first with `astype` |
+| `t * 3`, `t / 2`, `t / u`, `t // u`, `t % u` | `&t * 3`, `&t / 2`, `&t / &u`, `t.floor_div(&u)`, `&t % &u` | `t / u` gives `Array<f64>`, `//` gives `Array<i64>` |
+| `a.astype('datetime64[s]')` | `a.astype::<np::DateTime64<s>>()` | Calendar-aware for `Y`/`M`; floors for coarser units |
+| `a.astype('int64')` | `a.astype::<i64>()` | Raw counts, `NaT` is `i64::MIN` |
+| `np.arange(start, stop, step)` (datetimes) | `Array::<DateTime64<D>>::arange(start, stop, step)` | `step` is a `TimeDelta64` |
+| `np.datetime_as_string(a)` | `np::datetime_as_string(&a)` | Returns `Vec<String>` |
+| `td.sum()`, `td.mean()`, `td.cumsum()` | `t.sum()`, `t.mean()`, `t.cumsum()` | `NaT` propagates |
+| `np.save('a.npy', dt)` | `np::io::save_npy(path, &a)?` | Header `<M8[D]` / `<m8[ns]` |
+
+## Structured dtypes (v0.2)
+
+| NumPy | rustnum | Notes |
+|---|---|---|
+| `np.dtype([('x', 'f8'), ('y', 'f8')])` | `rustnum::record! { pub struct Point { x: f64, y: f64 } }` | Declarative macro; the struct is the element type. Nested records work |
+| `a = np.array([(1., 2.)], dtype=dt)` | `np::Array::from(vec![Point { x: 1., y: 2. }])` |  |
+| `a['x']` | `a.field::<f64>("x")` | Returns an `Array<f64>` copy; panics on an unknown name or a wrong type |
+| `a['x'] = v` | `a.set_field("x", v)` | `v` broadcasts to the array's shape |
+| `np.argsort(a, order=['x', 'y'])` | `a.argsort_order(&["x", "y"])` | 1-d, stable; unnamed fields break ties in dtype order, like NumPy |
+| `np.sort(a, order='x')` | `a.sort_order(&["x"])` |  |
+| `dt.descr`, `dt.names` | `<Point as np::Record>::descr()`, `<Point as np::Record>::FIELDS` |  |
+| `np.save('a.npy', a)` / `np.load` | `np::io::save_npy(path, &a)?` / `np::io::load_npy::<Point>(path)?` | Structured `descr` both ways; loading another layout is `Error::DType` |
 
 ## More NumPy functions
 
@@ -642,5 +748,5 @@ Added after v0.1. Same conventions as above.
 
 ## Not in v0.1
 
-`float16`, structured and datetime dtypes, masked arrays, memory-mapped files, string arrays,
-multidimensional fancy indexing with index arrays on several axes at once, and `Array<Complex<F>>` element type.
+memory-mapped files and string arrays.
+(Complex arrays, float16/bfloat16, multi-axis fancy indexing, masked arrays, datetime64/timedelta64 and structured dtypes arrived in v0.2.)

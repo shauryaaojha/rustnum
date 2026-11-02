@@ -26,12 +26,15 @@
 mod array;
 mod bitops;
 mod broadcast;
+mod complex_array;
 mod creation;
 mod display;
 mod einsum_path;
 mod element;
 mod extra;
+mod fancy;
 mod functional;
+mod half;
 mod histext;
 mod indexing;
 mod kernels_mem;
@@ -45,17 +48,21 @@ mod npz;
 mod ops;
 mod pool;
 mod printopts;
+mod record;
 mod reduce;
 mod shapeextra;
 mod simd_math;
 mod slicing;
 mod sortsearch;
 mod stride;
+mod timetypes;
 mod ufunc;
 
+pub mod datetime;
 pub mod fft;
 pub mod io;
 pub mod linalg;
+pub mod ma;
 pub mod poly;
 pub mod polynomial;
 pub mod random;
@@ -66,6 +73,7 @@ pub use bitops::{
     packbits, right_shift, unpackbits,
 };
 pub use broadcast::{IntoArray, broadcast_arrays, broadcast_shapes};
+pub use complex_array::{Absolute, absolute};
 pub use creation::*;
 pub use einsum_path::einsum_path;
 pub use element::{Element, Float, Num};
@@ -75,7 +83,11 @@ pub use extra::api::{
     interp, intersect1d, isin, kron, nanquantile, nanquantile_axis, quantile, quantile_axis,
     setdiff1d, setxor1d, trapezoid, union1d,
 };
+pub use fancy::{
+    choose, ix_, put, put_along_axis, ravel_multi_index, take_along_axis, unravel_index,
+};
 pub use functional::{Vectorize, apply_along_axis, apply_over_axes, vectorize};
+pub use half::{bf16, f16};
 pub use histext::{histogram2d, histogramdd};
 pub use indexing::{
     diag_indices, diag_indices_from, fill_diagonal, mask_indices, ndenumerate, ndindex,
@@ -92,6 +104,11 @@ pub use polynomial::{Chebyshev, Hermite, HermiteE, Laguerre, Legendre, Polynomia
 pub use printopts::{
     PrintOptions, PrintOptionsGuard, get_printoptions, printoptions, set_printoptions,
 };
+pub use record::Record;
+#[doc(hidden)]
+pub use record::{
+    __column_text, __compare, __element_text, __npy_descr, __npy_itemsize, __npy_read, __npy_write,
+};
 pub use shapeextra::{
     around, atleast_1d, atleast_2d, atleast_3d, column_stack, dstack, frombuffer, fromiter,
     geomspace, real_if_close, rot90, row_stack, vander,
@@ -99,6 +116,7 @@ pub use shapeextra::{
 pub use slicing::{NEW_AXIS, SliceArg};
 pub use sortsearch::{copyto, extract, flatnonzero, lexsort, piecewise, place, select, trim_zeros};
 pub use stride::{as_strided, sliding_window_view};
+pub use timetypes::{DateTime64, TimeDelta64, datetime_as_string, isnat};
 pub use ufunc::*;
 /// A data error, like NumPy's I/O, parsing, or linear algebra exceptions.
 /// ```

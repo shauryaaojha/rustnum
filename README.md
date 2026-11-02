@@ -94,8 +94,8 @@ The full NumPy to rustnum table is in [`docs/NUMPY_MAPPING.md`](docs/NUMPY_MAPPI
 | GEMM | OpenBLAS / MKL | Packed pure-Rust GEMM with AVX2/FMA fast paths and a portable fallback |
 | File format | `.npy`, `.npz` | `.npy` and CSV (no `.npz`) |
 
-Not in v0.1: a complex dtype (`Complex<F>` exists as a scalar type; `np::fft` returns `(re, im)` pairs),
-`float16`, structured and datetime dtypes, masked arrays, fancy indexing with index arrays on several axes.
+Not in v0.1 (v0.2 adds a complex dtype, `float16`/`bfloat16`, and `np::fft` returns complex arrays): 
+structured and datetime dtypes, masked arrays, fancy indexing with index arrays on several axes.
 
 ## Benchmarks
 

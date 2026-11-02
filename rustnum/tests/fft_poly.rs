@@ -2,6 +2,23 @@
 
 use rustnum as np;
 
+/// Splits a complex result into `(re, im)` real arrays.
+fn pair<F: np::Float>(z: np::Array<np::Complex<F>>) -> (np::Array<F>, np::Array<F>) {
+    (z.real(), z.imag())
+}
+
+/// Builds a complex array from real and imaginary parts.
+fn join(re: &np::Array<f64>, im: &np::Array<f64>) -> np::Array<np::Complex<f64>> {
+    assert_eq!(re.shape(), im.shape());
+    np::Array::from_vec(
+        re.iter()
+            .zip(im.iter())
+            .map(|(r, i)| np::Complex::new(r, i))
+            .collect(),
+        re.shape(),
+    )
+}
+
 fn close(got: &[f64], want: &[f64], tol: f64) {
     assert_eq!(got.len(), want.len(), "length: got {got:?}, want {want:?}");
     for (i, (g, w)) in got.iter().zip(want).enumerate() {
@@ -16,7 +33,7 @@ fn close(got: &[f64], want: &[f64], tol: f64) {
 fn fft_matches_numpy_for_non_power_of_two_lengths() {
     // n = 6 (composite) and n = 7 (prime).
     let x = np::array![1.0, 2.0, -1.0, 0.5, 3.0, -2.5];
-    let (re, im) = np::fft::fft(&x, &np::zeros_like(&x));
+    let (re, im) = pair(np::fft::fft(&x));
     close(
         &re.to_vec(),
         &[3.0, -0.7499999999999998, 0.75, 3.0, 0.75, -0.75],
@@ -35,7 +52,7 @@ fn fft_matches_numpy_for_non_power_of_two_lengths() {
         1e-13,
     );
     let x = np::array![0.5, -1.0, 2.0, 3.5, -0.25, 1.0, 4.0];
-    let (re, im) = np::fft::fft(&x, &np::zeros_like(&x));
+    let (re, im) = pair(np::fft::fft(&x));
     close(
         &re.to_vec(),
         &[
@@ -74,9 +91,9 @@ fn fft_ifft_round_trip() {
             &[n],
         );
         let im = np::Array::from_vec((0..n).map(|i| (i as f64 * 1.3).cos()).collect(), &[n]);
-        let (fr, fi) = np::fft::fft(&re, &im);
+        let (fr, fi) = pair(np::fft::fft(&join(&re, &im)));
         assert_eq!(fr.shape(), &[n]);
-        let (br, bi) = np::fft::ifft(&fr, &fi);
+        let (br, bi) = pair(np::fft::ifft(&join(&fr, &fi)));
         close(&br.to_vec(), &re.to_vec(), 1e-12);
         close(&bi.to_vec(), &im.to_vec(), 1e-12);
     }
@@ -85,10 +102,10 @@ fn fft_ifft_round_trip() {
 #[test]
 fn fft_batches_over_leading_axes() {
     let m = np::array![[1.0, 2.0, 3.0, 4.0], [0.0, -1.0, 0.5, 2.0]];
-    let (re, im) = np::fft::fft(&m, &np::zeros_like(&m));
+    let (re, im) = pair(np::fft::fft(&m));
     assert_eq!(re.shape(), &[2, 4]);
     let row = np::array![1.0, 2.0, 3.0, 4.0];
-    let (r0, i0) = np::fft::fft(&row, &np::zeros_like(&row));
+    let (r0, i0) = pair(np::fft::fft(&row));
     assert_eq!(&re.to_vec()[..4], r0.to_vec().as_slice());
     assert_eq!(&im.to_vec()[..4], i0.to_vec().as_slice());
 }
@@ -96,7 +113,7 @@ fn fft_batches_over_leading_axes() {
 #[test]
 fn rfft_shapes_and_values() {
     let x = np::array![1.0, 2.0, -1.0, 0.5, 3.0, -2.5];
-    let (re, im) = np::fft::rfft(&x);
+    let (re, im) = pair(np::fft::rfft(&x));
     assert_eq!(re.shape(), &[4]);
     assert_eq!(im.shape(), &[4]);
     close(&re.to_vec(), &[3.0, -0.75, 0.75, 3.0], 1e-13);
@@ -107,7 +124,7 @@ fn rfft_shapes_and_values() {
     );
 
     let x = np::array![0.5, -1.0, 2.0, 3.5, -0.25, 1.0, 4.0];
-    let (re, im) = np::fft::rfft(&x);
+    let (re, im) = pair(np::fft::rfft(&x));
     assert_eq!(re.shape(), &[4]);
     close(
         &re.to_vec(),
@@ -136,7 +153,7 @@ fn rfft_shapes_and_values() {
         [0.0, -1.0, 0.5, 2.0],
         [3.0, 3.0, -2.0, 1.0]
     ];
-    let (re, im) = np::fft::rfft(&m);
+    let (re, im) = pair(np::fft::rfft(&m));
     assert_eq!(re.shape(), &[3, 3]);
     close(
         &re.to_vec(),
@@ -157,8 +174,8 @@ fn irfft_recovers_even_and_odd_lengths() {
         np::array![0.5, -1.0, 2.0, 3.5, -0.25, 1.0, 4.0],
     ] {
         let n = x.len();
-        let (re, im) = np::fft::rfft(&x);
-        let back = np::fft::irfft(&re, &im, n);
+        let (re, im) = pair(np::fft::rfft(&x));
+        let back = np::fft::irfft(&join(&re, &im), Some(n));
         assert_eq!(back.shape(), &[n]);
         close(&back.to_vec(), &x.to_vec(), 1e-13);
     }
@@ -171,7 +188,7 @@ fn fft2_and_ifft2() {
         [0.0, -1.0, 0.5, 2.0],
         [3.0, 3.0, -2.0, 1.0]
     ];
-    let (re, im) = np::fft::fft2(&m, &np::zeros_like(&m));
+    let (re, im) = pair(np::fft::fft2(&m));
     assert_eq!(re.shape(), &[3, 4]);
     close(
         &re.to_vec(),
@@ -209,7 +226,7 @@ fn fft2_and_ifft2() {
         ],
         1e-13,
     );
-    let (br, bi) = np::fft::ifft2(&re, &im);
+    let (br, bi) = pair(np::fft::ifft2(&join(&re, &im)));
     close(&br.to_vec(), &m.to_vec(), 1e-13);
     close(&bi.to_vec(), &[0.0; 12], 1e-13);
 }
@@ -239,15 +256,15 @@ fn freq_and_shift() {
 #[test]
 fn f32_arrays_work() {
     let x: np::Array<f32> = np::array![1.0f32, 2.0, 3.0, 4.0];
-    let (re, im) = np::fft::fft(&x, &np::zeros_like(&x));
+    let (re, im) = pair(np::fft::fft(&x));
     assert_eq!(re.to_vec(), vec![10.0f32, -2.0, -2.0, -2.0]);
     assert_eq!(im.to_vec(), vec![0.0f32, 2.0, 0.0, -2.0]);
 }
 
 #[test]
-#[should_panic(expected = "same shape")]
-fn fft_rejects_mismatched_parts() {
-    let _ = np::fft::fft(&np::array![1.0, 2.0], &np::array![1.0, 2.0, 3.0]);
+#[should_panic(expected = "axis -1 is out of bounds")]
+fn fft_rejects_zero_dimensional_input() {
+    let _ = np::fft::fft(&np::Array::scalar(1.0));
 }
 
 #[test]
@@ -341,4 +358,135 @@ fn roots_match_numpy() {
         &[0.0, 1.5468688872313967, -1.5468688872313967],
         1e-12,
     );
+}
+
+fn signal() -> np::Array<np::Complex<f64>> {
+    let c = np::Complex::new;
+    np::array![
+        c(1.0, 2.0),
+        c(-0.5, 0.25),
+        c(3.0, -1.0),
+        c(0.75, 4.0),
+        c(-2.0, 0.0),
+        c(1.5, -1.5)
+    ]
+}
+
+#[test]
+fn complex_input_matches_numpy() {
+    let z = signal();
+    let y = np::fft::fft(&z);
+    assert_eq!(y.dtype(), "complex128");
+    close(
+        &y.real().to_vec(),
+        &[
+            3.75,
+            0.899519052838329,
+            3.131569860407206,
+            0.25,
+            -1.6315698604072062,
+            -0.399519052838329,
+        ],
+        1e-13,
+    );
+    close(
+        &y.imag().to_vec(),
+        &[
+            3.75,
+            -4.723076211353316,
+            13.18717782649107,
+            -1.7499999999999998,
+            1.0628221735089296,
+            0.4730762113533158,
+        ],
+        1e-13,
+    );
+    let b = np::fft::ifft(&z);
+    close(
+        &b.real().to_vec(),
+        &[
+            0.625,
+            -0.06658650880638817,
+            -0.27192831006786766,
+            0.041666666666666664,
+            0.5219283100678677,
+            0.14991984213972148,
+        ],
+        1e-13,
+    );
+    close(
+        &b.imag().to_vec(),
+        &[
+            0.625,
+            0.07884603522555267,
+            0.17713702891815492,
+            -0.29166666666666674,
+            2.197862971081845,
+            -0.7871793685588859,
+        ],
+        1e-13,
+    );
+    let y2 = np::fft::fft2(&z.reshape(&[2, 3]));
+    close(
+        &y2.real().to_vec(),
+        &[
+            3.75,
+            3.131569860407206,
+            -1.6315698604072062,
+            3.25,
+            -1.4665063509461098,
+            -1.0334936490538902,
+        ],
+        1e-13,
+    );
+    close(
+        &y2.imag().to_vec(),
+        &[
+            3.75,
+            13.18717782649107,
+            1.0628221735089296,
+            -1.25,
+            -2.375,
+            -2.375,
+        ],
+        1e-13,
+    );
+}
+
+#[test]
+fn irfft_of_complex_half_spectrum_matches_numpy() {
+    let half = np::Array::from_vec(signal().to_vec()[..4].to_vec(), &[4]);
+    close(
+        &np::fft::irfft(&half, None).to_vec(),
+        &[
+            1.125,
+            -0.3251603157205569,
+            -0.485843918243516,
+            1.2083333333333333,
+            0.23584391824351605,
+            -0.7581730176127763,
+        ],
+        1e-13,
+    );
+    close(
+        &np::fft::irfft(&half, Some(5)).to_vec(),
+        &[
+            1.2000000000000002,
+            -0.6926153428374526,
+            0.2934226603776177,
+            1.1718249238722351,
+            -0.9726322414124002,
+        ],
+        1e-13,
+    );
+}
+
+#[test]
+fn complex64_transform_stays_complex64() {
+    let z = signal().astype::<np::Complex<f32>>();
+    let y = np::fft::fft(&z);
+    assert_eq!(y.dtype(), "complex64");
+    assert!((y.real().to_vec()[0] - 3.75).abs() < 1e-5);
+    let back = np::fft::ifft(&y);
+    assert!((back.real().to_vec()[3] - 0.75).abs() < 1e-5);
 }

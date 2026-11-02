@@ -389,6 +389,9 @@ impl<T: Num> Array<T> {
     /// assert_eq!(np::array![1,2,3].sum(),6);
     /// ```
     pub fn sum(&self) -> T {
+        if crate::half::is_half::<T>() {
+            return T::from_f64(self.astype::<f32>().sum().to_f64());
+        }
         if let Some(s) = self.as_slice() {
             pairwise(s)
         } else {
@@ -430,6 +433,9 @@ impl<T: Num> Array<T> {
     /// assert_eq!(a.sum_axis(1).to_vec(),[3.,7.]);
     /// ```
     pub fn sum_axis(&self, axis: isize) -> Array<T> {
+        if crate::half::is_half::<T>() {
+            return self.astype::<f32>().sum_axis(axis).astype::<T>();
+        }
         let axis = axis_index(axis, self.ndim());
         if let Some(input) = self.as_slice() {
             let inner = crate::layout::size(&self.shape[axis + 1..]);
@@ -584,6 +590,9 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1.,2.,3.].mean(),2.);
     /// ```
     pub fn mean(&self) -> F {
+        if crate::half::is_half::<F>() {
+            return F::from_f64(self.astype::<f32>().mean().to_f64());
+        }
         self.sum() / F::from_usize(self.size())
     }
     /// Implements np.var with array value semantics.
@@ -611,6 +620,9 @@ impl<F: Float> Array<F> {
     /// assert_eq!(np::array![1.,3.].var_ddof(1),2.);
     /// ```
     pub fn var_ddof(&self, ddof: usize) -> F {
+        if crate::half::is_half::<F>() {
+            return F::from_f64(self.astype::<f32>().var_ddof(ddof).to_f64());
+        }
         let m = self.mean();
         pairwise_by(self.size(), &|i| {
             let d = self.flat_value(i) - m;
@@ -634,6 +646,9 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.mean_axis(1).to_vec(),[1.5,3.5]);
     /// ```
     pub fn mean_axis(&self, axis: isize) -> Array<F> {
+        if crate::half::is_half::<F>() {
+            return self.astype::<f32>().mean_axis(axis).astype::<F>();
+        }
         let n = self.shape[axis_index(axis, self.ndim())];
         self.sum_axis(axis).into_map(|x| x / F::from_usize(n))
     }
@@ -667,6 +682,9 @@ impl<F: Float> Array<F> {
     /// assert_eq!(a.var_ddof_axis(1,1).to_vec(),[0.5,0.5]);
     /// ```
     pub fn var_ddof_axis(&self, axis: isize, ddof: usize) -> Array<F> {
+        if crate::half::is_half::<F>() {
+            return self.astype::<f32>().var_ddof_axis(axis, ddof).astype::<F>();
+        }
         self.axis_kernel(axis, |base, step, n| {
             let value = |i| self.data[(base as isize + i as isize * step) as usize];
             let mean = pairwise_by(n, &value) / F::from_usize(n);

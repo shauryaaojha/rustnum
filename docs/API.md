@@ -1,4 +1,4 @@
-# rustnum v0.1 API contract
+# rustnum API contract (v0.1 core; v0.2 additions are sections 22 onward)
 
 This is the binding contract for the final v0.1 code. Names and behavior follow NumPy unless this document states otherwise; misuse panics with NumPy-style wording, while I/O, parsing, singular matrices, non-positive-definite matrices, and solver non-convergence return `rustnum::Result` where the signature permits it.
 
@@ -14,9 +14,9 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 1. Element types and errors
 
-- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, and `bool`.
-- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, and `usize`.
-- `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32` and `f64`.
+- `Element: Copy + Clone + Send + Sync + Debug + Default + PartialEq + PartialOrd + 'static` exposes `DTYPE`, `to_f64`, and `from_f64` (plus defaulted `to_complex_parts`/`from_complex_parts` for `astype` and the `.npy` hooks `npy_descr`/`npy_itemsize`/`npy_write`/`npy_read`); implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `bool`, and (v0.2) `Complex<f32>` (`complex64`), `Complex<f64>` (`complex128`), `f16` (`float16`) and `bf16` (bfloat16).
+- `Num: Element + Add + Sub + Mul + Div + Rem` exposes `ZERO`, `ONE`, `MIN_VALUE`, `MAX_VALUE`, `abs`, and `from_usize`; implementations are `f32`, `f64`, `i32`, `i64`, `u8`, `usize`, `Complex<F>`, `f16` and `bf16`.
+- `Float: Num + Neg` exposes floating constants and elementary operations; the sealed implementations are `f32`, `f64`, `f16` and `bf16` (the 16-bit types compute through `f32`).
 - `Error` variants are `Shape(String)`, `DType { expected: String, found: String }`, `Singular`, `NotPositiveDefinite`, `Io(std::io::Error)`, `Parse(String)`, `Format(String)`, and `NoConvergence(String)`.
 - `type Result<T> = std::result::Result<T, Error>`.
 
@@ -186,13 +186,14 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 14. FFT (`np::fft`)
 
-- v0.1 complex arrays are represented by equal-shaped `(re, im)` real arrays; transforms use NumPy's default backward normalization and operate on the last axis.
-- `fft<F: Float>(&re, &im)` and `ifft<F: Float>(&re, &im)` return `(Array<F>, Array<F>)`.
-- `rfft<F: Float>(&a) -> (Array<F>, Array<F>)` returns `n/2 + 1` bins and `irfft<F: Float>(&re, &im, n: usize) -> Array<F>` requires the output length.
-- `fft2<F: Float>(&re, &im)` and `ifft2<F: Float>(&re, &im)` transform the last two axes.
+- v0.2 follows NumPy: every transform takes a real or a complex array (trait `FftInput`, implemented for `Array<F>` and `Array<Complex<F>>`) and returns a complex array; transforms use NumPy's default backward normalization and operate on the last axis (the last two for the `2` forms). `f64` input gives `complex128`, `f32` gives `complex64`.
+- `fft<A: FftInput>(&a)` and `ifft<A: FftInput>(&a)` return `Array<Complex<A::Real>>`.
+- `rfft<F: Float>(&a) -> Array<Complex<F>>` returns `n/2 + 1` bins and `irfft<A: FftInput>(&a, n: Option<usize>) -> Array<A::Real>`; `None` means NumPy's default `2 * (m - 1)`.
+- `fft2<A: FftInput>(&a)` and `ifft2<A: FftInput>(&a)` transform the last two axes.
 - `fftfreq<F: Float>(n, d)` and `rfftfreq<F: Float>(n, d)` return `Array<F>`.
-- `fftshift<T: Element>(&a)` and `ifftshift<T: Element>(&a)` shift every axis and return `Array<T>`.
+- `fftshift<T: Element>(&a)` and `ifftshift<T: Element>(&a)` shift every axis and return `Array<T>`; they work on complex arrays.
 - Length zero panics; radix-2 and Bluestein kernels support every positive length without external dependencies.
+- Breaking change from v0.1: the `(re, im)` pair signatures are gone.
 
 ## 15. Polynomials (`np::poly`)
 
@@ -216,7 +217,7 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 17. Scalar complex numbers
 
-- `Complex<F> { pub re: F, pub im: F }` is a scalar type for `F = f32 | f64`; it is not an `Element`, so v0.1 has no `Array<Complex<F>>` dtype.
+- `Complex<F> { pub re: F, pub im: F }` is a scalar type for `F = f32 | f64`; since v0.2 it is also an `Element` and a `Num` (section 22).
 - Constructors are `Complex::new`, `from_real`, `from_polar`, and `i`.
 - Methods are `conj`, `norm`, `norm_sqr`, `arg`, `is_nan`, `is_infinite`, `is_finite`, `exp`, `ln`, `sqrt`, `powc`, `powf`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, and `cmp_numpy`.
 - Operators are complex/complex and complex/real `+`, `-`, `*`, `/`, unary `-`, and their assignment forms; branch cuts follow signed zero.
@@ -230,8 +231,8 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 
 ## 19. Deliberate v0.1 limits
 
-- Not supported as array dtypes: complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
-- Not supported: memory mapping, fancy multi-axis advanced indexing, FFT axis/pad/crop options, and the omitted keyword-rich statistics options documented above.
+- Not supported as array dtypes (v0.1 list, see sections 33 onward for what v0.2 added): complex, float16/bfloat16, structured/record, object, datetime, masked, and string values.
+- Not supported: memory mapping, FFT axis/pad/crop options, and the omitted keyword-rich statistics options documented above.
 - Views have copy-on-write value semantics and never mutate a parent array; use explicit assignment methods to mutate selected data.
 
 ## 20. In-place and consuming operations
@@ -326,3 +327,77 @@ Conventions: `T: Element`, `N: Num`, `F: Float`, `LF: linalg::LinalgFloat`, `a` 
 - Series manipulation: `degree() -> usize`, `cutdeg(deg)`, `trim(tol)`, and `truncate(size)`.
 - Display: formats polynomial terms matching NumPy (e.g., `1.0 + 2.0 x + 3.0 x**2`, `1.0 + 2.0 T_1(x) + 3.0 T_2(x)`).
 - Submodules: `np::polynomial::polynomial`, `chebyshev`, `legendre`, `laguerre`, `hermite`, `hermite_e`, and `polyutils` provide free functions (`*val`, `*fit`, `*der`, `*int`, `*roots`, `*gauss`, `*vander`, `*line`, `*add`, `*sub`, `*mul`, `*div`, `*pow`, `*fromroots`, `*trim`, `*weight`, `poly2*`, `*2poly`).
+
+## 33. Complex arrays (v0.2)
+
+- `Complex<f32>` is NumPy `complex64` and `Complex<f64>` is `complex128`; `Array<Complex<F>>` is an ordinary array (`DTYPE` is `"complex64"`/`"complex128"`). Elements are ordered lexicographically on `(re, im)`, so `sort`, `argsort`, `min`, `max`, `argmin`, `argmax` and comparisons follow NumPy.
+- `Complex<F>` implements `Element` and `Num`, so every `Num` routine works: operators with broadcasting, `sum`, `prod`, `cumsum`, `cumprod`, `sum_axis`, `matmul`, `dot`, `trace`, `outer`, `einsum`, `square`, `power` (complex exponents). `%` panics, as NumPy raises.
+- Mixed operands: `Array<Complex<F>>` with `Array<F>` (either side), with a real scalar `F` (either side, concrete `f32`/`f64` on the left), and with a `Complex<F>` scalar. The real operand is promoted to `x + 0j`.
+- Methods on `Array<Complex<F>>`: `real()`, `imag()`, `conj()`, `angle()`, `angle_deg()`, `exp`, `log`, `log2`, `log10`, `sqrt`, `sin`, `cos`, `tan`, `sinh`, `cosh`, `tanh`, `is_nan`, `is_inf`, `is_finite`, `mean`, `mean_axis`, and `vdot(&other)` (conjugates the first argument; `linalg::vdot` is generic and does not).
+- `absolute<A: Absolute>(&a) -> Array<A::Output>` is `np.absolute`/`np.abs`: real output for complex input. (`Array::abs()` on complex data comes from `Num::abs` and returns `|z| + 0j` as a complex array.)
+- `astype` between `Complex<f32>`, `Complex<f64>` and real types keeps both parts between complex dtypes, gives `x + 0j` from real and drops the imaginary part towards real.
+- Display follows NumPy: `[1.+2.j 3.-4.j]`, `Debug` is `array([...], dtype=complex128)`.
+- I/O: `.npy`/`.npz` `<c8` and `<c16` read and write through the usual `np::io` functions.
+- Not done: complex `np::linalg` (`solve`, `inv`, `eig` with complex input), complex `std`/`var`, arcsin/arccos/arctan on complex arrays, `np::poly::roots` still returns `(re, im)` pairs.
+
+## 34. float16 and bfloat16 (v0.2)
+
+- `np::f16` is IEEE 754 binary16 (NumPy `float16`, `DTYPE` `"float16"`) and `np::bf16` is bfloat16 (`"bfloat16"`). Both are 16-bit `Copy` types: `from_bits`/`to_bits`, `from_f32`/`from_f64` (round to nearest, ties to even; `from_f64` rounds once), `to_f32`/`to_f64` (exact), `is_nan`/`is_infinite`/`is_finite`, and the constants `MAX`, `MIN`, `EPSILON`, `INFINITY`, `NEG_INFINITY`, `NAN`. They implement `Element`, `Num` and `Float`, so every `Array<T: Num>` and `Array<F: Float>` routine works. NaN, infinities, signed zeros and subnormals behave like NumPy.
+- Arithmetic and elementary functions compute in `f32` and round the result once, like NumPy. `sum`, `sum_axis`, `mean`, `mean_axis`, `var`, `std` accumulate in `f32` and round once at the end (NumPy's behaviour); `cumsum` and `prod` round at every step.
+- `astype` between `f32` and `f16`/`bf16` is a bulk conversion that uses the x86 F16C instructions (`_mm256_cvtph_ps`/`_mm256_cvtps_ph`, eight lanes, detected at run time with `is_x86_feature_detected!`) and a scalar fallback elsewhere. `f16::slice_from_f32(&[f32], &mut [f16])`, `f16::slice_to_f32` and `f16::slice_from_f32_scalar` expose the slice kernels.
+- Display follows NumPy's shortest-unique-digits rule (`[1.00e-01 1.50e+00 6.55e+04]`); `Display` of a scalar prints the shortest round-trip decimal (`0.1`).
+- I/O: `f16` reads and writes `.npy`/`.npz` `<f2`. NumPy has no bfloat16 dtype, so `bf16` has no `.npy` encoding: saving one returns `Error::DType`.
+- Limit: `matmul`/`dot` use the generic loop and round every partial sum to 16 bits, whereas NumPy accumulates `float16` products in `float32`. Cast to `f32` first for accurate products.
+
+## 35. Advanced (integer-array) indexing (v0.2)
+
+- Design: the index tuple stays `a.slice(&np::s![...])`. `SliceArg` gained a variant `Fancy { shape, values }` and `s!` accepts, next to integers, ranges and `np::NEW_AXIS`, an integer array in any of these forms: an array literal or `Vec` (`[0, 2]`, `vec![1usize, 3]`), a reference to an `Array<i64 | i32 | usize>` (`&idx`), or a 1-d `&Array<bool>` mask. `a.slice(&np::s![[0, 2], [1, 3]])` is NumPy `a[[0, 2], [1, 3]]`; `a.slice(&np::s![[0, 1], .., [1, 3]])` is `a[[0, 1], :, [1, 3]]`.
+- The assign form is `a.slice_assign(&np::s![[0, 2], [1, 3]], values)`, NumPy `a[[0, 2], [1, 3]] = values` (values broadcast to the result shape; when an index repeats the last write wins).
+- Rules follow NumPy: index arrays broadcast together; negative values count from the end; plain integers next to an array take part in the broadcast; if all advanced indices (arrays and integers) are adjacent the broadcast dimensions replace them in place, otherwise (a slice or `np::NEW_AXIS` between them) they go to the front of the result. The result is always a copy. Out-of-range values panic with `index 5 is out of bounds for axis 0 with size 3`; non-broadcastable arrays panic with NumPy's `shape mismatch: indexing arrays could not be broadcast together with shapes ...`.
+- Functions at the crate root: `ix_(&[&[i64]]) -> Vec<Array<i64>>` (open mesh; index with `&ix[k]`), `take_along_axis(&a, &indices, axis)`, `put_along_axis(&mut a, &indices, values, axis)`, `put(&mut a, ind, v)` (flat, cyclic `v`), `choose(&a_idx, &[&choice, ...])`, `ravel_multi_index(&[&coords...], &dims) -> Array<i64>`, `unravel_index(&flat, &shape) -> Vec<Array<i64>>`. Index arrays are `i64` (NumPy's `intp`). `put`/`ravel_multi_index` only support `mode='raise'`.
+- Not done: a boolean mask with more than one dimension inside a tuple (use `Array::mask`), `np.take`/`np.put` `mode='wrap'`/`'clip'`.
+
+## 36. Masked arrays, `np::ma` (v0.2)
+
+- `np::ma` mirrors `numpy.ma`. `MaskedArray<T: Element>` couples `Array<T>` data with an optional `Array<bool>` mask (`true` = masked). `None` is `nomask`: unmasked work takes the plain-array path, and a mask that becomes all-`false` is dropped.
+- Construction: `masked_array(data, Option<mask>)`, `masked_where(&cond, a)`, `masked_equal`, `masked_not_equal`, `masked_greater`, `masked_greater_equal`, `masked_less`, `masked_less_equal`, `masked_inside`, `masked_outside`, `masked_values(x, value, rtol, atol)`, `masked_invalid`. The inputs are any `IntoMasked` (plain or masked, owned or borrowed), so constructors chain.
+- Accessors: `getdata`, `getmask` (always a full boolean array; `a.mask()` returns `Option` to tell `nomask`), `filled(&a, v)`, `compressed`, `count`, `is_masked`, `default_fill_value::<T>()` (`1e20` floats, `999999` ints, `True` bool). Methods: `data()`, `mask()`, `set_mask`, `fill_value`, `set_fill_value`, `shape`, `ndim`, `size`, `dtype`, `count`, `count_axis`, `filled`, `compressed`, `get(&[i])` (`None` when masked), `set`, `set_masked`, `astype`, `slice`, `reshape`, `t`, `ravel`, `copy`.
+- Arithmetic: `+ - * /` between masked arrays, plain arrays and scalars, with broadcasting; masks are or-ed. Division masks zero (and overflowing) results like NumPy's domain handling, `-a`, `abs`, `square`, and `exp sin cos tanh` (float) plus `sqrt log log2 log10 arcsin arccos` which mask out-of-domain inputs. The data under a mask keeps the first operand's value, as in NumPy.
+- Reductions ignore masked values: `sum prod min max argmin argmax` (`Option<T>` for the whole-array form, `None` when everything is masked) and `*_axis` forms (return a `MaskedArray`; lanes that are entirely masked stay masked); floats also have `mean std var` (`var_ddof`, `std_ddof`, `*_axis`, `var_ddof_axis`).
+- Display uses NumPy's text: `[1.0 -- 3.0 4.0]`; `Debug` prints `masked_array(data=..., mask=..., fill_value=...)`.
+- Not done: comparison operators returning masked booleans, `np.ma.concatenate`/`stack`, `sort`, `cumsum`, `anom`, `median`, `harden_mask`/`soften_mask`, structured masked arrays, and masked complex math.
+
+## 37. datetime64 and timedelta64 (v0.2)
+
+- The unit is part of the type. `np::DateTime64<U>` is `datetime64[U]` and `np::TimeDelta64<U>` is `timedelta64[U]`, where `U` is one of the marker types in `np::datetime`: `Y M W D h m s ms us ns` (so `Array<DateTime64<datetime::D>>` has `dtype='datetime64[D]'`). Both are `Copy` wrappers over an `i64` count since 1970-01-01T00:00 and are array elements (`Element`), so `Array`, `astype`, `sort`, `argsort`, comparisons, `.npy`/`.npz` work on them.
+- `NaT` is `i64::MIN`: `DateTime64::NAT`, `is_nat()`, `np::isnat(&a)`. `NaT` never equals anything (not even itself), compares false under `< <= > >=`, sorts last and propagates through arithmetic, as in NumPy.
+- Scalars: `DateTime64::<U>::new(count)`, `.value()`, `parse("2024-03-05T10:20")` / `"...".parse()` (ISO 8601; a string finer than the unit is an error, a coarser one widens), `.cast::<V>()` (calendar-aware for `Y`/`M`; floors toward minus infinity). `TimeDelta64::<U>::new`, `.value()`, `.cast::<V>()` (a year is 365.2425 days, a month 30.436875 days, as in NumPy), `.floor_div(other)`.
+- Arithmetic (within one unit): `dt - dt = td`, `dt +- td`, `td + dt`, `td +- td`, `-td`, `td * i64` / `td * f64`, `td / i64` / `td / f64` (truncate toward zero), `td / td = f64`, `td % td` (sign of the divisor, zero divisor gives `NaT`), `td.floor_div(td) = i64`. Array versions of all of these broadcast. `Array<TimeDelta64>` also has `sum`, `mean`, `cumsum`, `floor_div`.
+- Mixed units are not promoted automatically: convert with `a.astype::<DateTime64<ns>>()` first (NumPy would pick the finer unit for you).
+- `astype` between units, to and from `i64`/`f64` (the integer path is exact; NaN becomes `NaT`; `NaT` becomes `i64::MIN`).
+- Creation: `Array::<DateTime64<U>>::arange(start, stop, step: TimeDelta64<U>)`, `Array::<TimeDelta64<U>>::arange(start, stop, step)`.
+- Text: `np::datetime_as_string(&a) -> Vec<String>` (NumPy returns a string array; there are no string arrays here). `Display`/`Debug` of arrays and scalars follow NumPy: `['2024-01-01'        'NaT']`, `array([...], dtype='datetime64[D]')`, `array(5, dtype='timedelta64[D]')`, scalar `numpy.datetime64('2024-01-01')`, `5 days`.
+- I/O: `.npy`/`.npz` `<M8[unit]` and `<m8[unit]` both ways; reading with the wrong unit or kind is an `Error::DType`.
+- Not done: `busday_*`, `datetime64` with a unit multiplier (`m8[3D]`), timezone-free generic units, `np.datetime64('now')`, timedelta `min/max`, and automatic unit promotion in mixed-unit arithmetic.
+- `repr` of any array now moves `dtype=...` to its own line and wraps rows one column earlier when the line passes `linewidth`, like `numpy.array_repr`.
+
+## 38. Structured dtypes, `record!` (v0.2)
+
+- `rustnum::record! { pub struct Point { x: f64, y: f64 } }` defines a plain `Copy` struct and makes it an array element, like `np.dtype([('x', 'f8'), ('y', 'f8')])`. It is a declarative macro (no proc-macro crate). Field types are array elements with a `.npy` encoding: `f32 f64 i32 i64 u8 usize bool`, `Complex<f32|f64>`, `f16`, `DateTime64<U>`, `TimeDelta64<U>`, or another record (nested dtypes). The struct derives `Clone Copy Debug Default PartialEq`, and `PartialOrd` is lexicographic in field order (NumPy's structured comparison). Attributes and doc comments on the struct and its fields are kept.
+- The generated type implements `np::Record`: `FIELDS` (names in order) and `descr()` (`"[('x', '<f8'), ('y', '<f8')]"`).
+- Field access on `Array<R>`: `a.field::<f64>("x")` returns an `Array<f64>` copy, like `a['x']`; `a.set_field("x", values)` assigns a whole field and broadcasts, like `a['x'] = values`. An unknown name or a wrong field type panics. (Per-element access is the struct field: `a.get(&[i]).x`.)
+- Sorting: `a.argsort_order(&["x", "y"])` and `a.sort_order(&["x"])` are `np.argsort(a, order=[...], kind='stable')` / `np.sort(a, order=[...])` for 1-d arrays. Fields not named still break ties in declaration order, as in NumPy; NaN sorts last. Plain `a.sort()` / `a.argsort()` compare all fields in order.
+- I/O: `.npy`/`.npz` carry the structured `descr` (`{'descr': [('x', '<f8'), ('y', '<f8')], ...}`) both ways, nested dtypes included, packed (no alignment padding), little-endian. Loading checks the `descr` and returns `Error::DType` when it differs.
+- Display follows NumPy: `[(3., 1.) (1., 2.)]`, and `Debug` prints `array([...], dtype=[('x', '<f8'), ('y', '<f8')])` (bool fields appear as `'?'`).
+- Not done: byte-string / unicode fields, subarray fields (`('v', 'f8', (3,))`), aligned dtypes (`align=True`), field titles and offsets, multi-field index `a[['x', 'y']]`, record arrays attribute access (`np.recarray`), `argsort_order` on n-d arrays, and `Array<R>` arithmetic (records are not numbers).
+
+## 39. Python bindings, `rustnum-py` (v0.2)
+
+- Workspace crate `rustnum-py/` (PyO3 0.30, `abi3-py39`, `generate-import-lib` so the windows-gnu toolchain links without a Python development install). It is a workspace member but not a default member: `cargo fmt/clippy/test/doc` at the root never need Python. Build it with `cargo build --release -p rustnum-py` or `maturin build --release` in `rustnum-py/`; the Python module is `rustnum_py` (`import rustnum_py as rn`).
+- `rn.ndarray` wraps `Array<f64>`, `Array<f32>`, `Array<i64>` or `Array<bool>` (dtypes `float64 float32 int64 bool`). `rn.array`/`asarray` accept lists, NumPy arrays (float32 stays float32) and scalars.
+- Creation: `zeros ones empty full eye arange linspace`. Operators `+ - * / ** < <= > >= == !=` with NumPy promotion and broadcasting, `@`, indexing and slicing (ints, slices, `...`, `None`, integer-array fancy indexing) with assignment, `astype`, `reshape`, `T`, `transpose`, `ravel`, `flatten`, `squeeze`, `copy`, `clip`, `item`, `tolist`.
+- Reductions (method and function forms, `axis=`): `sum prod mean std var min max argmin argmax cumsum all any`; functions `exp log sqrt sin cos tan tanh abs floor ceil maximum minimum where concatenate stack dot matmul`.
+- `rn.linalg`: `solve inv det norm cholesky qr svd eigh pinv`. `rn.random`: `seed rand randn normal uniform randint`.
+- `numpy.asarray(x)` works without copying through `__array_interface__` (read-only view that keeps `x` alive). The buffer protocol is not offered because PyO3 supports `__getbuffer__` on the stable ABI only from Python 3.11, and the crate targets `abi3-py39`.
+- Rust panics (NumPy-style misuse messages) become `ValueError` (`IndexError` for out-of-bounds); data errors (singular matrix) become `ValueError`.
+- Not done: dtypes other than the four above (no complex, float16, datetimes or structured arrays yet), `numpy` crate interop, and most of `np.linalg`/`np.random` beyond the lists above.

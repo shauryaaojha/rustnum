@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
-members = ["rustnum"]
+members = ["rustnum", "rustnum-py"]
+default-members = ["rustnum"]
 
 [workspace.package]
 edition = "2024"

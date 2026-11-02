@@ -14,7 +14,7 @@ fn raw<T: Element>(x: T) -> String {
         }
     } else {
         let text = format!("{x:?}").to_lowercase();
-        if T::DTYPE.starts_with("float")
+        if crate::element::is_float_dtype(T::DTYPE)
             && let Some((mantissa, exponent)) = text.split_once('e')
         {
             let exp = exponent.parse::<i32>().unwrap();
@@ -31,6 +31,10 @@ fn raw<T: Element>(x: T) -> String {
 fn shortest<T: Element>(x: T) -> String {
     if let Some(x) = (&x as &dyn Any).downcast_ref::<f32>() {
         x.to_string().to_lowercase()
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::f16>() {
+        x.to_string().to_lowercase()
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::bf16>() {
+        x.to_string().to_lowercase()
     } else {
         x.to_f64().to_string().to_lowercase()
     }
@@ -38,8 +42,56 @@ fn shortest<T: Element>(x: T) -> String {
 fn scientific<T: Element>(x: T) -> String {
     if let Some(x) = (&x as &dyn Any).downcast_ref::<f32>() {
         format!("{x:e}")
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::f16>() {
+        format!("{x:e}")
+    } else if let Some(x) = (&x as &dyn Any).downcast_ref::<crate::bf16>() {
+        format!("{x:e}")
     } else {
         format!("{:e}", x.to_f64())
+    }
+}
+fn complex_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
+    // NumPy formats the real and imaginary parts as two independent float columns; the
+    // imaginary column always carries a sign and the `j` goes right after the digits.
+    fn columns<F: Element>(re: Vec<F>, im: Vec<F>, o: &PrintOptions) -> Vec<String> {
+        let re_text = format_values(&re, o);
+        let neg: Vec<bool> = im
+            .iter()
+            .map(|x| x.to_f64().is_sign_negative() && !x.to_f64().is_nan())
+            .collect();
+        let im_abs: Vec<F> = im.iter().map(|&x| F::from_f64(x.to_f64().abs())).collect();
+        // The imaginary part carries its own sign, so the `sign` option applies to the real part only.
+        let plain = PrintOptions {
+            sign: '-',
+            ..o.clone()
+        };
+        let im_text = format_values(&im_abs, &plain);
+        re_text
+            .into_iter()
+            .zip(im_text)
+            .zip(neg)
+            .map(|((r, i), n)| {
+                let trimmed = i.trim_end();
+                let pad = &i[trimmed.len()..];
+                let lead = trimmed.trim_start();
+                let left = &trimmed[..trimmed.len() - lead.len()];
+                format!("{r}{left}{}{lead}j{pad}", if n { '-' } else { '+' })
+            })
+            .collect()
+    }
+    let parts: Vec<(f64, f64)> = values.iter().map(|v| v.to_complex_parts()).collect();
+    if T::DTYPE == "complex64" {
+        columns(
+            parts.iter().map(|p| p.0 as f32).collect(),
+            parts.iter().map(|p| p.1 as f32).collect(),
+            o,
+        )
+    } else {
+        columns(
+            parts.iter().map(|p| p.0).collect(),
+            parts.iter().map(|p| p.1).collect(),
+            o,
+        )
     }
 }
 fn signed(s: String, o: &PrintOptions) -> String {
@@ -49,8 +101,22 @@ fn signed(s: String, o: &PrintOptions) -> String {
         s
     }
 }
-fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
-    if !T::DTYPE.starts_with("float") {
+pub(crate) fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
+    if let Some(text) = T::text_all(values) {
+        return text;
+    }
+    if values.first().is_some_and(|v| v.text().is_some()) {
+        let text: Vec<String> = values
+            .iter()
+            .map(|v| v.text().unwrap_or_default())
+            .collect();
+        let width = text.iter().map(String::len).max().unwrap_or(0);
+        return text.into_iter().map(|s| format!("{s:>width$}")).collect();
+    }
+    if T::DTYPE.starts_with("complex") {
+        return complex_values(values, o);
+    }
+    if !crate::element::is_float_dtype(T::DTYPE) {
         let text: Vec<_> = values
             .iter()
             .copied()
@@ -192,6 +258,17 @@ fn format_values<T: Element>(values: &[T], o: &PrintOptions) -> Vec<String> {
         })
         .collect()
 }
+/// The dtype as `repr` prints it: `float64`, `'datetime64[D]'`, `[('x', '<f8')]`.
+fn repr_dtype<T: Element>() -> String {
+    if T::DTYPE.starts_with("datetime64[") || T::DTYPE.starts_with("timedelta64[") {
+        format!("'{}'", T::DTYPE)
+    } else if let Some(d) = T::npy_descr().filter(|d| d.starts_with('[')) {
+        // NumPy's repr spells bool as '?' where the .npy descr says '|b1'.
+        d.replace("'|b1'", "'?'")
+    } else {
+        T::DTYPE.to_string()
+    }
+}
 fn selected(n: usize, summary: bool, edge: usize) -> Vec<Option<usize>> {
     if summary && n > 2 * edge {
         (0..edge)
@@ -279,6 +356,50 @@ impl Printer {
         out.push(']');
     }
 }
+fn visible_flat(
+    shape: &[usize],
+    axis: usize,
+    base: usize,
+    summary: bool,
+    edge: usize,
+    out: &mut Vec<usize>,
+) {
+    if axis == shape.len() {
+        out.push(base);
+        return;
+    }
+    let stride: usize = shape[axis + 1..].iter().product();
+    for i in selected(shape[axis], summary, edge).into_iter().flatten() {
+        visible_flat(shape, axis + 1, base + i * stride, summary, edge, out);
+    }
+}
+/// Lays out arbitrary per-element text like NumPy's array printer (no column alignment).
+///
+/// `text(i)` returns the text of the element at C-order flat index `i`.
+pub(crate) fn render_custom(shape: &[usize], text: &dyn Fn(usize) -> String) -> String {
+    if shape.is_empty() {
+        return text(0);
+    }
+    let total: usize = shape.iter().product();
+    if total == 0 {
+        return "[]".to_string();
+    }
+    let o = get_printoptions();
+    let summary = total > o.threshold;
+    let mut flat = Vec::new();
+    visible_flat(shape, 0, 0, summary, o.edgeitems, &mut flat);
+    let mut p = Printer {
+        text: flat.into_iter().map(text).collect(),
+        next: 0,
+        debug: false,
+        summary,
+        edge: o.edgeitems,
+        linewidth: o.linewidth,
+    };
+    let mut out = String::new();
+    p.nested(shape, 0, &mut out);
+    out
+}
 fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     let o = get_printoptions();
     let mut out = if debug {
@@ -288,9 +409,18 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
     };
     if a.ndim() == 0 {
         let v = a.item();
-        if debug && T::DTYPE.starts_with("float") {
+        if debug && (crate::element::is_float_dtype(T::DTYPE) || T::DTYPE.starts_with("complex")) {
             let t = format_values(&[v], &o);
             out.push_str(t[0].trim());
+        } else if T::DTYPE.starts_with("complex") {
+            let t = format_values(&[v], &o);
+            out.push_str(&format!("({})", t[0].trim()));
+        } else if let Some(t) = v.text() {
+            if debug {
+                out.push_str(&t);
+            } else {
+                out.push_str(&crate::timetypes::scalar_str(v).unwrap_or(t));
+            }
         } else {
             out.push_str(&raw(v));
         }
@@ -306,12 +436,21 @@ fn render<T: Element>(a: &Array<T>, debug: bool) -> String {
             debug,
             summary,
             edge: o.edgeitems,
-            linewidth: o.linewidth,
+            // repr reserves one column for the closing parenthesis, like NumPy.
+            linewidth: o.linewidth - usize::from(debug),
         };
         p.nested(a.shape(), 0, &mut out);
     }
     if debug {
-        out.push_str(&format!(", dtype={})", T::DTYPE));
+        let dtype = format!("dtype={})", repr_dtype::<T>());
+        let last = out.rsplit('\n').next().map_or(0, str::len);
+        // NumPy moves `dtype=` to its own line when it would pass the line width.
+        if last + 1 + dtype.len() + 1 > o.linewidth {
+            out.push_str(",\n      ");
+        } else {
+            out.push_str(", ");
+        }
+        out.push_str(&dtype);
     }
     out
 }

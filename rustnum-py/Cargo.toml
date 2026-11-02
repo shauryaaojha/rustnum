@@ -1,0 +1,18 @@
+[package]
+name = "rustnum-py"
+version = "0.2.0"
+description = "Python bindings for rustnum: a NumPy-style n-dimensional array backed by pure Rust."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "rustnum_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustnum = { path = "../rustnum" }
+# abi3-py39: one wheel for every CPython >= 3.9. generate-import-lib lets the windows-gnu toolchain
+# link the stable-ABI import library without a Python development install.
+pyo3 = { version = "0.30", features = ["abi3-py39", "extension-module", "generate-import-lib"] }

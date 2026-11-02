@@ -537,6 +537,20 @@ pub fn power<T: Num>(a: impl IntoArray<T>, b: impl IntoArray<T>) -> Array<T> {
             let v = x.powf(y);
             return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
         }
+        if let (Some(&x), Some(&y)) = (
+            (&x as &dyn Any).downcast_ref::<crate::Complex<f64>>(),
+            (&y as &dyn Any).downcast_ref::<crate::Complex<f64>>(),
+        ) {
+            let v = x.powc(y);
+            return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
+        }
+        if let (Some(&x), Some(&y)) = (
+            (&x as &dyn Any).downcast_ref::<crate::Complex<f32>>(),
+            (&y as &dyn Any).downcast_ref::<crate::Complex<f32>>(),
+        ) {
+            let v = x.powc(y);
+            return *(&v as &dyn Any).downcast_ref::<T>().unwrap();
+        }
         assert!(
             y >= T::ZERO,
             "Integers to negative integer powers are not allowed."
